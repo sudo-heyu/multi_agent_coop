@@ -10,14 +10,51 @@
   python run.py --server http://192.168.1.100:5001  # 指定服务器地址
 """
 import argparse
+import subprocess
 import sys
+import time
 from pathlib import Path
+
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.logger import SessionLogger
 from src.orchestrator import NegotiationOrchestrator
 from src.skills.state import get_all_states, StateStaleError
+
+
+def _server_alive(server_url: str) -> bool:
+    try:
+        r = requests.get(f"{server_url}/health", timeout=2)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def ensure_server(server_url: str) -> bool:
+    """检测服务器是否在线；若未启动则自动在后台启动 server.py，最多等待 10 秒。"""
+    if _server_alive(server_url):
+        return True
+
+    server_script = Path(__file__).parent / "state_server" / "server.py"
+    if not server_script.exists():
+        return False
+
+    print(f"[提示] 状态服务器未启动，正在后台启动 {server_script.name} ...")
+    subprocess.Popen(
+        [sys.executable, str(server_script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    for i in range(10):
+        time.sleep(1)
+        if _server_alive(server_url):
+            print(f"[提示] 状态服务器已就绪（等待 {i + 1}s）。")
+            return True
+
+    return False
 
 # ------------------------------------------------------------------
 # Mock 数据：三个预设场景
@@ -185,6 +222,10 @@ def main():
     if args.mock:
         ap_state = MOCK_SCENES[args.scene]
     else:
+        if not ensure_server(args.server):
+            print(f"\n[错误] 无法连接或启动状态服务器 {args.server}。")
+            print("提示：使用 --mock 参数可跳过服务器，直接以 mock 数据运行。")
+            sys.exit(1)
         try:
             ap_state = get_all_states(args.server)
             print(f"已从 {args.server} 获取三台 AP 的最新状态。")

@@ -26,20 +26,22 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .console_style import status_label
+
 LOG_DIR = Path("logs")
 
 # 控制台各事件的前缀标签（对齐输出）
 _LABELS: dict[str, str] = {
-    "session_start":    "▶ 会话开始",
-    "strategy_decided": "⚙ 策略",
-    "phase_start":      "── 阶段",
-    "tool_call":        "🔧 工具",
-    "agent_speak":      "💬 发言",
-    "vote":             "🗳 投票",
-    "round_result":     "📊 轮次",
-    "final_decision":     "✅ 决策",
-    "validation_result":  "🔍 验证",
-    "session_end":        "■ 会话结束",
+    "session_start":      "会话开始",
+    "strategy_decided":   "策略",
+    "phase_start":        "阶段",
+    "tool_call":          "工具",
+    "agent_speak":        "发言",
+    "vote":               "投票",
+    "round_result":       "轮次",
+    "final_decision":     "决策",
+    "validation_result":  "验证",
+    "session_end":        "会话结束",
 }
 
 
@@ -99,7 +101,7 @@ class SessionLogger:
         if not self.verbose:
             return
         label = _LABELS.get(event, event)
-        print(f"[LOG] {label} | {msg}")
+        print(f"{status_label('LOG')} {label} | {msg}")
 
     # ──────────────────────────────────────────────────────────────────────
     # 事件 API
@@ -196,7 +198,7 @@ class SessionLogger:
             agreed=agreed,
             response=response,
         )
-        mark = "✅ 同意" if agreed else "❌ 不同意"
+        mark = "同意" if agreed else "不同意"
         self._console("vote", f"{voter.upper()} 第{round_num}轮 → {mark}")
 
     def round_result(
@@ -246,7 +248,7 @@ class SessionLogger:
             summary:       str  — 一行人读摘要
         """
         self._write("validation_result", **result)
-        mark = "✅ 通过" if result.get("approved") else "❌ 未通过"
+        mark = "通过" if result.get("approved") else "未通过"
         self._console("validation_result",
                       f"{mark} | {result.get('summary', '')}")
 
@@ -289,21 +291,42 @@ class SessionLogger:
 
 def _tool_summary(tool: str, result: dict) -> str:
     """生成工具调用的单行摘要（控制台友好）。"""
-    if tool == "co_sr":
-        rec = result.get("recommended_uniform_dbm")
+    if tool in ("co_sr", "compute_sr_recommendations"):
+        recs = result.get("recommendations", {})
         feasible = result.get("feasible")
-        parts = [f"推荐={rec}dBm feasible={feasible}"]
+        per_ap = "  ".join(
+            f"{ap}:{v['current_dbm']}→{v['recommended_dbm']}dBm"
+            for ap, v in recs.items()
+        ) if recs else "—"
+        parts = [f"feasible={feasible}", per_ap]
         matrix = result.get("interference_matrix", {})
         strong = [k for k, v in matrix.items() if v.get("level") == "strong"]
         if strong:
-            parts.append(f"强干扰链路={strong}")
+            parts.append(f"强干扰={strong}")
         return " | ".join(parts)
 
-    if tool == "co_edca":
+    if tool in ("co_edca", "compute_edca_recommendations"):
         return "  ".join(
             f"{ap}={v.get('congestion_level')}→"
             f"CWmin={v.get('CWmin')} CWmax={v.get('CWmax')} AIFSN={v.get('AIFSN')}"
             for ap, v in result.items()
         )
+
+    if tool == "validate_sr_proposal":
+        return "  ".join(
+            f"{ap}:{'OK' if v.get('valid') else 'FAIL'}"
+            f"(CCA={'ok' if v.get('cca_ok') else 'fail'}"
+            f" SINR={'ok' if v.get('sinr_ok') else 'fail'}"
+            f" STA={'ok' if v.get('sta_rssi_ok') else 'fail'})"
+            for ap, v in result.items()
+            if isinstance(v, dict) and "valid" in v
+        ) or str(result)[:120]
+
+    if tool == "validate_edca_proposal":
+        return "  ".join(
+            f"{ap}:{'OK' if v.get('valid') else 'FAIL'}"
+            for ap, v in result.items()
+            if isinstance(v, dict)
+        ) or str(result)[:120]
 
     return str(result)[:120]

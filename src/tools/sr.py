@@ -204,62 +204,88 @@ def _check_all_constraints(
     return len(errors) == 0, errors, details
 
 
-def scan_feasible_powers(ap_states: dict) -> dict:
+def _cca_contributions(ap_states: dict, powers: dict) -> dict[str, int]:
     """
-    从当前最高功率向下逐步扫描，找满足全部约束的最高统一功率。
+    统计每个 AP 在邻居处造成的 CCA 违规次数。
+    CCA 违规 = 邻居接收到该 AP 的信号 ≥ CCA_THRESHOLD_DBM。
+    """
+    contributions: dict[str, int] = {ap_id: 0 for ap_id in ap_states}
+    for victim_id, victim_state in ap_states.items():
+        for src_id, base_rssi in victim_state.get("neighbor_rssi_dbm", {}).items():
+            if src_id not in powers:
+                continue
+            delta = powers[src_id] - ap_states[src_id].get("tx_power_dbm", 20.0)
+            if base_rssi + delta >= CCA_THRESHOLD_DBM:
+                contributions[src_id] += 1
+    return contributions
 
-    返回最高可行功率而非最低，是为了在满足干扰约束的前提下保留最大覆盖能力。
+
+def _sta_rssi_margin(ap_id: str, ap_states: dict, powers: dict) -> float:
+    """降功率后 STA RSSI 距安全下界的余量（dBm）；负值表示已违规。"""
+    return _sta_rssi_after(ap_id, ap_states, powers) - STA_RSSI_MIN_DBM
+
+
+def recommend_tx_power_differentiated(ap_states: dict) -> dict:
+    """
+    差异化功率推荐：贪心地只降低造成干扰的 AP，让无辜 AP 保持当前功率。
+
+    算法：
+      每轮找出在邻居处造成 CCA 违规最多的 AP（干扰源），降它 1 dBm；
+      若没有 CCA 违规但有 SINR/STA RSSI 问题，降功率最高的可降 AP；
+      若某 AP 再降会导致自身 STA RSSI 低于安全下界，跳过该 AP。
 
     Returns:
         {
-            "feasible": bool,
-            "recommended_uniform_dbm": float | None,
-            "current_max_power_dbm": float,
-            "binding_constraint": "cca" | "sinr" | "sta_rssi" | None,
-            "scan_log": [{"power_dbm": ..., "ok": ..., "violations": [...]}, ...],
+            "ap1": {"recommended_dbm": 10.0, "current_dbm": 20.0, "delta_db": -10.0},
+            ...
         }
     """
-    current_max = max(
-        state.get("tx_power_dbm", 20.0) for state in ap_states.values()
-    )
+    STA_RSSI_MARGIN = 2.0  # 降功率保留的 STA RSSI 余量（dBm）
 
-    scan_log = []
-    recommended = None
-    binding_constraint = None
+    powers = {ap_id: float(state.get("tx_power_dbm", 20.0))
+              for ap_id, state in ap_states.items()}
 
-    power = current_max
-    while power >= TX_POWER_MIN_DBM:
-        proposed = {ap_id: power for ap_id in ap_states}
-        ok, violations, details = _check_all_constraints(ap_states, proposed)
-        scan_log.append({
-            "power_dbm":  power,
-            "ok":         ok,
-            "violations": violations,
-        })
+    max_steps = int(sum(p - TX_POWER_MIN_DBM for p in powers.values())) + 1
 
+    for _ in range(max_steps):
+        ok, _, details = _check_all_constraints(ap_states, powers)
         if ok:
-            recommended = power
             break
 
-        # 记录绑定约束类型（首次出现）
-        if binding_constraint is None and violations:
-            v = violations[0]
-            if "CCA" in v:
-                binding_constraint = "cca"
-            elif "SINR" in v:
-                binding_constraint = "sinr"
-            elif "STA RSSI" in v:
-                binding_constraint = "sta_rssi"
+        # 找出不可再降的 AP（再降会使 STA RSSI 低于安全下界 + 余量）
+        locked: set[str] = set()
+        for ap_id in ap_states:
+            if powers[ap_id] <= TX_POWER_MIN_DBM:
+                locked.add(ap_id)
+            elif _sta_rssi_margin(ap_id, ap_states, {**powers, ap_id: powers[ap_id] - TX_POWER_STEP_DB}) < STA_RSSI_MARGIN:
+                locked.add(ap_id)
 
-        power -= TX_POWER_STEP_DB
+        # 优先降低 CCA 违规贡献最大的 AP
+        contrib = _cca_contributions(ap_states, powers)
+        candidates = {ap_id: v for ap_id, v in contrib.items()
+                      if ap_id not in locked and v > 0}
 
-    return {
-        "feasible":               recommended is not None,
-        "recommended_uniform_dbm": recommended,
-        "current_max_power_dbm":   current_max,
-        "binding_constraint":      binding_constraint,
-        "scan_log":                scan_log,
-    }
+        if candidates:
+            target = max(candidates, key=candidates.get)
+        else:
+            # 没有 CCA 贡献者（可能是 SINR/STA RSSI 问题），降功率最高的可降 AP
+            reducible = {ap_id: powers[ap_id] for ap_id in ap_states
+                         if ap_id not in locked}
+            if not reducible:
+                break
+            target = max(reducible, key=reducible.get)
+
+        powers[target] = round(powers[target] - TX_POWER_STEP_DB, 1)
+
+    result = {}
+    for ap_id, state in ap_states.items():
+        current = state.get("tx_power_dbm", 20.0)
+        result[ap_id] = {
+            "recommended_dbm": powers[ap_id],
+            "current_dbm":     current,
+            "delta_db":        round(powers[ap_id] - current, 1),
+        }
+    return result
 
 
 # ------------------------------------------------------------------
@@ -268,31 +294,18 @@ def scan_feasible_powers(ap_states: dict) -> dict:
 
 def recommend_tx_power(ap_states: dict) -> dict:
     """
-    为每个 AP 给出推荐 TX Power（基于统一功率扫描结果）。
+    为每个 AP 给出推荐 TX Power（差异化优化）。
 
     Args:
         ap_states: 各 AP 当前完整状态
 
     Returns:
         {
-            "ap1": {"recommended_dbm": 4.0, "current_dbm": 16.0, "delta_db": -12.0},
+            "ap1": {"recommended_dbm": 10.0, "current_dbm": 20.0, "delta_db": -10.0},
             ...
         }
     """
-    scan = scan_feasible_powers(ap_states)
-    recommended = scan["recommended_uniform_dbm"]
-    if recommended is None:
-        recommended = TX_POWER_MIN_DBM
-
-    result = {}
-    for ap_id, state in ap_states.items():
-        current = state.get("tx_power_dbm", 20.0)
-        result[ap_id] = {
-            "recommended_dbm": recommended,
-            "current_dbm":     current,
-            "delta_db":        round(recommended - current, 1),
-        }
-    return result
+    return recommend_tx_power_differentiated(ap_states)
 
 
 def validate(ap_states: dict, proposed_powers: dict) -> tuple[bool, list[str]]:
@@ -345,7 +358,7 @@ def compute_validation(ap_states: dict, proposed_powers: dict) -> dict:
 
 def compute_all(ap_states: dict) -> dict:
     """
-    主入口：完整 Co-SR 计算，供 orchestrator 注入提案阶段。
+    主入口：完整 Co-SR 计算。
 
     Args:
         ap_states: 与 get_all_states() / AP_STATE mock 相同格式
@@ -356,39 +369,31 @@ def compute_all(ap_states: dict) -> dict:
                 "ap1->ap2": {"rssi_dbm": -68.0, "level": "strong"},
                 ...
             },
-            "feasible": bool,
-            "recommended_uniform_dbm": float | None,
-            "binding_constraint": "cca" | "sinr" | "sta_rssi" | None,
             "recommendations": {
-                "ap1": {"recommended_dbm": 4.0, "current_dbm": 16.0, "delta_db": -12.0},
+                "ap1": {"recommended_dbm": 10.0, "current_dbm": 20.0, "delta_db": -10.0},
                 ...
             },
+            "feasible": bool,
             "validation": {
                 "ap1": {
-                    "proposed_power_dbm": 4.0,
+                    "proposed_power_dbm": 10.0,
                     "cca_max_dbm": -85.3, "cca_ok": True,
-                    "sinr_db": 26.9,      "sinr_ok": True,
-                    "sta_rssi_dbm": -67.0,"sta_rssi_ok": True,
+                    "sinr_db": 22.8,      "sinr_ok": True,
+                    "sta_rssi_dbm": -59.0,"sta_rssi_ok": True,
                     "valid": True, "errors": []
-                },
-                ...
+                }, ...
             },
         }
     """
     matrix = compute_interference_matrix(ap_states)
-    scan   = scan_feasible_powers(ap_states)
-    recs   = recommend_tx_power(ap_states)
+    recs   = recommend_tx_power_differentiated(ap_states)
 
-    rec_power = scan["recommended_uniform_dbm"]
-    proposed = {ap_id: (rec_power if rec_power is not None else TX_POWER_MIN_DBM)
-                for ap_id in ap_states}
-    _, _, validation = _check_all_constraints(ap_states, proposed)
+    proposed = {ap_id: recs[ap_id]["recommended_dbm"] for ap_id in ap_states}
+    ok, _, validation = _check_all_constraints(ap_states, proposed)
 
     return {
-        "interference_matrix":    matrix,
-        "feasible":               scan["feasible"],
-        "recommended_uniform_dbm": rec_power,
-        "binding_constraint":     scan["binding_constraint"],
-        "recommendations":        recs,
-        "validation":             validation,
+        "interference_matrix": matrix,
+        "recommendations":     recs,
+        "feasible":            ok,
+        "validation":          validation,
     }
