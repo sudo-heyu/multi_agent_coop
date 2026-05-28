@@ -329,10 +329,16 @@ def main():
     logger = SessionLogger(verbose=False, event_sink=push_live)
     logger.session_start(model=args.model, scene=scene, ap_state=ap_state)
 
-    # 浏览器打开实时流页面（?live=1）；同时附带 log 路径供会话结束后回放
+    # 浏览器打开实时流页面（?live=1）；等浏览器真正建立 SSE 连接后再开始协商
     if not args.no_dashboard and push_live is not None:
         import webbrowser as _wb
+        from dashboard.app import wait_for_client
         _wb.open(f"http://localhost:{args.dashboard_port}/?live=1&log={logger.log_path}")
+        print("[Dashboard] 等待浏览器连接实时流（最多 20s）...")
+        if wait_for_client(timeout=20):
+            print("[Dashboard] 浏览器已连接，开始协商。")
+        else:
+            print("[Dashboard] 超时，直接开始协商。")
 
     agents_dir = Path(__file__).parent / "agents"
     observation_getter = None if args.mock else lambda: get_all_states(args.server)

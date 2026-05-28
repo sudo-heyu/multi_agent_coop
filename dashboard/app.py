@@ -21,12 +21,21 @@ app = Flask(__name__)
 _STATE_SERVER = "http://localhost:5001"
 
 # ── 实时事件队列（主进程 orchestrator → dashboard SSE）──────────────────────
-_live_queue: _queue.SimpleQueue = _queue.SimpleQueue()
+_live_queue:   _queue.SimpleQueue = _queue.SimpleQueue()
+_client_ready: threading.Event   = threading.Event()   # 浏览器已连上 SSE 时置位
 
 
 def push_event(d: dict) -> None:
     """由 orchestrator 线程调用，将事件推入实时队列。"""
     _live_queue.put(d)
+
+
+def wait_for_client(timeout: float = 30.0) -> bool:
+    """
+    阻塞直到浏览器 EventSource 建立连接（或超时）。
+    返回 True 表示已连接，False 表示超时。
+    """
+    return _client_ready.wait(timeout)
 
 
 def start_server_thread(
@@ -407,6 +416,7 @@ def events():
 
     def stream_live():
         """实时模式：从内存队列读取，零延迟、零缓冲。"""
+        _client_ready.set()   # 通知 orchestrator 可以开始运行
         while True:
             try:
                 d = _live_queue.get(timeout=15)
