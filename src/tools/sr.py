@@ -35,6 +35,12 @@ _INTERFERENCE_THRESHOLDS = [
 # 内部工具函数
 # ------------------------------------------------------------------
 
+def _fget(d: dict, key: str, default: float) -> float:
+    """安全读取浮点字段：key 不存在或值为 None 时返回 default。"""
+    v = d.get(key)
+    return float(v) if v is not None else float(default)
+
+
 def _dbm_to_mw(dbm: float) -> float:
     return 10 ** (dbm / 10)
 
@@ -316,8 +322,8 @@ def _power_bounds(ap_states: dict) -> tuple[dict, dict, dict]:
     binding: dict[str, dict] = {}
 
     for ap_id, state in ap_states.items():
-        current = float(state.get("tx_power_dbm", TX_POWER_MAX_DBM))
-        sta = float(state.get("sta_rssi_dbm", -60.0))
+        current = _fget(state, "tx_power_dbm", TX_POWER_MAX_DBM)
+        sta = _fget(state, "sta_rssi_dbm", -60.0)
         lower[ap_id] = max(
             float(TX_POWER_MIN_DBM),
             current + STA_RSSI_MIN_DBM - sta,
@@ -335,7 +341,7 @@ def _power_bounds(ap_states: dict) -> tuple[dict, dict, dict]:
         for src_id, base_rssi in victim_state.get("neighbor_rssi_dbm", {}).items():
             if src_id not in ap_states:
                 continue
-            current_src = float(ap_states[src_id].get("tx_power_dbm", TX_POWER_MAX_DBM))
+            current_src = _fget(ap_states[src_id], "tx_power_dbm", TX_POWER_MAX_DBM)
             cca_upper = current_src + CCA_THRESHOLD_DBM - CCA_GUARD_DB - float(base_rssi)
             if cca_upper < upper[src_id]:
                 upper[src_id] = cca_upper
@@ -355,7 +361,7 @@ def compute_feasible_ranges(ap_states: dict) -> dict:
     lower, upper, binding = _power_bounds(ap_states)
     ranges = {}
     for ap_id, state in ap_states.items():
-        current = float(state.get("tx_power_dbm", TX_POWER_MAX_DBM))
+        current = _fget(state, "tx_power_dbm", TX_POWER_MAX_DBM)
         min_dbm = round(lower[ap_id], 3)
         max_dbm = round(upper[ap_id], 3)
         ranges[ap_id] = {
@@ -416,17 +422,17 @@ def _sinr_feasible_seed(ap_states: dict, lower: dict, upper: dict) -> dict | Non
     for _ in range(200):
         changed = False
         for ap_id, state in ap_states.items():
-            noise_mw = _dbm_to_mw(float(state.get("noise_floor_dbm", -90.0)))
+            noise_mw = _dbm_to_mw(_fget(state, "noise_floor_dbm", -90.0))
             interference_mw = noise_mw
             for nbr_id, base_rssi in state.get("neighbor_rssi_dbm", {}).items():
                 if nbr_id not in ap_states:
                     continue
-                delta_j = powers[nbr_id] - float(ap_states[nbr_id].get("tx_power_dbm", 20.0))
+                delta_j = powers[nbr_id] - _fget(ap_states[nbr_id], "tx_power_dbm", 20.0)
                 interference_mw += _dbm_to_mw(float(base_rssi) + delta_j)
 
             required_signal_dbm = _mw_to_dbm(gamma * interference_mw)
-            current = float(state.get("tx_power_dbm", 20.0))
-            sta = float(state.get("sta_rssi_dbm", -60.0))
+            current = _fget(state, "tx_power_dbm", 20.0)
+            sta = _fget(state, "sta_rssi_dbm", -60.0)
             required_power = current + required_signal_dbm - sta
             next_power = max(lower[ap_id], required_power)
 
@@ -445,7 +451,7 @@ def _objective(ap_states: dict, powers: dict) -> float:
     """目标函数：最小化相对当前功率的平方调整量。"""
     total = 0.0
     for ap_id, state in ap_states.items():
-        current = float(state.get("tx_power_dbm", 20.0))
+        current = _fget(state, "tx_power_dbm", 20.0)
         total += (powers[ap_id] - current) ** 2
     return total
 
@@ -579,7 +585,7 @@ def recommend_tx_power_differentiated(ap_states: dict) -> dict:
             ap_id: {
                 "optimal_dbm": None,
                 "recommended_dbm": None,
-                "current_dbm": float(state.get("tx_power_dbm", 20.0)),
+                "current_dbm": _fget(state, "tx_power_dbm", 20.0),
                 "delta_db": None,
                 "error": meta.get("error"),
             }
@@ -592,7 +598,7 @@ def recommend_tx_power_differentiated(ap_states: dict) -> dict:
 
     result = {}
     for ap_id, state in ap_states.items():
-        current = float(state.get("tx_power_dbm", 20.0))
+        current = _fget(state, "tx_power_dbm", 20.0)
         optimal = round(powers[ap_id], 3)
         result[ap_id] = {
             "optimal_dbm":     optimal,
@@ -702,7 +708,7 @@ def evaluate_candidate(ap_states: dict, proposed_powers: dict) -> dict:
     min_sinr = 999.0
 
     for ap_id, state in ap_states.items():
-        current = float(state.get("tx_power_dbm", 20.0))
+        current = _fget(state, "tx_power_dbm", 20.0)
         proposed = normalized[ap_id]
         drop = max(0.0, current - proposed)
         total_drop += drop

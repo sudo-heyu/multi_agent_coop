@@ -21,6 +21,7 @@ import json
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,6 +34,37 @@ from src.orchestrator import NegotiationOrchestrator
 from src.state_client import get_all_states, StateStaleError
 
 DEFAULT_AP_CONFIG = Path(__file__).parent / "ap_endpoints.json"
+
+
+def _dashboard_alive(port: int) -> bool:
+    try:
+        r = requests.get(f"http://localhost:{port}/", timeout=1)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def start_dashboard(log_path: Path, port: int = 5050) -> None:
+    """Start dashboard server in background and open browser."""
+    script = Path(__file__).parent / "dashboard" / "app.py"
+    if not script.exists():
+        print("[Dashboard] 未找到 dashboard/app.py，跳过可视化启动。")
+        return
+
+    if not _dashboard_alive(port):
+        subprocess.Popen(
+            [sys.executable, str(script), "--port", str(port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(12):
+            time.sleep(0.5)
+            if _dashboard_alive(port):
+                break
+
+    url = f"http://localhost:{port}/?log={log_path}"
+    print(f"[Dashboard] http://localhost:{port}/  (正在打开浏览器...)")
+    webbrowser.open(url)
 
 
 def _server_alive(server_url: str) -> bool:
@@ -258,6 +290,10 @@ def main():
                         help=("从 JSON 文件读取执行服务地址，"
                               'JSON 格式：{"ap1": "http://192.168.1.1:5002", ...}；'
                               "未传时自动读取 ap_endpoints.json（如果存在）"))
+    parser.add_argument("--no-dashboard", action="store_true",
+                        help="不启动可视化 Dashboard（纯 CLI 模式）")
+    parser.add_argument("--dashboard-port", type=int, default=5050,
+                        help="Dashboard 监听端口（默认 5050）")
     args = parser.parse_args()
 
     # 解析执行服务端点
@@ -302,6 +338,9 @@ def main():
     scene = args.scene if args.mock else "live"
     logger = SessionLogger(verbose=False)
     logger.session_start(model=args.model, scene=scene, ap_state=ap_state)
+
+    if not args.no_dashboard:
+        start_dashboard(logger.log_path, port=args.dashboard_port)
 
     agents_dir = Path(__file__).parent / "agents"
     observation_getter = None if args.mock else lambda: get_all_states(args.server)

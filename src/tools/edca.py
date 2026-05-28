@@ -141,8 +141,8 @@ def evaluate_edca_effectiveness(ap_states: dict, proposed_edca: dict) -> dict:
         if not isinstance(params, dict) or not params:
             continue
 
-        busy    = float(state.get("channel_busy_ratio", 0.0))
-        retries = float(state.get("tx_retries_ratio", 0.0))
+        busy    = float(v if (v := state.get("channel_busy_ratio")) is not None else 0.0)
+        retries = float(v if (v := state.get("tx_retries_ratio"))   is not None else 0.0)
         cwmin   = int(params.get("CWmin", 15))
         cwmax   = int(params.get("CWmax", 63))
         aifsn   = int(params.get("AIFSN", 3))

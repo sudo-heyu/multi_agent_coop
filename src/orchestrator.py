@@ -1,3 +1,4 @@
+import itertools
 import json
 import re
 import time
@@ -11,7 +12,6 @@ from .console_style import (
     ap_label, congestion_color, dim, status_ok, status_warn, status_fail,
     tool_dur, tool_name, tool_prefix, BOLD, FG, AP_NAME_COLORS, color,
 )
-from .coordinator_agent import CoordinatorAgent
 from .logger import SessionLogger
 from .tools.registry import TOOL_DEFINITIONS, make_executor
 from .validator import validate_decision
@@ -317,7 +317,6 @@ class NegotiationOrchestrator:
             ap_id: APAgent(ap_id, agents_dir, model)
             for ap_id in AP_IDS
         }
-        self.coordinator = CoordinatorAgent(agents_dir=agents_dir, model=model)
         self.conversation_log: list[dict] = []
         self.logger = logger
         self._current_ap_states: dict | None = None
@@ -795,9 +794,9 @@ class NegotiationOrchestrator:
             self._finish_session("proposal_parse_error", 0, started_at)
             return self.conversation_log
 
-        # 阶段四：投票（最多 MAX_VOTE_ROUNDS 轮）
-        outcome = "max_rounds_reached"
-        for round_num in range(1, MAX_VOTE_ROUNDS + 1):
+        # 阶段四：投票（无轮次上限，直到全票通过或人为中断）
+        outcome = "interrupted"
+        for round_num in itertools.count(1):
             all_agreed, disagreements = self._phase_vote(proposer_id, strategy, round_num, proposal)
 
             if all_agreed:
@@ -830,36 +829,14 @@ class NegotiationOrchestrator:
                     return self.conversation_log
 
                 outcome = "validator_rejected"
-                if round_num < MAX_VOTE_ROUNDS:
-                    error_summary = "\n".join(
-                        f"  - {e}" for e in validation["global_errors"][:5]
-                    )
-                    revise_instruction = (
-                        f"Validator 对最终决策执行了物理约束验算，发现以下问题：\n"
-                        f"{error_summary}\n\n"
-                        "请根据上述错误修改提案，重新给出每个 AP 的具体参数（含数值），"
-                        "确保满足 CCA、SINR、STA RSSI 等物理约束。\n"
-                        "必须先调用 get_latest_ap_states 获取最新状态，再调用计算或验算工具自检修订后的参数。\n"
-                        "回复末尾必须用 ```json 代码块附上修订后的完整参数，JSON 顶层键必须是 ap1/ap2/ap3。"
-                    )
-                    content = self._speak_and_log(
-                        proposer_id, revise_instruction,
-                        phase=4, role="revise",
-                        tools=_tools_for_propose(strategy),
-                        speaker=proposer_id.upper(),
-                    )
-                    revised = _extract_proposal(content)
-                    if revised is not None:
-                        proposal = revised
-                continue
-
-            outcome = "vote_no_consensus"
-            if round_num < MAX_VOTE_ROUNDS:
-                feedback_text = "\n\n".join(disagreements)
+                error_summary = "\n".join(
+                    f"  - {e}" for e in validation["global_errors"][:5]
+                )
                 revise_instruction = (
-                    "部分 AP 对提案表示不同意，具体反馈如下：\n\n"
-                    f"{feedback_text}\n\n"
-                    "请根据上述反馈修改提案，再次给出每个 AP 的具体参数调整建议（含数值）。\n"
+                    f"Validator 对最终决策执行了物理约束验算，发现以下问题：\n"
+                    f"{error_summary}\n\n"
+                    "请根据上述错误修改提案，重新给出每个 AP 的具体参数（含数值），"
+                    "确保满足 CCA、SINR、STA RSSI 等物理约束。\n"
                     "必须先调用 get_latest_ap_states 获取最新状态，再调用计算或验算工具自检修订后的参数。\n"
                     "回复末尾必须用 ```json 代码块附上修订后的完整参数，JSON 顶层键必须是 ap1/ap2/ap3。"
                 )
@@ -872,7 +849,23 @@ class NegotiationOrchestrator:
                 revised = _extract_proposal(content)
                 if revised is not None:
                     proposal = revised
+                continue
 
-        print(f"\n达到最大投票轮数（{MAX_VOTE_ROUNDS}），协商未能收敛（原因：{outcome}）。")
-        self._finish_session(outcome, MAX_VOTE_ROUNDS, started_at)
-        return self.conversation_log
+            outcome = "vote_no_consensus"
+            feedback_text = "\n\n".join(disagreements)
+            revise_instruction = (
+                "部分 AP 对提案表示不同意，具体反馈如下：\n\n"
+                f"{feedback_text}\n\n"
+                "请根据上述反馈修改提案，再次给出每个 AP 的具体参数调整建议（含数值）。\n"
+                "必须先调用 get_latest_ap_states 获取最新状态，再调用计算或验算工具自检修订后的参数。\n"
+                "回复末尾必须用 ```json 代码块附上修订后的完整参数，JSON 顶层键必须是 ap1/ap2/ap3。"
+            )
+            content = self._speak_and_log(
+                proposer_id, revise_instruction,
+                phase=4, role="revise",
+                tools=_tools_for_propose(strategy),
+                speaker=proposer_id.upper(),
+            )
+            revised = _extract_proposal(content)
+            if revised is not None:
+                proposal = revised
