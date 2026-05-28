@@ -460,6 +460,8 @@ class NegotiationOrchestrator:
         def on_tool(tool_name: str, raw_args: dict, result_dict: dict, dur_ms: float) -> None:
             print(f"\n{_format_tool_console(tool_name, raw_args, result_dict, dur_ms)}", flush=True)
 
+        _CHUNK_BATCH = 40   # 每积累 40 字符写一次日志，平衡实时性与 I/O
+
         t0 = time.time()
         tool_log: list[dict] = []
         content = ""
@@ -469,7 +471,12 @@ class NegotiationOrchestrator:
             attempt_tool_log: list[dict] = []
             chunks: list[str] = []
 
+            if self.logger:
+                self.logger.agent_speak_start(ap_id, phase, role)
+
             print(f"\n{format_ap_name(speaker)}:")
+            _buf: list[str] = []
+            _buf_len = 0
             for chunk in self.agents[ap_id].speak_stream(
                 self.conversation_log,
                 active_instruction,
@@ -480,6 +487,14 @@ class NegotiationOrchestrator:
             ):
                 chunks.append(chunk)
                 print(strip_md(chunk), end="", flush=True)
+                _buf.append(chunk)
+                _buf_len += len(chunk)
+                if _buf_len >= _CHUNK_BATCH and self.logger:
+                    self.logger.agent_speak_chunk(ap_id, "".join(_buf))
+                    _buf = []
+                    _buf_len = 0
+            if _buf and self.logger:
+                self.logger.agent_speak_chunk(ap_id, "".join(_buf))
             print()
 
             content = "".join(chunks).strip()

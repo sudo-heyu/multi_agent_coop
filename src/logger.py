@@ -151,6 +151,14 @@ class SessionLogger:
         summary = _tool_summary(tool, result)
         self._console("tool_call", f"{tool} ({duration_ms:.0f}ms) | {summary}")
 
+    def agent_speak_start(self, agent: str, phase: int, role: str) -> None:
+        """Agent 开始发言（流式输出前写入，dashboard 据此创建空气泡）。"""
+        self._write("agent_speak_start", agent=agent, phase=phase, role=role)
+
+    def agent_speak_chunk(self, agent: str, text: str) -> None:
+        """Agent 发言文本片段（流式写入，dashboard 实时追加）。"""
+        self._write("agent_speak_chunk", agent=agent, text=text)
+
     def agent_speak(
         self,
         agent: str,
