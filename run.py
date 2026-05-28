@@ -36,35 +36,20 @@ from src.state_client import get_all_states, StateStaleError
 DEFAULT_AP_CONFIG = Path(__file__).parent / "ap_endpoints.json"
 
 
-def _dashboard_alive(port: int) -> bool:
+def start_dashboard(port: int = 5050, state_server: str = "http://localhost:5001"):
+    """
+    在主进程内以守护线程启动 Dashboard Flask 服务器。
+    返回 push_event 回调（用作 SessionLogger 的 event_sink）。
+    若启动失败，返回 None。
+    """
     try:
-        r = requests.get(f"http://localhost:{port}/", timeout=1)
-        return r.status_code == 200
-    except Exception:
-        return False
-
-
-def start_dashboard(log_path: Path, port: int = 5050) -> None:
-    """Start dashboard server in background and open browser."""
-    script = Path(__file__).parent / "dashboard" / "app.py"
-    if not script.exists():
-        print("[Dashboard] 未找到 dashboard/app.py，跳过可视化启动。")
-        return
-
-    if not _dashboard_alive(port):
-        subprocess.Popen(
-            [sys.executable, str(script), "--port", str(port)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        for _ in range(12):
-            time.sleep(0.5)
-            if _dashboard_alive(port):
-                break
-
-    url = f"http://localhost:{port}/?log={log_path}"
-    print(f"[Dashboard] http://localhost:{port}/  (正在打开浏览器...)")
-    webbrowser.open(url)
+        from dashboard.app import start_server_thread, push_event
+        start_server_thread(port, state_server)
+        print(f"[Dashboard] http://localhost:{port}/  (正在打开浏览器...)")
+        return push_event
+    except Exception as exc:
+        print(f"[Dashboard] 启动失败: {exc}")
+        return None
 
 
 def _server_alive(server_url: str) -> bool:
@@ -335,12 +320,19 @@ def main():
             print("提示：使用 --mock 参数可跳过服务器，直接以 mock 数据运行。")
             sys.exit(1)
 
+    # Dashboard 先于 logger 启动，拿到 push_event 回调再创建 logger
+    push_live = None
+    if not args.no_dashboard:
+        push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
+
     scene = args.scene if args.mock else "live"
-    logger = SessionLogger(verbose=False)
+    logger = SessionLogger(verbose=False, event_sink=push_live)
     logger.session_start(model=args.model, scene=scene, ap_state=ap_state)
 
-    if not args.no_dashboard:
-        start_dashboard(logger.log_path, port=args.dashboard_port)
+    # 浏览器打开实时流页面（?live=1）；同时附带 log 路径供会话结束后回放
+    if not args.no_dashboard and push_live is not None:
+        import webbrowser as _wb
+        _wb.open(f"http://localhost:{args.dashboard_port}/?live=1&log={logger.log_path}")
 
     agents_dir = Path(__file__).parent / "agents"
     observation_getter = None if args.mock else lambda: get_all_states(args.server)

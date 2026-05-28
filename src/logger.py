@@ -68,14 +68,22 @@ class SessionLogger:
         logger.session_end(outcome, rounds)
     """
 
-    def __init__(self, session_id: str | None = None, verbose: bool = True):
+    def __init__(
+        self,
+        session_id: str | None = None,
+        verbose: bool = True,
+        event_sink=None,
+    ):
         """
         Args:
-            session_id: 可手动指定；默认自动生成 8 位十六进制 ID
-            verbose:    True = 同步输出控制台日志；False = 仅写文件
+            session_id:  可手动指定；默认自动生成 8 位十六进制 ID
+            verbose:     True = 同步输出控制台日志；False = 仅写文件
+            event_sink:  可选的 Callable[[dict], None]，每次 _write 后同步调用
+                         （用于向 dashboard 实时队列推送事件）
         """
         self.session_id: str = session_id or uuid.uuid4().hex[:8]
         self.verbose: bool = verbose
+        self._event_sink = event_sink
         self._start_ms: float = _ts_ms()
 
         LOG_DIR.mkdir(exist_ok=True)
@@ -96,6 +104,11 @@ class SessionLogger:
         }
         self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._fh.flush()
+        if self._event_sink is not None:
+            try:
+                self._event_sink(row)
+            except Exception:
+                pass  # sink 错误不中断会话
 
     def _console(self, event: str, msg: str) -> None:
         if not self.verbose:

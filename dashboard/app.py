@@ -9,6 +9,8 @@
 """
 import argparse
 import json
+import queue as _queue
+import threading
 import time
 from pathlib import Path
 
@@ -17,6 +19,44 @@ import requests as _req
 
 app = Flask(__name__)
 _STATE_SERVER = "http://localhost:5001"
+
+# ── 实时事件队列（主进程 orchestrator → dashboard SSE）──────────────────────
+_live_queue: _queue.SimpleQueue = _queue.SimpleQueue()
+
+
+def push_event(d: dict) -> None:
+    """由 orchestrator 线程调用，将事件推入实时队列。"""
+    _live_queue.put(d)
+
+
+def start_server_thread(
+    port: int = 5050,
+    state_server: str = "http://localhost:5001",
+) -> None:
+    """在后台守护线程中启动 Flask，阻塞直到端口就绪（最多 10s）。"""
+    global _STATE_SERVER
+    _STATE_SERVER = state_server
+
+    t = threading.Thread(
+        target=lambda: app.run(
+            host="0.0.0.0",
+            port=port,
+            debug=False,
+            threaded=True,
+            use_reloader=False,
+        ),
+        daemon=True,
+        name="dashboard-server",
+    )
+    t.start()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            _req.get(f"http://localhost:{port}/", timeout=0.5)
+            return
+        except Exception:
+            time.sleep(0.25)
 
 # ---------------------------------------------------------------------------
 # Dashboard HTML（单页，Chart.js + SSE）
@@ -357,12 +397,24 @@ def index():
 
 @app.route("/events")
 def events():
+    live    = request.args.get("live") == "1"
     log_arg = request.args.get("log", "").strip()
 
-    def stream():
+    def stream_live():
+        """实时模式：从内存队列读取，零延迟、零缓冲。"""
+        while True:
+            try:
+                d = _live_queue.get(timeout=15)
+                yield f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+                if d.get("event") == "session_end":
+                    return
+            except _queue.Empty:
+                yield ": ka\n\n"  # keepalive
+
+    def stream_replay():
+        """回放模式：tail JSONL 文件（用于查看历史会话）。"""
         log_path: Path | None = Path(log_arg) if log_arg else None
 
-        # If no path supplied, wait up to 30 s for the newest log file
         if not log_path:
             yield "data: " + json.dumps({"event": "_wait", "msg": "等待日志文件..."}) + "\n\n"
             log_dir = Path("logs")
@@ -385,7 +437,6 @@ def events():
                 line = line.strip()
                 if line:
                     yield f"data: {line}\n\n"
-            # tail
             while True:
                 line = f.readline()
                 if line:
@@ -396,7 +447,8 @@ def events():
                     time.sleep(0.2)
                     yield ": ka\n\n"
 
-    return Response(stream(), content_type="text/event-stream",
+    gen = stream_live() if live else stream_replay()
+    return Response(gen, content_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
