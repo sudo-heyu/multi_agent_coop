@@ -83,18 +83,37 @@ def _extract_json(text: str) -> dict | None:
 
 
 def _extract_proposal(text: str) -> dict | None:
-    data = _extract_json(text)
-    if not isinstance(data, dict):
+    """扫描文本中所有 JSON 块，返回第一个含 ap1/ap2/ap3 键的对象。"""
+    def _matches(d: dict) -> dict | None:
+        ap_keys = {k.lower() for k in d}
+        if set(AP_IDS).issubset(ap_keys):
+            return d
+        for key in ("proposal", "final_proposal", "decision", "params"):
+            nested = d.get(key)
+            if isinstance(nested, dict) and set(AP_IDS).issubset({k.lower() for k in nested}):
+                return nested
         return None
 
-    ap_keys = {k.lower() for k in data}
-    if set(AP_IDS).issubset(ap_keys):
-        return data
+    for m in re.finditer(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL):
+        try:
+            parsed = json.loads(m.group(1).strip())
+            if isinstance(parsed, dict):
+                hit = _matches(parsed)
+                if hit is not None:
+                    return hit
+        except json.JSONDecodeError:
+            pass
 
-    for key in ("proposal", "final_proposal", "decision", "params"):
-        nested = data.get(key)
-        if isinstance(nested, dict) and set(AP_IDS).issubset({k.lower() for k in nested}):
-            return nested
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            parsed, _ = decoder.raw_decode(text[match.start():])
+            if isinstance(parsed, dict):
+                hit = _matches(parsed)
+                if hit is not None:
+                    return hit
+        except json.JSONDecodeError:
+            pass
     return None
 
 
@@ -557,45 +576,6 @@ class NegotiationOrchestrator:
                 speaker=ap_id.upper(),
             )
 
-    def _phase_coordinate(self, ap_state: dict) -> tuple[str, str]:
-        """
-        协调 agent 读取广播内容，流式输出判断，返回 (proposer_id, strategy)。
-        协调者发言写入对话记录，供后续 AP agent 感知。
-        """
-        if self.logger:
-            self.logger.phase_start(2, "协调者分析广播，决定提案方与策略")
-
-        speaker = "COORDINATOR"
-        t0 = time.time()
-        chunks: list[str] = []
-
-        print(f"\n{format_ap_name(speaker)}:")
-
-        for chunk in self.coordinator.speak_stream(self.conversation_log, ap_state):
-            chunks.append(chunk)
-            print(strip_md(chunk), end="", flush=True)
-
-        print()
-
-        content = "".join(chunks).strip()
-        duration_ms = (time.time() - t0) * 1000
-
-        proposer_id, strategy = self.coordinator.parse_decision(content)
-        self._record(speaker, content)
-
-        if self.logger:
-            self.logger.agent_speak(
-                agent="coordinator",
-                phase=2,
-                role="coordinator",
-                instruction="分析广播，决定提案方与策略",
-                response=content,
-                duration_ms=duration_ms,
-            )
-            self.logger.strategy_decided(strategy, proposer_id)
-
-        return proposer_id, strategy
-
     def _phase_propose(
         self,
         proposer_id: str,
@@ -676,15 +656,19 @@ class NegotiationOrchestrator:
         )
         return _extract_proposal(content)
 
-    def _phase_vote(
+    def _phase_vote_single(
         self,
+        voter_id: str,
         proposer_id: str,
         strategy: str,
-        round_num: int,
+        proposal_num: int,
         proposal: dict,
-    ) -> tuple[bool, list[str]]:
+    ) -> tuple[bool, str]:
+        """单个 AP 对当前提案投票。若反对，要求在同一回复中给出反提案 JSON。"""
         if self.logger:
-            self.logger.phase_start(4, f"投票验算（第{round_num}轮）")
+            self.logger.phase_start(
+                4, f"{voter_id.upper()} 投票（提案#{proposal_num}，提案方 {proposer_id.upper()}）"
+            )
 
         verify_hint = {
             "co_sr":   "关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量，以及它对你业务的直接影响",
@@ -692,44 +676,61 @@ class NegotiationOrchestrator:
             "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
         }[strategy]
 
-        tools = _tools_for_vote(strategy)
-        voter_ids = [ap for ap in AP_IDS if ap != proposer_id]
-        agree_count = 0
-        disagreements: list[str] = []
         proposal_json = _json(proposal)
+        instruction = (
+            f"请验算 {proposer_id.upper()} 的提案中针对你自己（{voter_id.upper()}）的参数调整建议。\n\n"
+            f"已解析的提案参数 JSON 如下，请以它为唯一参数来源：\n{proposal_json}\n\n"
+            "请先调用 get_latest_ap_states 获取最新状态，再调用验算工具，"
+            "然后用自然语言给出你的判断。"
+            f"重点参考：{verify_hint}。\n\n"
+            "不要套用固定模板，如果结果很简单可以简短直接。\n\n"
+            "【同意时】回复末尾附：\n"
+            "```json\n{\"agreed\": true, \"reason\": \"...\"}\n```\n\n"
+            "【反对时】请在同一条回复中直接给出你的完整反提案，说明反对理由和你认为合理的参数方案，"
+            "然后附两个 ```json 块：\n"
+            "第一块：```json\n{\"agreed\": false, \"reason\": \"...\"}\n```\n"
+            "第二块：完整参数反提案，JSON 顶层键必须是 ap1/ap2/ap3。"
+        )
+        content = self._speak_and_log(
+            voter_id,
+            instruction,
+            phase=4,
+            role="voter",
+            tools=_tools_for_vote(strategy),
+            speaker=voter_id.upper(),
+        )
 
-        for voter_id in voter_ids:
-            instruction = (
-                f"请验算 {proposer_id.upper()} 的提案中针对你自己（{voter_id.upper()}）的参数调整建议。\n\n"
-                f"已解析的提案参数 JSON 如下，请以它为唯一参数来源：\n{proposal_json}\n\n"
-                "请先调用 get_latest_ap_states 获取最新状态，再调用验算工具，"
-                "然后用自然语言给出你的判断。"
-                f"你可以自行组织表达，重点参考：{verify_hint}。\n\n"
-                "不要套用固定模板，不需要逐条复述所有约束；如果结果很简单，可以简短直接。"
-                "如果你不同意，说明卡在哪个观测或参数边界，并给出你能接受的替代值。\n"
-                "回复末尾必须附一个 ```json 代码块，格式为 {\"agreed\": true, \"reason\": \"...\"}。"
-            )
-            content = self._speak_and_log(
-                voter_id,
-                instruction,
-                phase=4,
-                role="voter",
-                tools=tools,
-                speaker=voter_id.upper(),
-            )
-
-            agreed = self._agreed(content)
-            if self.logger:
-                self.logger.vote(voter_id, round_num, agreed, content)
-            if agreed:
-                agree_count += 1
-            else:
-                disagreements.append(f"{voter_id.upper()}: {content.strip()}")
-
-        all_agreed = agree_count >= len(voter_ids)
+        agreed = self._agreed(content)
         if self.logger:
-            self.logger.round_result(round_num, all_agreed, agree_count, len(voter_ids))
-        return all_agreed, disagreements
+            self.logger.vote(voter_id, proposal_num, agreed, content)
+        return agreed, content
+
+    def _phase_counter_propose(
+        self,
+        voter_id: str,
+        vote_content: str,
+        strategy: str,
+        proposal_num: int,
+    ) -> dict | None:
+        """从投票内容中提取反提案 JSON；提取失败则要求补充一次纯 JSON 回复。"""
+        proposal = _extract_proposal(vote_content)
+        if proposal is not None:
+            return proposal
+
+        repair_instruction = (
+            "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
+            "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3，"
+            "每个 AP 内包含本次协商路径需要调整的具体参数。不要写解释。"
+        )
+        content = self._speak_and_log(
+            voter_id,
+            repair_instruction,
+            phase=3,
+            role="counter_proposal_json_repair",
+            tools=None,
+            speaker=voter_id.upper(),
+        )
+        return _extract_proposal(content)
 
     def _emit_final_decision(self, proposer_id: str, proposal: dict) -> dict | None:
         if self.logger:
@@ -769,103 +770,112 @@ class NegotiationOrchestrator:
         started_at = time.time()
         self._current_ap_states = ap_state
 
-        # 阶段一：广播（三台 AP 各自播报状态）
+        # 阶段一：广播（ap1 → ap2 → ap3）
         self._phase_broadcast(ap_state)
 
-        # 阶段二：协调者分析广播，决定提案方与策略
-        proposer_id, strategy = self._phase_coordinate(ap_state)
-
-        print(f"\n[协调决策] {_strategy_label(strategy)} | 提案方: {proposer_id.upper()}")
+        # 阶段二：确定性策略决策（不使用 LLM 协调者）
+        strategy = self._determine_strategy(ap_state)
+        print(f"\n[策略决策] {_strategy_label(strategy)} | 首个提案方: AP1")
+        if self.logger:
+            self.logger.phase_start(2, f"策略决策: {_strategy_label(strategy)}")
+            self.logger.strategy_decided(strategy, "ap1")
 
         if strategy == "noop":
-            print("协调者判断网络状况良好，无需协商。")
+            print("网络状况良好，无需协商。")
             self._finish_session("noop", 0, started_at)
             return self.conversation_log
 
-        if proposer_id == "none":
-            print("[错误] 协调者未能指定提案方，协商终止。")
-            self._finish_session("coordinator_no_proposer", 0, started_at)
-            return self.conversation_log
+        MAX_VALIDATION_RETRIES = 3
+        MAX_TURNS = 30          # 单轮内最大发言次数（安全上限）
+        proposal_num = 0        # 累计提案编号
 
-        # 阶段三：提案
-        proposal = self._phase_propose(proposer_id, ap_state, strategy)
-        if proposal is None:
-            print("\n[错误] 提案方未输出可解析的参数 JSON，协商终止。")
-            self._finish_session("proposal_parse_error", 0, started_at)
-            return self.conversation_log
+        # 外层循环：Validator 未通过时从 ap1 重新提案
+        for retry in range(MAX_VALIDATION_RETRIES):
+            if retry > 0:
+                print(f"\n[重试] Validator 未通过，AP1 重新发起提案（第 {retry + 1} 次尝试）")
 
-        # 阶段四：投票（无轮次上限，直到全票通过或人为中断）
-        outcome = "interrupted"
-        for round_num in itertools.count(1):
-            all_agreed, disagreements = self._phase_vote(proposer_id, strategy, round_num, proposal)
+            # 阶段三：首轮提案固定由 ap1 发起
+            current_proposer = "ap1"
+            proposal_num += 1
+            proposal = self._phase_propose(current_proposer, ap_state, strategy)
+            if proposal is None:
+                print("\n[错误] 提案方未输出可解析的参数 JSON，协商终止。")
+                self._finish_session("proposal_parse_error", proposal_num, started_at)
+                return self.conversation_log
 
-            if all_agreed:
-                decision = self._emit_final_decision(proposer_id, proposal)
+            agree_set: set[str] = set()
 
-                observed_state, observation_error, observed_is_real = (
-                    self._collect_observed_state(ap_state)
+            # 循环迭代器：固定顺序 ap1→ap2→ap3→ap1→…，从 ap1 之后开始
+            ap_cycle = itertools.cycle(AP_IDS)
+            while next(ap_cycle) != "ap1":
+                pass
+
+            # 阶段四：循环投票
+            for _ in range(MAX_TURNS):
+                voter_id = next(ap_cycle)
+
+                if voter_id == current_proposer:
+                    continue  # 提案方跳过自己
+
+                agreed, content = self._phase_vote_single(
+                    voter_id, current_proposer, strategy, proposal_num, proposal
                 )
-                validation = validate_decision(
-                    ap_state,
-                    decision,
-                    strategy,
-                    observed_state=observed_state,
-                    observed_is_real=observed_is_real,
-                )
-                if observation_error:
-                    validation["approved"] = False
-                    validation["global_errors"].insert(0, observation_error)
-                    validation["summary"] = f"验证失败（策略={strategy}）：{observation_error}"
-                print(f"\n[Validator] {'通过' if validation['approved'] else '未通过'} — {validation['summary']}")
-                if self.logger:
-                    self.logger.validation_result(validation)
 
-                if validation["approved"]:
-                    print("\n协商成功完成。")
-                    outcome = "success"
-                    self._finish_session(outcome, round_num, started_at)
-                    session_id = self.logger.session_id if self.logger else ""
-                    self._push_decision(decision, strategy, session_id)
-                    return self.conversation_log
+                if agreed:
+                    agree_set.add(voter_id)
+                    non_proposers = {ap for ap in AP_IDS if ap != current_proposer}
+                    if agree_set >= non_proposers:
+                        # 全票通过 → 输出最终决策并验证
+                        decision = self._emit_final_decision(current_proposer, proposal)
 
-                outcome = "validator_rejected"
-                error_summary = "\n".join(
-                    f"  - {e}" for e in validation["global_errors"][:5]
-                )
-                revise_instruction = (
-                    f"Validator 对最终决策执行了物理约束验算，发现以下问题：\n"
-                    f"{error_summary}\n\n"
-                    "请根据上述错误修改提案，重新给出每个 AP 的具体参数（含数值），"
-                    "确保满足 CCA、SINR、STA RSSI 等物理约束。\n"
-                    "必须先调用 get_latest_ap_states 获取最新状态，再调用计算或验算工具自检修订后的参数。\n"
-                    "回复末尾必须用 ```json 代码块附上修订后的完整参数，JSON 顶层键必须是 ap1/ap2/ap3。"
-                )
-                content = self._speak_and_log(
-                    proposer_id, revise_instruction,
-                    phase=4, role="revise",
-                    tools=_tools_for_propose(strategy),
-                    speaker=proposer_id.upper(),
-                )
-                revised = _extract_proposal(content)
-                if revised is not None:
-                    proposal = revised
-                continue
+                        observed_state, obs_error, obs_real = (
+                            self._collect_observed_state(ap_state)
+                        )
+                        validation = validate_decision(
+                            ap_state, decision, strategy,
+                            observed_state=observed_state,
+                            observed_is_real=obs_real,
+                        )
+                        if obs_error:
+                            validation["approved"] = False
+                            validation["global_errors"].insert(0, obs_error)
+                            validation["summary"] = f"验证失败（策略={strategy}）：{obs_error}"
 
-            outcome = "vote_no_consensus"
-            feedback_text = "\n\n".join(disagreements)
-            revise_instruction = (
-                "部分 AP 对提案表示不同意，具体反馈如下：\n\n"
-                f"{feedback_text}\n\n"
-                "请根据上述反馈修改提案，再次给出每个 AP 的具体参数调整建议（含数值）。\n"
-                "必须先调用 get_latest_ap_states 获取最新状态，再调用计算或验算工具自检修订后的参数。\n"
-                "回复末尾必须用 ```json 代码块附上修订后的完整参数，JSON 顶层键必须是 ap1/ap2/ap3。"
-            )
-            content = self._speak_and_log(
-                proposer_id, revise_instruction,
-                phase=4, role="revise",
-                tools=_tools_for_propose(strategy),
-                speaker=proposer_id.upper(),
-            )
-            revised = _extract_proposal(content)
-            if revised is not None:
-                proposal = revised
+                        print(
+                            f"\n[Validator] {'通过' if validation['approved'] else '未通过'}"
+                            f" — {validation['summary']}"
+                        )
+                        if self.logger:
+                            self.logger.validation_result(validation)
+
+                        if validation["approved"]:
+                            print("\n协商成功完成。")
+                            self._finish_session("success", proposal_num, started_at)
+                            session_id = self.logger.session_id if self.logger else ""
+                            self._push_decision(decision, strategy, session_id)
+                            return self.conversation_log
+
+                        # 验证未通过：退出内层循环，外层重新从 ap1 提案
+                        break
+                else:
+                    # 反对者立即成为新提案方
+                    new_proposal = self._phase_counter_propose(
+                        voter_id, content, strategy, proposal_num + 1
+                    )
+                    if new_proposal is not None:
+                        proposal_num += 1
+                        current_proposer = voter_id
+                        proposal = new_proposal
+                        agree_set = set()
+                        # ap_cycle 已自然推进到 voter_id 之后，无需额外操作
+                    else:
+                        print(f"\n[警告] {voter_id.upper()} 反提案解析失败，跳过本轮。")
+            else:
+                # for 循环正常结束（未 break）= 达到 MAX_TURNS
+                print(f"\n[超时] 达到最大轮次 {MAX_TURNS}，协商终止。")
+                self._finish_session("max_turns_exceeded", proposal_num, started_at)
+                return self.conversation_log
+
+        print(f"\n[失败] 达到最大验证重试次数 {MAX_VALIDATION_RETRIES}，协商终止。")
+        self._finish_session("max_retries_exceeded", proposal_num, started_at)
+        return self.conversation_log
