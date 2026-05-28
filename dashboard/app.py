@@ -234,8 +234,13 @@ script.onload = () => {
 document.head.appendChild(script);
 
 // ── SSE conversation stream ─────────────────────────────────────
-const logPath  = new URLSearchParams(location.search).get("log") || "";
-const sse = new EventSource("/events" + (logPath ? "?log=" + encodeURIComponent(logPath) : ""));
+const _sp     = new URLSearchParams(location.search);
+const logPath = _sp.get("log") || "";
+const _isLive = _sp.get("live") === "1";
+const _sseP   = new URLSearchParams();
+if (_isLive)  _sseP.set("live", "1");
+if (logPath)  _sseP.set("log",  logPath);
+const sse = new EventSource("/events?" + _sseP.toString());
 const body  = document.getElementById("conv-body");
 const badge = document.getElementById("badge");
 let autoScroll = true;
