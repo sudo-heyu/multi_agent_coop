@@ -608,10 +608,16 @@ class NegotiationOrchestrator:
         else:  # joint
             field_constraint = "联合路径需同时包含 tx_power_dbm 和 CWmin/CWmax/AIFSN 字段。"
 
+        history_hint = (
+            "【重要】请先完整阅读上方的对话记录。"
+            "如果其中已有历史提案和拒绝原因，你的提案必须明确回应各方此前提出的约束顾虑，"
+            "而不是重复一个已被否决的方案。协商历史越长，越需要向各方约束的交集靠拢。\n\n"
+        )
         instruction = (
-            f"协调者（COORDINATOR）已判断你（{proposer_id.upper()}）当前状况最差，指定你发起参数调整提案。\n\n"
+            f"你（{proposer_id.upper()}）是本轮的提案方，请发起参数调整提案。\n\n"
+            f"{history_hint}"
             f"协商路径：{strategy_hint}\n\n"
-            f"所有 AP 的完整状态数据：\n{state_summary}\n\n"
+            f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
             "请先调用 get_latest_ap_states 获取最新状态。"
             "如果协商路径包含 Co-SR，必须依次使用 analyze_sr_interference、"
             "compute_sr_feasible_ranges，并自行提出至少两个候选 TX Power 方案，"
@@ -624,7 +630,7 @@ class NegotiationOrchestrator:
             "然后简洁阐述提案（不要逐步复述工具调用过程）：\n"
             "  · 当前核心问题是什么，关键指标数据是什么\n"
             "  · 为什么走这条协商路径\n"
-            "  · 每个 AP 的最终参数是多少，为何选择该方案\n"
+            "  · 每个 AP 的最终参数是多少，为何选择该方案（如有历史争议，说明如何化解）\n"
             "  · 预期改善和主要权衡\n"
             "最终提交前必须调用 evaluate_sr_candidate 或 validate_edca_proposal 自检相关约束。\n"
             "提案末尾必须用 ```json 代码块附上参数摘要，JSON 顶层键必须是 ap1/ap2/ap3。"
@@ -678,15 +684,21 @@ class NegotiationOrchestrator:
 
         proposal_json = _json(proposal)
         instruction = (
-            f"请验算 {proposer_id.upper()} 的提案中针对你自己（{voter_id.upper()}）的参数调整建议。\n\n"
-            f"已解析的提案参数 JSON 如下，请以它为唯一参数来源：\n{proposal_json}\n\n"
+            "【第一步】请完整阅读上方的对话记录，梳理此前所有提案及每次拒绝的具体原因。\n\n"
+            f"【第二步】验算 {proposer_id.upper()} 的最新提案（提案#{proposal_num}）"
+            f"中针对你自己（{voter_id.upper()}）的参数调整建议。\n\n"
+            f"最新提案参数：\n{proposal_json}\n\n"
             "请先调用 get_latest_ap_states 获取最新状态，再调用验算工具，"
             "然后用自然语言给出你的判断。"
             f"重点参考：{verify_hint}。\n\n"
             "不要套用固定模板，如果结果很简单可以简短直接。\n\n"
             "【同意时】回复末尾附：\n"
             "```json\n{\"agreed\": true, \"reason\": \"...\"}\n```\n\n"
-            "【反对时】请在同一条回复中直接给出你的完整反提案，说明反对理由和你认为合理的参数方案，"
+            "【反对时】请在同一条回复中直接给出你的完整反提案。反提案须满足：\n"
+            "  1. 明确说明你对当前提案的具体反对理由（卡在哪个指标或约束）\n"
+            "  2. 综合对话记录中其他 AP 之前提出的所有顾虑，你的方案必须兼顾所有人的约束，"
+            "而不是只满足你自己的需求\n"
+            "  3. 若此前已有多次协商失败，请给出比之前所有提案更保守的参数，向各方约束的交集靠拢\n\n"
             "然后附两个 ```json 块：\n"
             "第一块：```json\n{\"agreed\": false, \"reason\": \"...\"}\n```\n"
             "第二块：完整参数反提案，JSON 顶层键必须是 ap1/ap2/ap3。"
@@ -719,6 +731,8 @@ class NegotiationOrchestrator:
 
         repair_instruction = (
             "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
+            "请回顾上方完整协商历史，综合所有 AP 此前提出的约束和顾虑，"
+            "给出一个能兼顾所有人需求的反提案。\n"
             "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3，"
             "每个 AP 内包含本次协商路径需要调整的具体参数。不要写解释。"
         )
