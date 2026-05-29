@@ -169,8 +169,9 @@ class ControlFlowTests(unittest.TestCase):
         self.assertIsNotNone(_extract_proposal(content))
 
     def test_structured_vote_takes_precedence(self):
-        self.assertTrue(self.orchestrator._agreed('```json\n{"agreed": true, "reason": "OK"}\n```'))
-        self.assertFalse(self.orchestrator._agreed('```json\n{"agreed": false, "reason": "不同意"}\n```'))
+        self.assertEqual(self.orchestrator._vote_result('```json\n{"agreed": true, "reason": "OK"}\n```'), "agree")
+        self.assertEqual(self.orchestrator._vote_result('```json\n{"agreed": false, "reason": "不同意"}\n```'), "reject")
+        self.assertEqual(self.orchestrator._vote_result('```json\n{"agreed": "abstain", "reason": "弃权"}\n```'), "abstain")
 
     def test_local_server_detection(self):
         self.assertTrue(_is_local_server("http://localhost:5001"))

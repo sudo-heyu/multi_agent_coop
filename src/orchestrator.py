@@ -655,8 +655,9 @@ class NegotiationOrchestrator:
         state_summary = json.dumps(ap_state, ensure_ascii=False, indent=2)
 
         history_hint = (
-            "【重要】请先完整阅读上方的对话记录。"
-            "如果其中已有历史提案和拒绝原因，你的提案必须明确回应各方此前提出的约束顾虑，"
+            "【重要】请先完整阅读上方的对话记录。\n"
+            "如果记录中有 VALIDATOR 发出的验证失败消息，你的新提案必须直接解决其中列出的具体问题。\n"
+            "如果记录中已有历史提案和拒绝原因，你的提案必须明确回应各方此前提出的约束顾虑，"
             "而不是重复一个已被否决的方案。协商历史越长，越需要向各方约束的交集靠拢。\n\n"
         )
         instruction = (
@@ -952,7 +953,13 @@ class NegotiationOrchestrator:
                             self._push_decision(decision, strategy, session_id)
                             return self.conversation_log
 
-                        # 验证未通过：退出内层循环，外层重新从 ap1 提案
+                        # 验证未通过：将原因写入对话记录，让 AP1 重提案时可见
+                        err_detail = "；".join(validation.get("global_errors") or [])
+                        self._record(
+                            "VALIDATOR",
+                            f"[验证未通过] {validation.get('summary', '')}"
+                            + (f"\n具体问题：{err_detail}" if err_detail else ""),
+                        )
                         break
                 else:  # reject
                     # 反对者立即成为新提案方

@@ -322,8 +322,10 @@ class APAgent:
             tool_calls = msg.get("tool_calls") or []
 
             if not tool_calls:
-                # 无工具调用：直接流式输出最终回复
-                yield from self._stream_chat_ppio(messages)
+                # 无工具调用：直接 yield 已取得的内容，不再重发请求
+                content = msg.get("content") or ""
+                if content:
+                    yield content
                 return
 
             messages.append({

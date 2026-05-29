@@ -408,8 +408,10 @@ function render(d) {
     const rid = "vr-" + (d.round||0);
     let row = document.getElementById(rid);
     if (!row) { row = mk("votes-row"); row.id = rid; app_(row); }
-    row.appendChild(mk("ev-vote " + (d.agreed ? "ok" : "no"),
-      (d.agreed ? "✓" : "✗") + " " + (d.voter||"").toUpperCase()));
+    const _vok  = d.agreed === true || d.agreed === "agree" || d.agreed === "abstain";
+    const _vsym = d.agreed === "abstain" ? "～" : (_vok ? "✓" : "✗");
+    row.appendChild(mk("ev-vote " + (_vok ? "ok" : "no"),
+      _vsym + " " + (d.voter||"").toUpperCase()));
     sd(); return;
   }
 
