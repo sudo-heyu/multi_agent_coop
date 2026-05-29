@@ -1,11 +1,24 @@
 import json
+import os
 import requests
 from pathlib import Path
 from typing import Callable, Iterator
 
+# 尝试加载 .env（文件不存在或未安装 dotenv 时静默跳过）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen3:14b"
 MAX_TOOL_ROUNDS = 8  # 防止工具调用死循环
+
+# PPIO 派欧云
+PPIO_ALIAS = "qwen:80b"
+PPIO_MODEL = "qwen/qwen3-next-80b-a3b-instruct"
+PPIO_URL = "https://api.ppio.com/openai/v1/chat/completions"
 
 _HTTP = requests.Session()
 _HTTP.trust_env = False
@@ -17,6 +30,23 @@ class APAgent:
         self.name = agent_id.upper()
         self.model = model
         self.system_prompt = self._build_system_prompt(agents_dir / agent_id)
+
+        if model == PPIO_ALIAS:
+            api_key = os.environ.get("PPIO_API_KEY", "")
+            if not api_key:
+                raise RuntimeError(
+                    "使用 qwen:80b 需要设置 PPIO_API_KEY，请在 .env 文件中填写。"
+                )
+            self._ppio_headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+        else:
+            self._ppio_headers = None
+
+    @property
+    def _use_ppio(self) -> bool:
+        return self.model == PPIO_ALIAS
 
     def _build_system_prompt(self, agent_path: Path) -> str:
         parts = []
@@ -34,7 +64,7 @@ class APAgent:
         return prompt
 
     def _build_messages(self, conversation_log: list[dict], instruction: str) -> list[dict]:
-        """构造发送给 Ollama 的 messages。"""
+        """构造发送给模型的 messages。"""
         if conversation_log:
             transcript = "\n\n".join(
                 f"### {msg['speaker']}\n{msg['content']}"
@@ -54,7 +84,10 @@ class APAgent:
         ]
 
     def _request_chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
-        """执行一次非流式 chat 请求，用于工具调用轮。"""
+        """执行一次非流式 chat 请求，返回标准化 message dict。"""
+        if self._use_ppio:
+            return self._request_chat_ppio(messages, tools)
+
         payload: dict = {
             "model":  self.model,
             "think":  False,
@@ -68,12 +101,45 @@ class APAgent:
         resp.raise_for_status()
         return resp.json()["message"]
 
+    def _request_chat_ppio(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
+        """PPIO OpenAI-compatible 非流式请求，返回与 Ollama 相同结构的 message dict。"""
+        payload: dict = {
+            "model":  PPIO_MODEL,
+            "stream": False,
+            "messages": messages,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode())
+        print(f"  [PPIO] 请求大小: {payload_bytes} bytes / {payload_bytes//4} 估算tokens  消息数: {len(messages)}", flush=True)
+        resp = _HTTP.post(PPIO_URL, headers=self._ppio_headers, json=payload, timeout=180)
+        if not resp.ok:
+            try:
+                err_body = resp.json()
+            except Exception:
+                err_body = resp.text
+            raise RuntimeError(
+                f"PPIO {resp.status_code}: {err_body}"
+            )
+        msg = resp.json()["choices"][0]["message"]
+        # 统一格式：确保 tool_calls 字段存在
+        return {
+            "role":       msg.get("role", "assistant"),
+            "content":    msg.get("content") or "",
+            "tool_calls": msg.get("tool_calls") or [],
+        }
+
     def _stream_chat(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
     ) -> Iterator[str]:
         """执行一次流式 chat 请求，逐块产出最终自然语言内容。"""
+        if self._use_ppio:
+            yield from self._stream_chat_ppio(messages, tools)
+            return
+
         payload: dict = {
             "model":  self.model,
             "think":  False,
@@ -85,11 +151,46 @@ class APAgent:
 
         with _HTTP.post(OLLAMA_URL, json=payload, timeout=180, stream=True) as resp:
             resp.raise_for_status()
-            for line in resp.iter_lines(decode_unicode=True):
-                if not line:
+            for raw in resp.iter_lines():
+                if not raw:
                     continue
-                chunk = json.loads(line)
+                chunk = json.loads(raw.decode("utf-8"))
                 content = (chunk.get("message") or {}).get("content") or ""
+                if content:
+                    yield content
+
+    def _stream_chat_ppio(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> Iterator[str]:
+        """PPIO OpenAI SSE 流式请求，逐块产出内容。"""
+        payload: dict = {
+            "model":  PPIO_MODEL,
+            "stream": True,
+            "messages": messages,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        with _HTTP.post(PPIO_URL, headers=self._ppio_headers,
+                        json=payload, timeout=180, stream=True) as resp:
+            resp.raise_for_status()
+            for raw in resp.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8")
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                content = delta.get("content") or ""
                 if content:
                     yield content
 
@@ -122,9 +223,11 @@ class APAgent:
             yield from self._stream_chat(messages)
             return
 
-        # 全程流式：每轮同时收集 content（实时 yield）和 tool_calls（流结束后处理）。
-        # 工具调用轮 content 通常为空，不会产生多余输出；
-        # 最终文本轮无 tool_calls，content 已实时流出，直接 return。
+        if self._use_ppio:
+            yield from self._speak_stream_ppio(messages, tools, tool_executor, tool_log, tool_callback)
+            return
+
+        # Ollama 全程流式：每轮同时收集 content（实时 yield）和 tool_calls（流结束后处理）。
         for _ in range(MAX_TOOL_ROUNDS):
             payload: dict = {
                 "model":    self.model,
@@ -139,10 +242,10 @@ class APAgent:
 
             with _HTTP.post(OLLAMA_URL, json=payload, timeout=180, stream=True) as resp:
                 resp.raise_for_status()
-                for line in resp.iter_lines(decode_unicode=True):
-                    if not line:
+                for raw in resp.iter_lines():
+                    if not raw:
                         continue
-                    chunk = json.loads(line)
+                    chunk = json.loads(raw.decode("utf-8"))
                     msg = chunk.get("message") or {}
 
                     piece = msg.get("content") or ""
@@ -154,17 +257,14 @@ class APAgent:
                         round_tool_calls.extend(msg["tool_calls"])
 
             if not round_tool_calls:
-                # 没有工具调用：文本已全部实时产出，本轮结束
                 return
 
-            # 将 assistant 的工具调用追加进对话
             messages.append({
                 "role":       "assistant",
                 "content":    "".join(round_content),
                 "tool_calls": round_tool_calls,
             })
 
-            # 逐个执行工具，将结果追加进对话
             for tc in round_tool_calls:
                 fn        = tc.get("function", {})
                 tool_name = fn.get("name", "")
@@ -207,6 +307,73 @@ class APAgent:
             "content": "请根据以上工具结果直接给出最终回复，不要再调用工具。",
         })
         yield from self._stream_chat(messages)
+
+    def _speak_stream_ppio(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        tool_executor: Callable | None,
+        tool_log: list | None,
+        tool_callback: Callable[[str, dict, dict, float], None] | None,
+    ) -> Iterator[str]:
+        """PPIO 后端的工具调用循环：工具轮用非流式，最终回复用流式。"""
+        for _ in range(MAX_TOOL_ROUNDS):
+            msg = self._request_chat_ppio(messages, tools)
+            tool_calls = msg.get("tool_calls") or []
+
+            if not tool_calls:
+                # 无工具调用：直接流式输出最终回复
+                yield from self._stream_chat_ppio(messages)
+                return
+
+            messages.append({
+                "role":       "assistant",
+                "content":    msg.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+
+            for tc in tool_calls:
+                fn        = tc.get("function", {})
+                tool_name = fn.get("name", "")
+                raw_args  = fn.get("arguments", {})
+
+                if isinstance(raw_args, str):
+                    try:
+                        raw_args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        raw_args = {}
+
+                if tool_executor:
+                    result_dict, dur_ms = tool_executor(tool_name, raw_args)
+                else:
+                    result_dict, dur_ms = {"error": "no executor configured"}, 0.0
+
+                if tool_callback:
+                    tool_callback(tool_name, raw_args, result_dict, dur_ms)
+
+                tool_message = {
+                    "role":    "tool",
+                    "content": json.dumps(result_dict, ensure_ascii=False),
+                    "name":    tool_name,
+                }
+                if tc.get("id"):
+                    tool_message["tool_call_id"] = tc["id"]
+                messages.append(tool_message)
+
+                if tool_log is not None:
+                    tool_log.append({
+                        "tool":        tool_name,
+                        "input":       raw_args,
+                        "output":      result_dict,
+                        "duration_ms": dur_ms,
+                    })
+
+        # 超出最大轮数
+        messages.append({
+            "role":    "user",
+            "content": "请根据以上工具结果直接给出最终回复，不要再调用工具。",
+        })
+        yield from self._stream_chat_ppio(messages)
 
     def speak(
         self,

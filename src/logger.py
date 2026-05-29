@@ -108,7 +108,18 @@ class SessionLogger:
             try:
                 self._event_sink(row)
             except Exception:
-                pass  # sink 错误不中断会话
+                pass
+
+    def _write_file_only(self, event: str, **kw) -> None:
+        """写入 JSONL 文件，不通知 event_sink（避免与高频推送重复）。"""
+        row = {
+            "ts":         _now(),
+            "session_id": self.session_id,
+            "event":      event,
+            **kw,
+        }
+        self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._fh.flush()  # sink 错误不中断会话
 
     def _console(self, event: str, msg: str) -> None:
         if not self.verbose:
@@ -168,9 +179,24 @@ class SessionLogger:
         """Agent 开始发言（流式输出前写入，dashboard 据此创建空气泡）。"""
         self._write("agent_speak_start", agent=agent, phase=phase, role=role)
 
+    def push_chunk(self, agent: str, text: str) -> None:
+        """每个 Ollama token 直接推送到 dashboard（不写 JSONL 文件），供高频调用。"""
+        if self._event_sink is None or not text:
+            return
+        try:
+            self._event_sink({
+                "ts":         _now(),
+                "session_id": self.session_id,
+                "event":      "agent_speak_chunk",
+                "agent":      agent,
+                "text":       text,
+            })
+        except Exception:
+            pass
+
     def agent_speak_chunk(self, agent: str, text: str) -> None:
-        """Agent 发言文本片段（流式写入，dashboard 实时追加）。"""
-        self._write("agent_speak_chunk", agent=agent, text=text)
+        """批量写入 JSONL 文件供回放；不推送到实时队列（避免与 push_chunk 重复）。"""
+        self._write_file_only("agent_speak_chunk", agent=agent, text=text)
 
     def agent_speak(
         self,

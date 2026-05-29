@@ -42,12 +42,30 @@ def _tools_for_propose(strategy: str) -> list:
     return TOOL_DEFINITIONS  # joint
 
 
-def _tools_for_vote(strategy: str) -> list:
-    if strategy == "co_sr":
-        return _GET_LATEST_STATE + _VALIDATE_SR
-    if strategy == "co_edca":
-        return _GET_LATEST_STATE + _VALIDATE_EDCA
-    return _GET_LATEST_STATE + _VALIDATE_SR + _VALIDATE_EDCA  # joint
+def _tools_for_vote(_strategy: str) -> list:
+    # 投票者始终拥有 get_latest_ap_states + 两个验算工具（共 3 个）。
+    # 不包含计算用工具（analyze_sr_interference 等），那些只有提案方才需要。
+    # 3 个工具定义的总大小与改动前的 2 个相当，不会触发 PPIO 的请求体大小限制。
+    return _GET_LATEST_STATE + _VALIDATE_SR + _VALIDATE_EDCA
+
+
+def _infer_strategy_from_proposal(proposal: dict) -> str:
+    """Detect negotiation strategy from fields present in the proposal JSON."""
+    has_sr = any(
+        isinstance(v, dict) and "tx_power_dbm" in v
+        for v in proposal.values()
+    )
+    has_edca = any(
+        isinstance(v, dict) and any(k in v for k in ("CWmin", "CWmax", "AIFSN"))
+        for v in proposal.values()
+    )
+    if has_sr and has_edca:
+        return "joint"
+    if has_sr:
+        return "co_sr"
+    if has_edca:
+        return "co_edca"
+    return "co_edca"
 
 
 
@@ -277,15 +295,17 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
     # ── validate_edca_proposal ────────────────────────────────────────
     if tname == "validate_edca_proposal":
+        ap_entries = [ap_id for ap_id in AP_IDS if isinstance(result.get(ap_id), dict)]
         per_ap_ok = all(
             result.get(ap_id, {}).get("valid", True)
-            for ap_id in AP_IDS
-            if isinstance(result.get(ap_id), dict)
+            for ap_id in ap_entries
         )
         effectiveness = result.get("effectiveness") or {}
         has_warn = not effectiveness.get("all_ok", True)
 
-        if not per_ap_ok:
+        if not ap_entries:
+            flag = status_fail("参数缺失（工具调用格式有误，缺少 proposed_edca 字段）")
+        elif not per_ap_ok:
             flag = status_fail("参数违规")
         elif has_warn:
             flag = status_warn("有警告")
@@ -300,9 +320,9 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
         lines = [f"{hdr}  {flag}  {dim('  '.join(params_parts))}"]
 
-        for ap_id in AP_IDS:
+        for ap_id in ap_entries:
             item = result.get(ap_id, {})
-            if isinstance(item, dict) and not item.get("valid"):
+            if not item.get("valid"):
                 lines.append(
                     f"  {status_fail('[FAIL]')} {ap_id}: {'; '.join(item.get('errors') or [])}"
                 )
@@ -416,6 +436,9 @@ class NegotiationOrchestrator:
         without_negative = content.replace("不同意", "").replace("反对", "")
         return "同意" in without_negative
 
+    def _is_negotiation_needed(self, ap_state: dict) -> bool:
+        return self._determine_strategy(ap_state) != "noop"
+
     def _determine_strategy(self, ap_state: dict) -> str:
         """Deterministic fallback used by tests and non-LLM callers."""
         sr_triggered = any(
@@ -460,7 +483,7 @@ class NegotiationOrchestrator:
         def on_tool(tool_name: str, raw_args: dict, result_dict: dict, dur_ms: float) -> None:
             print(f"\n{_format_tool_console(tool_name, raw_args, result_dict, dur_ms)}", flush=True)
 
-        _CHUNK_BATCH = 40   # 每积累 40 字符写一次日志，平衡实时性与 I/O
+        _CHUNK_BATCH = 40   # 文件日志批次大小（减少 JSONL 条目数）
 
         t0 = time.time()
         tool_log: list[dict] = []
@@ -487,6 +510,10 @@ class NegotiationOrchestrator:
             ):
                 chunks.append(chunk)
                 print(strip_md(chunk), end="", flush=True)
+                # 每个 token 立即推送到 dashboard（不经文件批次，保证流式显示）
+                if self.logger:
+                    self.logger.push_chunk(ap_id, chunk)
+                # 文件日志保持批次化（减少 JSONL 条目数）
                 _buf.append(chunk)
                 _buf_len += len(chunk)
                 if _buf_len >= _CHUNK_BATCH and self.logger:
@@ -509,18 +536,37 @@ class NegotiationOrchestrator:
                 and not attempt_tool_log
                 and any(name and name in content for name in tool_names)
             )
-            if not claimed_without_call or attempt == 1:
+
+            # 提案方必须在 JSON 前给出文字说明；若没有则重试一次
+            missing_preamble = (
+                role == "proposer"
+                and attempt == 0
+                and "```json" in content
+                and len(content[:content.index("```json")].strip()) < 30
+            )
+
+            if not claimed_without_call and not missing_preamble or attempt == 1:
                 break
 
-            retry_hint = (
-                "\n\n[系统提醒] 系统没有收到真实 tool_call。"
-                "如果需要使用工具，必须发起真实 tool_call；"
-                "不能只在文本中声称已调用工具。请重新回答。"
-            )
-            print(
-                "\n[协调者] 检测到上一轮回复声称使用工具，但未产生真实工具调用；要求重试。",
-                flush=True,
-            )
+            if claimed_without_call:
+                retry_hint = (
+                    "\n\n[系统提醒] 系统没有收到真实 tool_call。"
+                    "如果需要使用工具，必须发起真实 tool_call；"
+                    "不能只在文本中声称已调用工具。请重新回答。"
+                )
+                print(
+                    "\n[协调者] 检测到上一轮回复声称使用工具，但未产生真实工具调用；要求重试。",
+                    flush=True,
+                )
+            else:  # missing_preamble
+                retry_hint = (
+                    "\n\n[系统提醒] 你的回复缺少必要的文字说明（在 JSON 之前应说明选择了哪种路径、"
+                    "为什么、关键指标是什么、预期改善是什么）。请先给出完整的文字分析，再附上 JSON。"
+                )
+                print(
+                    "\n[协调者] 检测到提案缺少文字说明，要求重新回复并先给出分析。",
+                    flush=True,
+                )
             active_instruction = instruction + retry_hint
 
         duration_ms = (time.time() - t0) * 1000
@@ -595,33 +641,11 @@ class NegotiationOrchestrator:
         self,
         proposer_id: str,
         ap_state: dict,
-        strategy: str,
     ) -> dict | None:
         if self.logger:
-            self.logger.phase_start(3, f"{proposer_id.upper()} 发起提案 | {strategy}")
-
-        strategy_hint = {
-            "co_sr":   "Co-SR（降低 TX Power，减少 OBSS 干扰）",
-            "co_edca": "Co-EDCA（调整 CWmin / CWmax / AIFSN，缓解信道拥塞）",
-            "joint":   "联合（同时调整 TX Power 与 EDCA 参数）",
-        }[strategy]
+            self.logger.phase_start(3, f"{proposer_id.upper()} 发起提案（自主选路）")
 
         state_summary = json.dumps(ap_state, ensure_ascii=False, indent=2)
-        tools = _tools_for_propose(strategy)
-
-        # 根据策略生成字段约束说明
-        if strategy == "co_sr":
-            field_constraint = (
-                "【重要】Co-SR 路径只调整 TX Power，提案 JSON 中只能包含 tx_power_dbm 字段，"
-                "绝对不能包含 CWmin、CWmax、AIFSN 等 EDCA 字段。"
-            )
-        elif strategy == "co_edca":
-            field_constraint = (
-                "【重要】Co-EDCA 路径只调整 EDCA 参数，提案 JSON 中只能包含 CWmin、CWmax、AIFSN 字段，"
-                "绝对不能包含 tx_power_dbm 字段。"
-            )
-        else:  # joint
-            field_constraint = "联合路径需同时包含 tx_power_dbm 和 CWmin/CWmax/AIFSN 字段。"
 
         history_hint = (
             "【重要】请先完整阅读上方的对话记录。"
@@ -631,23 +655,28 @@ class NegotiationOrchestrator:
         instruction = (
             f"你（{proposer_id.upper()}）是本轮的提案方，请发起参数调整提案。\n\n"
             f"{history_hint}"
-            f"协商路径：{strategy_hint}\n\n"
             f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
-            "请先调用 get_latest_ap_states 获取最新状态。"
-            "如果协商路径包含 Co-SR，必须依次使用 analyze_sr_interference、"
-            "compute_sr_feasible_ranges，并自行提出至少两个候选 TX Power 方案，"
-            "再调用 rank_sr_candidates 比较候选，并用 evaluate_sr_candidate 验证最终候选后选定最终方案。"
-            "Co-SR 的主要目标是最小必要降功率；不要选择 1 dBm 这类过度保守的最低功率，"
-            "除非靠近可行区间上界的候选无法满足约束。"
-            "如果协商路径包含 Co-EDCA，请根据最新状态自行提出 EDCA 候选，"
-            "并调用 validate_edca_proposal 验证最终候选。\n"
-            f"{field_constraint}\n"
-            "然后简洁阐述提案（不要逐步复述工具调用过程）：\n"
-            "  · 当前核心问题是什么，关键指标数据是什么\n"
-            "  · 为什么走这条协商路径\n"
+            "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
+            "你可以根据分析结果，自由选择以下任一协商路径：\n\n"
+            "【Co-SR】降低各 AP 的 TX Power，减少 OBSS 干扰。\n"
+            "  适用场景：邻居 RSSI > -70 dBm 或 SINR 持续低于 15 dB。\n"
+            "  Co-SR 目标是最小必要降功率；不要选择 1 dBm 这类过度保守的功率，"
+            "除非靠近可行区间上界的候选无法满足约束。\n"
+            "  工具链：analyze_sr_interference → compute_sr_feasible_ranges → "
+            "rank_sr_candidates → evaluate_sr_candidate\n"
+            "  提案 JSON 须包含 tx_power_dbm 字段（每个 AP）。\n\n"
+            "【Co-EDCA】调整 CWmin / CWmax / AIFSN，缓解信道竞争与高重传率。\n"
+            "  适用场景：channel_busy_ratio > 0.60 或 tx_retries_ratio > 0.15。\n"
+            "  工具链：validate_edca_proposal\n"
+            "  提案 JSON 须包含 CWmin、CWmax、AIFSN 字段（每个 AP）。\n\n"
+            "【联合（Co-SR + Co-EDCA）】同时调整两类参数。"
+            "提案 JSON 须同时包含 tx_power_dbm 与 EDCA 字段。\n\n"
+            "提案须简洁说明：\n"
+            "  · 选择了哪种路径，为什么（关键指标数据是什么）\n"
             "  · 每个 AP 的最终参数是多少，为何选择该方案（如有历史争议，说明如何化解）\n"
             "  · 预期改善和主要权衡\n"
-            "最终提交前必须调用 evaluate_sr_candidate 或 validate_edca_proposal 自检相关约束。\n"
+            "最终提交前必须调用 evaluate_sr_candidate（Co-SR/联合路径）或 "
+            "validate_edca_proposal（Co-EDCA/联合路径）自检相关约束。\n"
             "提案末尾必须用 ```json 代码块附上参数摘要，JSON 顶层键必须是 ap1/ap2/ap3。"
         )
         content = self._speak_and_log(
@@ -655,7 +684,7 @@ class NegotiationOrchestrator:
             instruction,
             phase=3,
             role="proposer",
-            tools=tools,
+            tools=TOOL_DEFINITIONS,
             speaker=proposer_id.upper(),
         )
         proposal = _extract_proposal(content)
@@ -665,7 +694,8 @@ class NegotiationOrchestrator:
         repair_instruction = (
             "上一轮提案没有输出可解析的参数 JSON。\n"
             "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3，"
-            "每个 AP 内包含本次协商路径需要调整的具体参数。不要写解释。"
+            "每个 AP 内包含本次选定协商路径对应的参数"
+            "（Co-SR 用 tx_power_dbm，Co-EDCA 用 CWmin/CWmax/AIFSN）。不要写解释。"
         )
         content = self._speak_and_log(
             proposer_id,
@@ -695,7 +725,7 @@ class NegotiationOrchestrator:
             "co_sr":   "关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量，以及它对你业务的直接影响",
             "co_edca": "关注你自己的 CWmin/CWmax/AIFSN 建议值、工具返回的 valid/errors，以及退避变化是否可接受",
             "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
-        }[strategy]
+        }.get(strategy, "关注工具返回的 valid/errors 以及参数对你的影响")
 
         proposal_json = _json(proposal)
         instruction = (
@@ -713,7 +743,10 @@ class NegotiationOrchestrator:
             "  1. 明确说明你对当前提案的具体反对理由（卡在哪个指标或约束）\n"
             "  2. 综合对话记录中其他 AP 之前提出的所有顾虑，你的方案必须兼顾所有人的约束，"
             "而不是只满足你自己的需求\n"
-            "  3. 若此前已有多次协商失败，请给出比之前所有提案更保守的参数，向各方约束的交集靠拢\n\n"
+            "  3. 若此前已有多次协商失败，请给出比之前所有提案更保守的参数，向各方约束的交集靠拢\n"
+            "  4. 如果你认为当前协商路径本身不合适，可以在反提案中切换路径：\n"
+            "     切换到 Co-SR → 提案 JSON 中使用 tx_power_dbm 字段\n"
+            "     切换到 Co-EDCA → 提案 JSON 中使用 CWmin/CWmax/AIFSN 字段\n\n"
             "然后附两个 ```json 块：\n"
             "第一块：```json\n{\"agreed\": false, \"reason\": \"...\"}\n```\n"
             "第二块：完整参数反提案，JSON 顶层键必须是 ap1/ap2/ap3。"
@@ -736,7 +769,6 @@ class NegotiationOrchestrator:
         self,
         voter_id: str,
         vote_content: str,
-        strategy: str,
         proposal_num: int,
     ) -> dict | None:
         """从投票内容中提取反提案 JSON；提取失败则要求补充一次纯 JSON 回复。"""
@@ -748,8 +780,9 @@ class NegotiationOrchestrator:
             "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
             "请回顾上方完整协商历史，综合所有 AP 此前提出的约束和顾虑，"
             "给出一个能兼顾所有人需求的反提案。\n"
-            "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3，"
-            "每个 AP 内包含本次协商路径需要调整的具体参数。不要写解释。"
+            "你可以自由选择协商路径：Co-SR 使用 tx_power_dbm 字段，Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，"
+            "联合路径两类字段均出现。\n"
+            "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3。不要写解释。"
         )
         content = self._speak_and_log(
             voter_id,
@@ -802,35 +835,42 @@ class NegotiationOrchestrator:
         # 阶段一：广播（ap1 → ap2 → ap3）
         self._phase_broadcast(ap_state)
 
-        # 阶段二：确定性策略决策（不使用 LLM 协调者）
-        strategy = self._determine_strategy(ap_state)
-        print(f"\n[策略决策] {_strategy_label(strategy)} | 首个提案方: AP1")
-        if self.logger:
-            self.logger.phase_start(2, f"策略决策: {_strategy_label(strategy)}")
-            self.logger.strategy_decided(strategy, "ap1")
-
-        if strategy == "noop":
-            print("网络状况良好，无需协商。")
+        # 阶段二：触发判断（不预定策略，由提案 AP 自主选路）
+        if not self._is_negotiation_needed(ap_state):
+            print("\n[策略决策] NOOP | 网络状况良好，无需协商。")
+            if self.logger:
+                self.logger.phase_start(2, "策略决策: NOOP")
+                self.logger.strategy_decided("noop", "ap1")
             self._finish_session("noop", 0, started_at)
             return self.conversation_log
+
+        print("\n[策略决策] 协商已触发，首个提案方 AP1 自主选路")
+        if self.logger:
+            self.logger.phase_start(2, "协商触发，等待 AP1 自主选路")
 
         MAX_VALIDATION_RETRIES = 3
         MAX_TURNS = 30          # 单轮内最大发言次数（安全上限）
         proposal_num = 0        # 累计提案编号
+        strategy = "co_edca"    # 初始占位；实际值在首个提案后由 _infer_strategy_from_proposal 确定
 
         # 外层循环：Validator 未通过时从 ap1 重新提案
         for retry in range(MAX_VALIDATION_RETRIES):
             if retry > 0:
                 print(f"\n[重试] Validator 未通过，AP1 重新发起提案（第 {retry + 1} 次尝试）")
 
-            # 阶段三：首轮提案固定由 ap1 发起
+            # 阶段三：首轮提案固定由 ap1 发起（AP1 自主选路）
             current_proposer = "ap1"
             proposal_num += 1
-            proposal = self._phase_propose(current_proposer, ap_state, strategy)
+            proposal = self._phase_propose(current_proposer, ap_state)
             if proposal is None:
                 print("\n[错误] 提案方未输出可解析的参数 JSON，协商终止。")
                 self._finish_session("proposal_parse_error", proposal_num, started_at)
                 return self.conversation_log
+
+            strategy = _infer_strategy_from_proposal(proposal)
+            print(f"\n[策略推断] AP1 选择了 {_strategy_label(strategy)} 路径")
+            if self.logger:
+                self.logger.strategy_decided(strategy, "ap1")
 
             agree_set: set[str] = set()
 
@@ -889,11 +929,20 @@ class NegotiationOrchestrator:
                 else:
                     # 反对者立即成为新提案方
                     new_proposal = self._phase_counter_propose(
-                        voter_id, content, strategy, proposal_num + 1
+                        voter_id, content, proposal_num + 1
                     )
                     if new_proposal is not None:
                         proposal_num += 1
                         current_proposer = voter_id
+                        new_strategy = _infer_strategy_from_proposal(new_proposal)
+                        if new_strategy != strategy:
+                            print(
+                                f"\n[策略切换] {voter_id.upper()} 反提案切换路径："
+                                f" {_strategy_label(strategy)} → {_strategy_label(new_strategy)}"
+                            )
+                            if self.logger:
+                                self.logger.strategy_decided(new_strategy, voter_id)
+                        strategy = new_strategy
                         proposal = new_proposal
                         agree_set = set()
                         # ap_cycle 已自然推进到 voter_id 之后，无需额外操作

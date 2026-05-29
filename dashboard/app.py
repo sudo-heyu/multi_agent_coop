@@ -118,6 +118,8 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
 .ev-speak { background: #1f2937; border-left: 3px solid #374151; padding: 9px 13px; border-radius: 4px; font-size: 14px; line-height: 1.65; }
 .ev-speak .tag  { font-size: 12px; font-weight: bold; margin-bottom: 5px; }
 .ev-speak .body { color: #f9fafb; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+.ev-speak .body.typing::after { content: '▋'; animation: blink .7s step-end infinite; opacity: .7; }
+@keyframes blink { 50% { opacity: 0; } }
 .ev-speak.ap1         .tag { color: #60a5fa; }
 .ev-speak.ap2         .tag { color: #fb923c; }
 .ev-speak.ap3         .tag { color: #c084fc; }
@@ -270,10 +272,51 @@ function esc(s) {
 }
 function app_(el) { body.appendChild(el); sd(); }
 
-// 流式发言状态
-let _streamEl   = null;   // 当前正在流式写入的气泡 div
-let _streamBody = null;   // 气泡内 .body div
-let _streamAgent = null;  // 当前流式发言的 agent id
+// ── 流式发言状态 ────────────────────────────────────────────────
+let _streamEl    = null;
+let _streamBody  = null;
+let _streamAgent = null;
+let _curSeg      = null;   // 当前活跃 segment
+
+// ── 打字机（segment 队列） ────────────────────────────────────────
+// 每个气泡有自己的 segment = {el: .body, buf: 待输出文字}
+// RAF 按队列顺序逐 segment 输出，互不干扰。
+const _TYPE_CPS_LIVE   = 80;
+const _TYPE_CPS_REPLAY = 200;
+const _typeSegs  = [];
+let   _typeRafId  = null;
+let   _typeLastTs = 0;
+
+const _typeCPS = () => _isLive ? _TYPE_CPS_LIVE : _TYPE_CPS_REPLAY;
+
+function _typeTick(ts) {
+  if (!_typeSegs.some(s => s.buf.length > 0)) { _typeRafId = null; return; }
+  if (!_typeLastTs) _typeLastTs = ts;
+  const elapsed = ts - _typeLastTs;
+  _typeLastTs   = ts;
+  let budget    = Math.max(1, Math.round(_typeCPS() * elapsed / 1000));
+  for (const seg of _typeSegs) {
+    if (budget <= 0) break;
+    if (!seg.buf.length) continue;
+    const take = Math.min(budget, seg.buf.length);
+    seg.el.textContent += seg.buf.slice(0, take);
+    seg.buf = seg.buf.slice(take);
+    budget -= take;
+    sd();
+    if (!seg.buf.length) seg.el.classList.remove("typing");
+  }
+  _typeRafId = _typeSegs.some(s => s.buf.length > 0) ? requestAnimationFrame(_typeTick) : null;
+}
+
+function _typeStartRAF() {
+  if (!_typeRafId) { _typeLastTs = 0; _typeRafId = requestAnimationFrame(_typeTick); }
+}
+
+function _typeFlushAll() {
+  if (_typeRafId) { cancelAnimationFrame(_typeRafId); _typeRafId = null; }
+  for (const s of _typeSegs) { s.el.textContent += s.buf; s.el.classList.remove("typing"); }
+  _typeSegs.length = 0; _typeLastTs = 0;
+}
 
 function agentClass(ag) {
   return ["ap1","ap2","ap3"].includes(ag) ? ag : "coordinator";
@@ -291,6 +334,7 @@ function render(d) {
 
   if (ev === "session_start") {
     body.innerHTML = "";
+    _typeFlushAll(); _curSeg = null;
     _streamEl = null; _streamBody = null; _streamAgent = null;
     document.getElementById("session-meta").textContent =
       `session=${d.session_id}  model=${d.model}  scene=${d.scene}`;
@@ -306,16 +350,16 @@ function render(d) {
   }
 
   if (ev === "phase_start" || ev === "tool_call") {
-    return; // 不显示阶段分隔和工具调用
+    return;
   }
 
-  // 流式发言：开始 → 创建空气泡
+  // 发言开始：为这个气泡创建新的 segment，加入打字机队列
   if (ev === "agent_speak_start") {
     const ag  = (d.agent||"").toLowerCase();
     const cls = agentClass(ag);
-    // 如果同一 agent 已有未完成的气泡（重试），替换内容
-    if (_streamAgent === ag && _streamEl) {
-      _streamBody.textContent = "";
+    if (_streamAgent === ag && _streamEl && _curSeg) {
+      // 同一 agent 重试：清空当前 segment，重置气泡内容
+      _curSeg.buf = ''; _streamBody.textContent = '';
       return;
     }
     const bubble = mk("ev-speak " + cls,
@@ -323,32 +367,40 @@ function render(d) {
     _streamEl    = bubble;
     _streamBody  = bubble.querySelector(".body");
     _streamAgent = ag;
+    _curSeg      = {el: _streamBody, buf: ''};
+    _typeSegs.push(_curSeg);
     app_(bubble);
     return;
   }
 
-  // 流式发言：文本片段 → 追加到气泡
+  // 文本片段：追加到当前 segment 缓冲，触发打字机
   if (ev === "agent_speak_chunk") {
-    if (_streamBody) {
-      _streamBody.textContent += (d.text || "");
-      sd();
+    if (_curSeg) {
+      _curSeg.buf += (d.text || "");
+      _curSeg.el.classList.add("typing");
+      _typeStartRAF();
     }
     return;
   }
 
-  // 发言完成：replay 模式（无 chunk 事件）显示完整文本；live 模式重置流状态
+  // 发言完成：仅清除"谁在说话"状态，segment 继续在队列中被打字机消化
   if (ev === "agent_speak") {
-    const ag  = (d.agent||"").toLowerCase();
+    const ag = (d.agent||"").toLowerCase();
     if (_streamAgent === ag && _streamEl) {
-      // 已通过 chunk 实时显示，只需清除流状态
-      _streamEl = null; _streamBody = null; _streamAgent = null;
+      _streamEl = null; _streamBody = null; _streamAgent = null; _curSeg = null;
       return;
     }
-    // Replay 模式：直接渲染完整回复
+    // 无前置 chunk 的回放：整段文字直接入队
     const cls = agentClass(ag);
-    app_(mk("ev-speak " + cls,
-      `<div class="tag">${agentName(ag)}</div>` +
-      `<div class="body">${esc(d.response||"")}</div>`));
+    const bubble = mk("ev-speak " + cls,
+      `<div class="tag">${agentName(ag)}</div><div class="body"></div>`);
+    const bodyEl = bubble.querySelector(".body");
+    _curSeg = {el: bodyEl, buf: d.response || ''};
+    _typeSegs.push(_curSeg);
+    bodyEl.classList.add("typing");
+    app_(bubble);
+    if (_curSeg.buf) _typeStartRAF();
+    _streamEl = null; _streamBody = null; _streamAgent = null; _curSeg = null;
     return;
   }
 
@@ -383,6 +435,8 @@ function render(d) {
   }
 
   if (ev === "session_end") {
+    _typeFlushAll(); _curSeg = null;
+    _streamEl = null; _streamBody = null; _streamAgent = null;
     const ok = d.outcome === "success";
     badge.textContent = ok ? "完成" : d.outcome;
     badge.className   = ok ? "done" : "error";

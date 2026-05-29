@@ -7,6 +7,7 @@
   python run.py --mock --scene sr          # 仅 Co-SR 场景
   python run.py --mock --scene edca        # 仅 Co-EDCA 场景
   python run.py qwen3:14b --mock           # 指定模型 + mock 数据
+  python run.py qwen:80b --mock            # 使用 PPIO qwen3-next-80b（需在 .env 填写 PPIO_API_KEY）
   python run.py --server http://192.168.1.100:5001  # 指定服务器地址
 
   # 协商完成后主动推送决策到香蕉派执行服务（静态 IP）
@@ -259,7 +260,7 @@ def _parse_executor_endpoints(raw: str) -> dict[str, str]:
 def main():
     parser = argparse.ArgumentParser(description="多 AP 协商系统")
     parser.add_argument("model", nargs="?", default="qwen3:14b",
-                        help="Ollama 模型名（默认 qwen3:14b）")
+                        help="模型名：Ollama 本地模型（默认 qwen3:14b）或 qwen:80b（PPIO 云端）")
     parser.add_argument("--mock", action="store_true",
                         help="使用 mock 数据，无需启动状态服务器")
     parser.add_argument("--scene", choices=["sr", "edca", "joint"], default="joint",
@@ -334,11 +335,7 @@ def main():
         import webbrowser as _wb
         from dashboard.app import wait_for_client
         _wb.open(f"http://localhost:{args.dashboard_port}/?live=1&log={logger.log_path}")
-        print("[Dashboard] 等待浏览器连接实时流（最多 20s）...")
-        if wait_for_client(timeout=20):
-            print("[Dashboard] 浏览器已连接，开始协商。")
-        else:
-            print("[Dashboard] 超时，直接开始协商。")
+        wait_for_client(timeout=1)
 
     agents_dir = Path(__file__).parent / "agents"
     observation_getter = None if args.mock else lambda: get_all_states(args.server)
