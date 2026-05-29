@@ -1,18 +1,5 @@
 # 香蕉派接入手册
 
-## 架构概览
-
-```
-DGX Spark :5001 (state_server/server.py)
-  ↑ POST /state   香蕉派每 10s 上报指标
-  ↓ POST /apply   协商完成后推送决策到各 AP
-
-香蕉派 :5002 (state_server/executor.py)
-  ← POST /apply   接收决策，执行 iw / hostapd_cli
-```
-
-每台香蕉派需要运行两个进程：**reporter**（上报）和 **executor**（执行）。
-
 ---
 
 ## 一、状态上报接口
@@ -110,7 +97,7 @@ DGX 协商完成后主动调用，香蕉派收到后立即执行参数变更。
 
 ---
 
-## 三、香蕉派操作指南
+## 三、香蕉派操作部分
 
 ### 3.1 启动两个进程
 

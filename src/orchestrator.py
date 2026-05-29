@@ -475,13 +475,19 @@ class NegotiationOrchestrator:
         role: str,
         tools: list | None = None,
         speaker: str | None = None,
+        proposal: dict | None = None,
     ) -> str:
-        """调用 agent.speak_stream()，流式打印、处理工具调用、记录日志。"""
+        """调用 agent.speak_stream()，流式打印、处理工具调用、记录日志。
+
+        proposal：正在被验算的提案。投票阶段传入，验算工具据此校验真实提案，
+        无需模型在 tool_args 中重新序列化提案 JSON。
+        """
         executor = (
             make_executor(
                 self._current_ap_states,
                 state_getter=self.observation_state_getter,
                 state_setter=self._set_current_ap_states,
+                proposal=proposal,
             )
             if tools else None
         )
@@ -757,7 +763,9 @@ class NegotiationOrchestrator:
             f"【第二步】验算 {proposer_id.upper()} 的最新提案（提案#{proposal_num}）"
             f"中针对你自己（{voter_id.upper()}）的参数调整建议。\n\n"
             f"最新提案参数：\n{proposal_json}\n\n"
-            "请先调用 get_latest_ap_states 获取最新状态，再调用验算工具，"
+            "请先调用 get_latest_ap_states 获取最新状态，再调用验算工具。"
+            "验算工具会自动校验上方这份当前提案，你无需在工具参数中重新填写提案 JSON，"
+            "直接以空参数调用即可。\n"
             "然后用自然语言给出你的判断。"
             f"重点参考：{verify_hint}。\n\n"
             "不要套用固定模板，如果结果很简单可以简短直接。\n\n"
@@ -787,6 +795,7 @@ class NegotiationOrchestrator:
             role="voter",
             tools=_tools_for_vote(strategy),
             speaker=voter_id.upper(),
+            proposal=proposal,
         )
 
         vote = self._vote_result(content)

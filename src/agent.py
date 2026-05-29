@@ -4,6 +4,14 @@ import requests
 from pathlib import Path
 from typing import Callable, Iterator
 
+
+def _is_valid_json(s: str) -> bool:
+    try:
+        json.loads(s)
+        return True
+    except (json.JSONDecodeError, ValueError):
+        return False
+
 # 尝试加载 .env（文件不存在或未安装 dotenv 时静默跳过）
 try:
     from dotenv import load_dotenv
@@ -119,6 +127,17 @@ class APAgent:
                 err_body = resp.json()
             except Exception:
                 err_body = resp.text
+            print("[PPIO DEBUG] 失败请求 messages 结构:", flush=True)
+            for i, m in enumerate(messages):
+                tc_info = ""
+                if m.get("tool_calls"):
+                    tc_info = " tool_calls=" + str([
+                        {"name": tc.get("function", {}).get("name"),
+                         "args_len": len(tc.get("function", {}).get("arguments", "")),
+                         "args_valid": _is_valid_json(tc.get("function", {}).get("arguments", "{}"))}
+                        for tc in m["tool_calls"]
+                    ])
+                print(f"  [{i}] role={m['role']} content={repr(str(m.get('content',''))[:60])}{tc_info}", flush=True)
             raise RuntimeError(
                 f"PPIO {resp.status_code}: {err_body}"
             )
@@ -328,9 +347,26 @@ class APAgent:
                     yield content
                 return
 
+            # 存入历史前确保每个 tool_call 的 arguments 是合法 JSON 字符串，
+            # 防止模型生成损坏的 JSON 导致 PPIO 在后续请求中拒绝历史消息。
+            sanitized_calls = []
+            for tc in tool_calls:
+                fn   = tc.get("function", {})
+                args = fn.get("arguments", "{}")
+                if not isinstance(args, str):
+                    args = json.dumps(args)
+                try:
+                    json.loads(args)
+                except (json.JSONDecodeError, ValueError):
+                    args = "{}"
+                if args != fn.get("arguments"):
+                    tc = {**tc, "function": {**fn, "arguments": args}}
+                sanitized_calls.append(tc)
+            tool_calls = sanitized_calls
+
             messages.append({
                 "role":       "assistant",
-                "content":    msg.get("content") or "",
+                "content":    msg.get("content") or None,
                 "tool_calls": tool_calls,
             })
 

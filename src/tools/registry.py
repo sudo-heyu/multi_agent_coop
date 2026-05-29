@@ -17,6 +17,31 @@ from collections.abc import Callable
 from . import sr as _sr
 from . import edca as _edca
 
+_EDCA_KEYS = ("CWmin", "CWmax", "AIFSN")
+
+
+def _edca_from_proposal(proposal: dict | None) -> dict:
+    """从协商提案中提取各 AP 的 EDCA 字段：{ap_id: {CWmin, CWmax, AIFSN}}。"""
+    if not proposal:
+        return {}
+    out = {}
+    for ap_id, params in proposal.items():
+        if isinstance(params, dict) and any(k in params for k in _EDCA_KEYS):
+            out[ap_id] = {k: params[k] for k in _EDCA_KEYS if k in params}
+    return out
+
+
+def _powers_from_proposal(proposal: dict | None) -> dict:
+    """从协商提案中提取各 AP 的发射功率：{ap_id: tx_power_dbm}。"""
+    if not proposal:
+        return {}
+    return {
+        ap_id: params["tx_power_dbm"]
+        for ap_id, params in proposal.items()
+        if isinstance(params, dict) and "tx_power_dbm" in params
+    }
+
+
 # ------------------------------------------------------------------
 # 工具 JSON Schema 定义
 # ------------------------------------------------------------------
@@ -80,6 +105,7 @@ TOOL_DEFINITIONS: list[dict] = [
                 "评估一个候选 Co-SR TX Power 方案是否满足 CCA / SINR / STA RSSI 三重约束，"
                 "并返回总降功率、最大单 AP 降功率、STA RSSI 余量等代价指标。"
                 "提案方生成候选后必须调用；投票方验算提案时也调用。"
+                "【投票阶段】无需传入 proposed_powers，省略即自动验算当前被投票的提案。"
             ),
             "parameters": {
                 "type": "object",
@@ -88,12 +114,13 @@ TOOL_DEFINITIONS: list[dict] = [
                         "type": "object",
                         "description": (
                             "候选功率（dBm），键名为小写 ap_id。"
-                            '例如：{"ap1": 7.0, "ap2": 7.0, "ap3": 8.0}'
+                            '例如：{"ap1": 7.0, "ap2": 7.0, "ap3": 8.0}。'
+                            "投票阶段验算当前提案时可省略此参数。"
                         ),
                         "additionalProperties": {"type": "number"},
                     }
                 },
-                "required": ["proposed_powers"],
+                "required": [],
             },
         },
     },
@@ -129,7 +156,7 @@ TOOL_DEFINITIONS: list[dict] = [
                         ),
                     },
                 },
-                "required": ["candidates"],
+                "required": [],
             },
         },
     },
@@ -141,6 +168,7 @@ TOOL_DEFINITIONS: list[dict] = [
                 "验证提案中各 AP 的 EDCA 参数是否在合法范围内："
                 "CWmin ∈ [3, 1023]、CWmax ∈ [7, 1023]、AIFSN ∈ [1, 15]、CWmax > CWmin。"
                 "在投票验算阶段或提案修订后的自检中调用此工具。"
+                "【投票阶段】无需传入 proposed_edca，省略即自动验算当前被投票的提案。"
             ),
             "parameters": {
                 "type": "object",
@@ -149,7 +177,8 @@ TOOL_DEFINITIONS: list[dict] = [
                         "type": "object",
                         "description": (
                             "各 AP 的 EDCA 参数，键名为小写 ap_id。"
-                            '例如：{"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3}, ...}'
+                            '例如：{"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3}, ...}。'
+                            "投票阶段验算当前提案时可省略此参数。"
                         ),
                         "additionalProperties": {
                             "type": "object",
@@ -161,7 +190,7 @@ TOOL_DEFINITIONS: list[dict] = [
                         },
                     }
                 },
-                "required": ["proposed_edca"],
+                "required": [],
             },
         },
     },
@@ -179,9 +208,14 @@ def make_executor(
     ap_states: dict,
     state_getter: Callable[[], dict] | None = None,
     state_setter: Callable[[dict], None] | None = None,
+    proposal: dict | None = None,
 ):
     """
     返回绑定了当前 ap_states 的工具执行函数。
+
+    proposal：本轮协商中正在被验算的提案（顶层键为 ap1/ap2/ap3）。
+        投票阶段由 orchestrator 注入；验算工具据此校验真实提案，
+        无需模型在 tool_args 中重新序列化提案 JSON（模型对此不可靠）。
 
     返回的 executor 签名：
         executor(tool_name: str, tool_args: dict) -> tuple[dict, float]
@@ -229,7 +263,7 @@ def make_executor(
             result = _sr.compute_feasible_ranges(current_ap_states)
 
         elif tool_name == "evaluate_sr_candidate":
-            proposed = tool_args.get("proposed_powers", {})
+            proposed = tool_args.get("proposed_powers") or _powers_from_proposal(proposal)
             proposed = {k.lower(): float(v) for k, v in proposed.items()}
             result = _sr.evaluate_candidate(current_ap_states, proposed)
 
@@ -239,13 +273,13 @@ def make_executor(
             result = _sr.rank_candidates(current_ap_states, candidates, objective)
 
         elif tool_name == "validate_sr_proposal":
-            proposed = tool_args.get("proposed_powers", {})
+            proposed = tool_args.get("proposed_powers") or _powers_from_proposal(proposal)
             # 规范化：AP1 → ap1
             proposed = {k.lower(): float(v) for k, v in proposed.items()}
             result = _sr.evaluate_candidate(current_ap_states, proposed)
 
         elif tool_name == "validate_edca_proposal":
-            proposed_edca = tool_args.get("proposed_edca", {})
+            proposed_edca = tool_args.get("proposed_edca") or _edca_from_proposal(proposal)
             result = {}
             for ap_id, params in proposed_edca.items():
                 valid, errors = _edca.validate(params)
