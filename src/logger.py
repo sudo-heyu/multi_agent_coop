@@ -234,10 +234,10 @@ class SessionLogger:
         self,
         voter: str,
         round_num: int,
-        agreed: bool,
+        agreed: bool | str,
         response: str,
     ) -> None:
-        """单个 AP 投票结果。"""
+        """单个 AP 投票结果。agreed 可为 True/'agree'、False/'reject'、'abstain'。"""
         self._write(
             "vote",
             voter=voter,
@@ -245,7 +245,7 @@ class SessionLogger:
             agreed=agreed,
             response=response,
         )
-        mark = "同意" if agreed else "不同意"
+        mark = {"agree": "同意", True: "同意", "abstain": "弃权", "reject": "不同意", False: "不同意"}.get(agreed, str(agreed))
         self._console("vote", f"{voter.upper()} 第{round_num}轮 → {mark}")
 
     def round_result(

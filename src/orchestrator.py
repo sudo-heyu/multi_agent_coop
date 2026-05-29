@@ -428,13 +428,20 @@ class NegotiationOrchestrator:
         except Exception as exc:
             return {}, f"观测状态获取失败: {exc}", False
 
-    def _agreed(self, content: str) -> bool:
+    def _vote_result(self, content: str) -> str:
+        """Returns 'agree', 'reject', or 'abstain'."""
         vote = _extract_json(content)
-        if isinstance(vote, dict) and isinstance(vote.get("agreed"), bool):
-            return vote["agreed"]
+        if isinstance(vote, dict):
+            agreed = vote.get("agreed")
+            if agreed == "abstain":
+                return "abstain"
+            if isinstance(agreed, bool):
+                return "agree" if agreed else "reject"
 
+        if "弃权" in content:
+            return "abstain"
         without_negative = content.replace("不同意", "").replace("反对", "")
-        return "同意" in without_negative
+        return "agree" if "同意" in without_negative else "reject"
 
     def _is_negotiation_needed(self, ap_state: dict) -> bool:
         return self._determine_strategy(ap_state) != "noop"
@@ -714,8 +721,8 @@ class NegotiationOrchestrator:
         strategy: str,
         proposal_num: int,
         proposal: dict,
-    ) -> tuple[bool, str]:
-        """单个 AP 对当前提案投票。若反对，要求在同一回复中给出反提案 JSON。"""
+    ) -> tuple[str, str]:
+        """单个 AP 对当前提案投票。返回 ('agree'|'reject'|'abstain', content)。"""
         if self.logger:
             self.logger.phase_start(
                 4, f"{voter_id.upper()} 投票（提案#{proposal_num}，提案方 {proposer_id.upper()}）"
@@ -727,6 +734,22 @@ class NegotiationOrchestrator:
             "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
         }.get(strategy, "关注工具返回的 valid/errors 以及参数对你的影响")
 
+        # 循环风险提示：提案数越多越要告知 agent 有死锁风险
+        if proposal_num >= 4:
+            stall_hint = (
+                f"\n\n【死锁警告：当前已是第 {proposal_num} 个提案，协商很可能已陷入循环】\n"
+                "请仔细检查：各方此前的提案是否已经在重复相似的参数？\n"
+                "如果是，继续反对只会让协商永远无法终止。此时你应当选择弃权，\n"
+                "让当前这个「最接近可行区间的折中方案」通过，而不是提出一个同样无法满足所有约束的新方案。"
+            )
+        elif proposal_num >= 2:
+            stall_hint = (
+                f"\n\n【注意：当前已是第 {proposal_num} 个提案】\n"
+                "如果协商已经出现重复，请考虑弃权，避免死锁。"
+            )
+        else:
+            stall_hint = ""
+
         proposal_json = _json(proposal)
         instruction = (
             "【第一步】请完整阅读上方的对话记录，梳理此前所有提案及每次拒绝的具体原因。\n\n"
@@ -737,19 +760,24 @@ class NegotiationOrchestrator:
             "然后用自然语言给出你的判断。"
             f"重点参考：{verify_hint}。\n\n"
             "不要套用固定模板，如果结果很简单可以简短直接。\n\n"
-            "【同意时】回复末尾附：\n"
+            "你有三种表态选项：\n\n"
+            "【同意】提案满足你的约束，或你认为它是可接受的折中。回复末尾附：\n"
             "```json\n{\"agreed\": true, \"reason\": \"...\"}\n```\n\n"
-            "【反对时】请在同一条回复中直接给出你的完整反提案。反提案须满足：\n"
+            "【弃权】提案未能完全满足约束，但你也找不到更好的方案，或协商已出现重复迹象。"
+            "弃权效果等同于同意，不需要提反提案。回复末尾附：\n"
+            "```json\n{\"agreed\": \"abstain\", \"reason\": \"说明为何弃权\"}\n```\n\n"
+            "【反对】你有具体的替代方案能改善当前提案。请在同一条回复中直接给出完整反提案。"
+            "反提案须满足：\n"
             "  1. 明确说明你对当前提案的具体反对理由（卡在哪个指标或约束）\n"
-            "  2. 综合对话记录中其他 AP 之前提出的所有顾虑，你的方案必须兼顾所有人的约束，"
-            "而不是只满足你自己的需求\n"
-            "  3. 若此前已有多次协商失败，请给出比之前所有提案更保守的参数，向各方约束的交集靠拢\n"
-            "  4. 如果你认为当前协商路径本身不合适，可以在反提案中切换路径：\n"
-            "     切换到 Co-SR → 提案 JSON 中使用 tx_power_dbm 字段\n"
-            "     切换到 Co-EDCA → 提案 JSON 中使用 CWmin/CWmax/AIFSN 字段\n\n"
+            "  2. 综合对话记录中其他 AP 之前提出的所有顾虑，方案必须兼顾所有人的约束\n"
+            "  3. 若此前已有多次协商失败，给出比之前所有提案更保守的参数，向各方约束交集靠拢\n"
+            "  4. 如果认为当前路径不合适，可以切换：\n"
+            "     Co-SR → 提案 JSON 中使用 tx_power_dbm 字段\n"
+            "     Co-EDCA → 提案 JSON 中使用 CWmin/CWmax/AIFSN 字段\n\n"
             "然后附两个 ```json 块：\n"
             "第一块：```json\n{\"agreed\": false, \"reason\": \"...\"}\n```\n"
             "第二块：完整参数反提案，JSON 顶层键必须是 ap1/ap2/ap3。"
+            f"{stall_hint}"
         )
         content = self._speak_and_log(
             voter_id,
@@ -760,10 +788,10 @@ class NegotiationOrchestrator:
             speaker=voter_id.upper(),
         )
 
-        agreed = self._agreed(content)
+        vote = self._vote_result(content)
         if self.logger:
-            self.logger.vote(voter_id, proposal_num, agreed, content)
-        return agreed, content
+            self.logger.vote(voter_id, proposal_num, vote, content)
+        return vote, content
 
     def _phase_counter_propose(
         self,
@@ -886,11 +914,11 @@ class NegotiationOrchestrator:
                 if voter_id == current_proposer:
                     continue  # 提案方跳过自己
 
-                agreed, content = self._phase_vote_single(
+                vote_result, content = self._phase_vote_single(
                     voter_id, current_proposer, strategy, proposal_num, proposal
                 )
 
-                if agreed:
+                if vote_result in ("agree", "abstain"):
                     agree_set.add(voter_id)
                     non_proposers = {ap for ap in AP_IDS if ap != current_proposer}
                     if agree_set >= non_proposers:
@@ -926,7 +954,7 @@ class NegotiationOrchestrator:
 
                         # 验证未通过：退出内层循环，外层重新从 ap1 提案
                         break
-                else:
+                else:  # reject
                     # 反对者立即成为新提案方
                     new_proposal = self._phase_counter_propose(
                         voter_id, content, proposal_num + 1
