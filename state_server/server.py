@@ -6,8 +6,10 @@ AP agent 通过 GET /state 获取所有 AP 的最新状态。
 """
 import threading
 import argparse
+import json
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
@@ -24,6 +26,9 @@ _lock = threading.Lock()
 
 # 历史缓冲：{ap_id: deque([{"t":..., 指标字段与 MAC 参数字段...}])}
 _history: dict = {ap: deque(maxlen=HISTORY_MAXLEN) for ap in ["ap1", "ap2", "ap3"]}
+_trace_fh = None
+_trace_path: Path | None = None
+_trace_session_id: str | None = None
 
 REQUIRED_FIELDS = {
     "ap_id", "timestamp",
@@ -38,9 +43,25 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _utc_stamp() -> str:
+    return _now().strftime("%Y%m%d_%H%M%S")
+
+
 def _age_and_stale(ts: datetime) -> tuple[float, bool]:
     age = (_now() - ts).total_seconds()
     return round(age, 2), age > STALE_THRESHOLD_SECONDS
+
+
+def _write_trace(row: dict) -> None:
+    if _trace_fh is None:
+        return
+    payload = {
+        "recorded_at": _now().isoformat(),
+        "session_id": _trace_session_id,
+        **row,
+    }
+    _trace_fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    _trace_fh.flush()
 
 
 _INDEX_HTML = """
@@ -360,8 +381,56 @@ def post_state():
             "cwmax":           data.get("cwmax"),
             "aifsn":           data.get("aifsn"),
         })
+        _write_trace({
+            "event": "state_post",
+            "ap_id": ap_id,
+            "timestamp": ts.isoformat(),
+            "parameters": {
+                "tx_power_dbm": data.get("tx_power_dbm"),
+                "cwmin": data.get("cwmin"),
+                "cwmax": data.get("cwmax"),
+                "aifsn": data.get("aifsn"),
+            },
+            "data": data,
+        })
 
     return jsonify({"ok": True, "ap_id": ap_id}), 200
+
+
+@app.route("/trace/start", methods=["POST"])
+def start_trace():
+    body = request.get_json(force=True, silent=True) or {}
+    session_id = str(body.get("session_id") or _utc_stamp())
+    trace_dir = Path(body.get("dir") or "logs")
+    trace_dir.mkdir(exist_ok=True)
+    path = trace_dir / f"telemetry_trace_{_utc_stamp()}_{session_id}.jsonl"
+
+    global _trace_fh, _trace_path, _trace_session_id
+    with _lock:
+        if _trace_fh is not None:
+            _write_trace({"event": "trace_stop", "reason": "replaced"})
+            _trace_fh.close()
+        _trace_session_id = session_id
+        _trace_path = path
+        _trace_fh = open(path, "w", encoding="utf-8")
+        _write_trace({"event": "trace_start"})
+
+    return jsonify({"ok": True, "path": str(path), "session_id": session_id}), 200
+
+
+@app.route("/trace/stop", methods=["POST"])
+def stop_trace():
+    global _trace_fh, _trace_path, _trace_session_id
+    with _lock:
+        path = str(_trace_path) if _trace_path is not None else None
+        if _trace_fh is not None:
+            _write_trace({"event": "trace_stop"})
+            _trace_fh.close()
+        _trace_fh = None
+        _trace_path = None
+        _trace_session_id = None
+
+    return jsonify({"ok": True, "path": path}), 200
 
 
 # ------------------------------------------------------------------

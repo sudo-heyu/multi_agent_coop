@@ -357,6 +357,9 @@ class NegotiationOrchestrator:
         self.observation_wait_seconds = observation_wait_seconds
         # {"ap1": "http://192.168.1.11:5002", ...}；None 表示不推送
         self.executor_endpoints: dict[str, str] | None = executor_endpoints
+        # 协商成功后的最终决策与策略（供 mock 喂数器注入曲线，未成功时为 None）
+        self.last_decision: dict | None = None
+        self.last_strategy: str | None = None
 
     # ──────────────────────────────────────────────────────────────────────
     # 决策推送
@@ -410,6 +413,12 @@ class NegotiationOrchestrator:
         self, fallback_state: dict
     ) -> tuple[dict, str | None, bool]:
         if self.observation_state_getter is None:
+            if self.logger:
+                self.logger.record_state_snapshot(
+                    "final_fallback",
+                    fallback_state,
+                    source="validator_fallback",
+                )
             return fallback_state, None, False
 
         wait_seconds = max(0.0, self.observation_wait_seconds)
@@ -418,7 +427,14 @@ class NegotiationOrchestrator:
             time.sleep(wait_seconds)
 
         try:
-            return self.observation_state_getter(), None, True
+            observed = self.observation_state_getter()
+            if self.logger:
+                self.logger.record_state_snapshot(
+                    "final_observed",
+                    observed,
+                    source="validator_observation",
+                )
+            return observed, None, True
         except Exception as exc:
             return {}, f"观测状态获取失败: {exc}", False
 
@@ -605,6 +621,14 @@ class NegotiationOrchestrator:
                     tc["output"],
                     tc["duration_ms"],
                 )
+                if tc["tool"] == "get_latest_ap_states":
+                    self.logger.record_state_snapshot(
+                        "latest_from_tool",
+                        tc["output"].get("ap_states"),
+                        source=tc["output"].get("source", "tool"),
+                        phase=phase,
+                        role=role,
+                    )
 
         return content
 
@@ -860,6 +884,10 @@ class NegotiationOrchestrator:
         decision = _extract_json(content)
         if self.logger:
             self.logger.final_decision(decision, content)
+            self.logger.record_decision_parameters(
+                decision,
+                strategy=_infer_strategy_from_proposal(proposal),
+            )
         return decision
 
     # ──────────────────────────────────────────────────────────────────────
@@ -959,6 +987,8 @@ class NegotiationOrchestrator:
 
                         if validation["approved"]:
                             print("\n协商成功完成。")
+                            self.last_decision = decision
+                            self.last_strategy = strategy
                             self._finish_session("success", proposal_num, started_at)
                             session_id = self.logger.session_id if self.logger else ""
                             self._push_decision(decision, strategy, session_id)

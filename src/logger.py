@@ -4,6 +4,7 @@
 每次 orchestrator.run() 对应一个 JSONL 文件，按时间序列记录所有事件。
 
 文件路径：logs/session_<YYYYMMDD_HHMMSS>_<session_id>.jsonl
+参数时序：logs/state_trace_<YYYYMMDD_HHMMSS>_<session_id>.jsonl
 
 ━━━ 事件类型一览 ━━━
   session_start     运行开始（模型、场景、AP 初始状态）
@@ -24,6 +25,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .console_style import status_label
 
@@ -49,6 +51,34 @@ def _now() -> str:
 
 def _ts_ms() -> float:
     return datetime.now(timezone.utc).timestamp() * 1000
+
+
+def _extract_ap_parameters(ap_state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    fields = (
+        "tx_power_dbm",
+        "cwmin",
+        "cwmax",
+        "aifsn",
+        "CWmin",
+        "CWmax",
+        "AIFSN",
+        "channel_busy_ratio",
+        "tx_retries_ratio",
+        "throughput_mbps",
+        "latency_ms",
+        "packet_loss_pct",
+        "sta_rssi_dbm",
+        "noise_floor_dbm",
+        "neighbor_rssi_dbm",
+    )
+    return {
+        ap_id: {
+            field: state.get(field)
+            for field in fields
+            if isinstance(state, dict) and field in state
+        }
+        for ap_id, state in ap_state.items()
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,7 +117,9 @@ class SessionLogger:
         LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.log_path: Path = LOG_DIR / f"session_{ts}_{self.session_id}.jsonl"
+        self.state_trace_path: Path = LOG_DIR / f"state_trace_{ts}_{self.session_id}.jsonl"
         self._fh = open(self.log_path, "w", encoding="utf-8")
+        self._state_fh = open(self.state_trace_path, "w", encoding="utf-8")
 
     # ──────────────────────────────────────────────────────────────────────
     # 内部工具
@@ -119,6 +151,16 @@ class SessionLogger:
         self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._fh.flush()  # sink 错误不中断会话
 
+    def _write_state_trace(self, event: str, **kw) -> None:
+        row = {
+            "ts":         _now(),
+            "session_id": self.session_id,
+            "event":      event,
+            **kw,
+        }
+        self._state_fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._state_fh.flush()
+
     def _console(self, event: str, msg: str) -> None:
         if not self.verbose:
             return
@@ -132,9 +174,65 @@ class SessionLogger:
     def session_start(self, model: str, scene: str, ap_state: dict) -> None:
         """运行开始，记录完整初始状态（dashboard 用于渲染对比表）。"""
         self._write("session_start", model=model, scene=scene, ap_state=ap_state)
+        self.record_state_snapshot(
+            "initial",
+            ap_state,
+            source="session_start",
+            model=model,
+            scene=scene,
+        )
         self._console("session_start",
                       f"id={self.session_id} model={model} scene={scene} "
-                      f"log={self.log_path}")
+                      f"log={self.log_path} state_trace={self.state_trace_path}")
+
+    def record_state_snapshot(
+        self,
+        label: str,
+        ap_state: dict[str, Any] | None,
+        *,
+        source: str,
+        phase: int | None = None,
+        role: str | None = None,
+        model: str | None = None,
+        scene: str | None = None,
+    ) -> None:
+        """
+        记录一次 AP 完整状态快照到独立 JSONL 参数时序文件。
+
+        state_trace 文件用于还原一次协商从开始到结束的参数和业务指标变化；
+        每行都保留完整 ap_state，同时额外抽取关键参数便于后处理。
+        """
+        if ap_state is None:
+            return
+        self._write_state_trace(
+            "state_snapshot",
+            label=label,
+            source=source,
+            phase=phase,
+            role=role,
+            model=model,
+            scene=scene,
+            parameters=_extract_ap_parameters(ap_state),
+            ap_state=ap_state,
+        )
+
+    def record_decision_parameters(
+        self,
+        decision: dict[str, Any] | None,
+        *,
+        strategy: str | None = None,
+        source: str = "final_decision",
+    ) -> None:
+        """记录最终下发目标参数；它代表决策目标，不代表已经观测生效。"""
+        if decision is None:
+            return
+        self._write_state_trace(
+            "decision_parameters",
+            source=source,
+            strategy=strategy,
+            parameters=_extract_ap_parameters(decision),
+            decision=decision,
+        )
 
     def phase_start(self, phase: int, label: str) -> None:
         """协商阶段开始。phase: 1=广播, 2=提案, 3=投票, 4=最终决策"""
@@ -315,18 +413,32 @@ class SessionLogger:
                 if negotiation_duration_s is not None else None
             ),
         )
+        self._write_state_trace(
+            "trace_end",
+            outcome=outcome,
+            total_rounds=total_rounds,
+            duration_s=duration_s,
+            negotiation_duration_s=(
+                round(negotiation_duration_s, 2)
+                if negotiation_duration_s is not None else None
+            ),
+        )
         duration_label = (
             f"negotiation_duration={negotiation_duration_s:.2f}s "
             if negotiation_duration_s is not None else ""
         )
         self._console("session_end",
                       f"outcome={outcome} rounds={total_rounds} "
-                      f"{duration_label}duration={duration_s}s log={self.log_path}")
+                      f"{duration_label}duration={duration_s}s log={self.log_path} "
+                      f"state_trace={self.state_trace_path}")
         self._fh.close()
+        self._state_fh.close()
 
     def close(self) -> None:
         if not self._fh.closed:
             self._fh.close()
+        if not self._state_fh.closed:
+            self._state_fh.close()
 
     # ──────────────────────────────────────────────────────────────────────
     # 工具方法（供 orchestrator 使用）

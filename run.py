@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.logger import SessionLogger
 from src.orchestrator import NegotiationOrchestrator
 from src.state_client import get_all_states, StateStaleError
+from state_server.mock_feeder import MockTelemetryFeeder
 
 DEFAULT_AP_CONFIG = Path(__file__).parent / "ap_endpoints.json"
 
@@ -53,6 +54,47 @@ def start_dashboard(port: int = 5050, state_server: str = "http://localhost:5001
         return None
 
 
+def start_academic_plot(
+    state_server: str = "http://localhost:5001",
+    window_seconds: float = 25.0,
+    interval_seconds: float = 1.0,
+) -> subprocess.Popen | None:
+    """启动独立 Matplotlib 学术曲线窗口。"""
+    plot_script = Path(__file__).parent / "state_server" / "academic_plot.py"
+    if not plot_script.exists():
+        print(f"[Academic Plot] 启动失败: 未找到 {plot_script}")
+        return None
+
+    cmd = [
+        sys.executable,
+        str(plot_script),
+        "--server", state_server,
+        "--window", str(window_seconds),
+        "--interval", str(interval_seconds),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.8)
+        if proc.poll() is not None:
+            stdout, stderr = proc.communicate(timeout=1)
+            detail = (stderr or stdout or "").strip()
+            msg = f"[Academic Plot] 未能保持运行（退出码 {proc.returncode}）。"
+            if detail:
+                msg += f" 原因：{detail}"
+            print(msg)
+            return None
+        print(f"[Academic Plot] 已弹出 Matplotlib figure 曲线窗口（固定窗口 {window_seconds:g}s）。")
+        return proc
+    except Exception as exc:
+        print(f"[Academic Plot] 启动失败: {exc}")
+        return None
+
+
 def _server_alive(server_url: str) -> bool:
     try:
         r = requests.get(f"{server_url}/health", timeout=2)
@@ -64,6 +106,37 @@ def _server_alive(server_url: str) -> bool:
 def _is_local_server(server_url: str) -> bool:
     parsed = urlparse(server_url)
     return parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def start_mock_server(server_url: str) -> tuple[bool, subprocess.Popen | None]:
+    """
+    mock 模式下确保本地 state server 以 --allow-mock 运行，供喂数器写入。
+
+    返回 (是否就绪, 我们启动的进程或 None)。复用已在线的服务器时进程为 None。
+    """
+    if not _is_local_server(server_url):
+        return False, None
+    if _server_alive(server_url):
+        # 复用已在线的服务器（可能未带 --allow-mock，喂数会被拒，曲线为空）
+        print("[Mock] 检测到 5001 已有服务器，直接复用。"
+              "若曲线仍无数据，请确认它是以 --allow-mock 启动的。")
+        return True, None
+
+    server_script = Path(__file__).parent / "state_server" / "server.py"
+    if not server_script.exists():
+        return False, None
+
+    print("[Mock] 启动 state server（--allow-mock）以驱动曲线 ...")
+    proc = subprocess.Popen(
+        [sys.executable, str(server_script), "--allow-mock"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(10):
+        time.sleep(1)
+        if _server_alive(server_url):
+            return True, proc
+    return False, proc
 
 
 def ensure_server(server_url: str) -> bool:
@@ -92,6 +165,30 @@ def ensure_server(server_url: str) -> bool:
             return True
 
     return False
+
+
+def start_telemetry_trace(server_url: str, session_id: str) -> str | None:
+    try:
+        r = requests.post(
+            f"{server_url.rstrip('/')}/trace/start",
+            json={"session_id": session_id},
+            timeout=3,
+        )
+        if r.status_code != 200:
+            return None
+        path = r.json().get("path")
+        if path:
+            print(f"[Trace] AP 上报参数 JSONL：{path}")
+        return path
+    except Exception:
+        return None
+
+
+def stop_telemetry_trace(server_url: str) -> None:
+    try:
+        requests.post(f"{server_url.rstrip('/')}/trace/stop", timeout=3)
+    except Exception:
+        pass
 
 # ------------------------------------------------------------------
 # Mock 数据：三个预设场景
@@ -280,6 +377,12 @@ def main():
                         help="不启动可视化 Dashboard（纯 CLI 模式）")
     parser.add_argument("--dashboard-port", type=int, default=5050,
                         help="Dashboard 监听端口（默认 5050）")
+    parser.add_argument("--no-academic-plot", action="store_true",
+                        help="不弹出 Matplotlib 学术曲线窗口")
+    parser.add_argument("--plot-window", type=float, default=25.0,
+                        help="Matplotlib 曲线固定滑动窗口秒数（默认 25）")
+    parser.add_argument("--plot-interval", type=float, default=1.0,
+                        help="Matplotlib 曲线刷新间隔秒数（默认 1）")
     args = parser.parse_args()
 
     # 解析执行服务端点
@@ -306,8 +409,21 @@ def main():
     print(f"数据来源：{'mock(' + args.scene + ')' if args.mock else args.server}")
 
     # 获取 AP 状态
+    feeder: MockTelemetryFeeder | None = None
+    mock_server_proc: subprocess.Popen | None = None
     if args.mock:
         ap_state = MOCK_SCENES[args.scene]
+        # mock 模式没有真实遥测源：启动本地 state server + 喂数器驱动曲线。
+        # 关闭可视化时无需喂数。
+        if not (args.no_academic_plot and args.no_dashboard):
+            ready, mock_server_proc = start_mock_server(args.server)
+            if ready:
+                feeder = MockTelemetryFeeder(
+                    args.server, ap_state, interval=args.plot_interval
+                )
+                feeder.start()
+            else:
+                print("[Mock] state server 未就绪，曲线将无数据（不影响协商）。")
     else:
         if not ensure_server(args.server):
             print(f"\n[错误] 无法连接或启动状态服务器 {args.server}。")
@@ -321,14 +437,23 @@ def main():
             print("提示：使用 --mock 参数可跳过服务器，直接以 mock 数据运行。")
             sys.exit(1)
 
-    # Dashboard 先于 logger 启动，拿到 push_event 回调再创建 logger
+    # 可视化先于 logger 启动，拿到 push_event 回调再创建 logger。
+    # Matplotlib 学术图窗默认弹出；--no-academic-plot 才关闭它。
     push_live = None
+    plot_proc = None
+    if not args.no_academic_plot:
+        plot_proc = start_academic_plot(
+            state_server=args.server,
+            window_seconds=args.plot_window,
+            interval_seconds=args.plot_interval,
+        )
     if not args.no_dashboard:
         push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
 
     scene = args.scene if args.mock else "live"
     logger = SessionLogger(verbose=False, event_sink=push_live)
     logger.session_start(model=args.model, scene=scene, ap_state=ap_state)
+    telemetry_trace_path = start_telemetry_trace(args.server, logger.session_id)
 
     # 浏览器打开实时流页面（?live=1）；等浏览器真正建立 SSE 连接后再开始协商
     if not args.no_dashboard and push_live is not None:
@@ -347,11 +472,40 @@ def main():
         observation_wait_seconds=args.observation_wait,
         executor_endpoints=executor_endpoints,
     )
+    def _cleanup_mock() -> None:
+        if feeder is not None:
+            feeder.stop()
+        if mock_server_proc is not None:
+            mock_server_proc.terminate()
+        if plot_proc is not None:
+            plot_proc.terminate()
+
     try:
         orchestrator.run(ap_state)
-    except Exception as e:
+    except Exception:
+        if telemetry_trace_path:
+            stop_telemetry_trace(args.server)
         logger.session_end(outcome="error", total_rounds=0)
+        _cleanup_mock()
         raise
+    finally:
+        if telemetry_trace_path:
+            stop_telemetry_trace(args.server)
+
+    # mock 模式收尾：把协商决策注入喂数器，让曲线体现协商后状态，
+    # 并在可视化开启时保持喂数，直到用户 Ctrl-C。
+    if feeder is not None:
+        if orchestrator.last_decision:
+            feeder.apply_decision(orchestrator.last_decision)
+            print("\n[Mock] 已将协商决策注入遥测，曲线将逐步体现协商后改善。")
+        if not (args.no_academic_plot and args.no_dashboard):
+            print("[Mock] 曲线持续展示中，按 Ctrl-C 退出并清理。")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\n[Mock] 收到退出信号，正在清理 ...")
+        _cleanup_mock()
 
 
 if __name__ == "__main__":

@@ -595,8 +595,14 @@ def events():
                     yield ": ka\n\n"
 
     gen = stream_live() if live else stream_replay()
+
+    def _as_bytes(chunks):
+        # direct_passthrough=True 下 werkzeug 要求写入 bytes；生成器产出 str 需在此编码。
+        for chunk in chunks:
+            yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+
     return Response(
-        stream_with_context(gen),
+        stream_with_context(_as_bytes(gen)),
         mimetype="text/event-stream",
         direct_passthrough=True,
         headers={
