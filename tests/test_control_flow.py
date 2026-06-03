@@ -10,10 +10,9 @@ from src.orchestrator import (
     _extract_json,
     _extract_proposal,
     _format_tool_console,
-    _tools_for_propose,
     _tools_for_vote,
 )
-from src.tools.registry import make_executor
+from src.tools.registry import TOOL_DEFINITIONS, make_executor
 from src.validator import validate_decision
 
 
@@ -208,26 +207,30 @@ class ControlFlowTests(unittest.TestCase):
         self.assertEqual(second_request_messages[-1]["tool_call_id"], "call_analyze")
         self.assertEqual(agent.requests[2][-1]["tool_call_id"], "call_evaluate")
 
-    def test_propose_and_vote_tools_fetch_latest_state_first(self):
+    def test_vote_tools_fetch_latest_state_first(self):
         for strategy in ("co_sr", "co_edca", "joint"):
-            with self.subTest(strategy=strategy, phase="propose"):
-                self.assertEqual(
-                    _tools_for_propose(strategy)[0]["function"]["name"],
-                    "get_latest_ap_states",
-                )
-            with self.subTest(strategy=strategy, phase="vote"):
+            with self.subTest(strategy=strategy):
                 self.assertEqual(
                     _tools_for_vote(strategy)[0]["function"]["name"],
                     "get_latest_ap_states",
                 )
 
-        co_sr_propose_names = [
-            tool["function"]["name"] for tool in _tools_for_propose("co_sr")
-        ]
-        self.assertIn("analyze_sr_interference", co_sr_propose_names)
-        self.assertIn("compute_sr_feasible_ranges", co_sr_propose_names)
-        self.assertIn("evaluate_sr_candidate", co_sr_propose_names)
-        self.assertIn("rank_sr_candidates", co_sr_propose_names)
+        # 投票者持有 SR + EDCA 两个验算工具（不含提案专用的分析/排序工具）
+        vote_names = [tool["function"]["name"] for tool in _tools_for_vote("co_sr")]
+        self.assertIn("evaluate_sr_candidate", vote_names)
+        self.assertIn("validate_edca_proposal", vote_names)
+        self.assertNotIn("analyze_sr_interference", vote_names)
+
+        # 提案方自主选路，因此提案阶段持有全部工具
+        propose_names = [tool["function"]["name"] for tool in TOOL_DEFINITIONS]
+        self.assertEqual(propose_names[0], "get_latest_ap_states")
+        for expected in (
+            "analyze_sr_interference",
+            "compute_sr_feasible_ranges",
+            "evaluate_sr_candidate",
+            "rank_sr_candidates",
+        ):
+            self.assertIn(expected, propose_names)
 
     def test_latest_state_tool_refreshes_executor_state(self):
         initial = copy.deepcopy(MOCK_SCENES["edca"])
@@ -265,7 +268,8 @@ class ControlFlowTests(unittest.TestCase):
             {
                 "candidates": {
                     "too_high": {"ap1": 14.0, "ap2": 14.0, "ap3": 14.0},
-                    "balanced": {"ap1": 6.59, "ap2": 6.69, "ap3": 7.39},
+                    "fractional": {"ap1": 6.59, "ap2": 6.69, "ap3": 7.39},
+                    "balanced": {"ap1": 6.0, "ap2": 6.0, "ap3": 7.0},
                 },
                 "objective": "balanced",
             },
@@ -277,11 +281,18 @@ class ControlFlowTests(unittest.TestCase):
 
         self.assertTrue(analysis["co_sr_triggered"])
         self.assertIn("ap1", ranges["ranges"])
+        # 功率调整量必须为整数 dB → 候选提示取整为整数 dBm
+        self.assertTrue(ranges["integer_power_required"])
         self.assertEqual(
             ranges["candidate_hints"]["minimal_necessary_drop"],
-            {"ap1": 6.59, "ap2": 6.69, "ap3": 7.39},
+            {"ap1": 6.0, "ap2": 6.0, "ap3": 7.0},
         )
+        # 小数功率方案因调整量非整数 dB 被判非法，整数方案胜出
         self.assertEqual(ranking["best"]["name"], "balanced")
+        fractional = next(
+            c for c in ranking["ranked_candidates"] if c["name"] == "fractional"
+        )
+        self.assertFalse(fractional["valid"])
         self.assertTrue(evaluation["valid"], evaluation["errors"])
 
     def test_tool_console_output_is_human_readable_summary(self):

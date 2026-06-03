@@ -130,10 +130,11 @@ def read_real_state(iface: str = "wlan0") -> dict:  # noqa: ARG001
 # ------------------------------------------------------------------
 # 上报逻辑
 # ------------------------------------------------------------------
-def post_state(ap_id: str, data: dict, server: str) -> bool:
+def post_state(ap_id: str, data: dict, server: str, source: str = "ap") -> bool:
     payload = {
         "ap_id": ap_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": source,
         **data,
     }
     try:
@@ -148,9 +149,10 @@ def post_state(ap_id: str, data: dict, server: str) -> bool:
 
 
 def report_loop(ap_id: str, mock: bool, server: str, interval: int, iface: str = "wlan0"):
+    source = "mock" if mock else "ap"
     while True:
         data = _perturb(ap_id) if mock else read_real_state(iface)
-        post_state(ap_id, data, server)
+        post_state(ap_id, data, server, source=source)
         time.sleep(interval)
 
 

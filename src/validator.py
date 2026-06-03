@@ -16,6 +16,8 @@ from __future__ import annotations
 TX_POWER_MIN_DBM = 1.0
 TX_POWER_MAX_DBM = 23.0
 TX_POWER_APPLIED_TOLERANCE_DB = 0.5
+# Co-SR 功率调整量（相对协商前功率）必须为整数 dB
+TX_POWER_DELTA_INTEGER_TOLERANCE_DB = 0.05
 
 EDCA_LIMITS = {
     "CWmin": (3, 1023),
@@ -159,6 +161,15 @@ def validate_decision(
                         f"tx_power_dbm={pwr} 超出合法范围 "
                         f"[{TX_POWER_MIN_DBM}, {TX_POWER_MAX_DBM}] dBm"
                     )
+                # 功率调整量必须为整数 dB（相对协商前功率）
+                current_pwr = ap_state.get(ap_id, {}).get("tx_power_dbm")
+                if current_pwr is not None:
+                    delta = pwr - float(current_pwr)
+                    if abs(delta - round(delta)) > TX_POWER_DELTA_INTEGER_TOLERANCE_DB:
+                        ap_errors.append(
+                            f"功率调整量 {delta:+.2f} dB 必须为整数 dB"
+                            f"（当前 {current_pwr} → 提案 {pwr}）"
+                        )
                 if observed_is_real:
                     observed_pwr = obs.get(ap_id, {}).get("tx_power_dbm")
                     report["observed_params"]["tx_power_dbm"] = observed_pwr

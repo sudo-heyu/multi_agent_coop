@@ -9,6 +9,7 @@ Co-SR 计算工具
   • STA_i 处来自 AP_j 的干扰以 AP_i 处 neighbor_rssi 保守近似（最坏情况）
   • SINR 分母 = 来自所有邻居的干扰（线性求和）+ 本底噪声
 """
+import itertools
 import math
 
 # ------------------------------------------------------------------
@@ -22,6 +23,7 @@ TX_POWER_STEP_DB   = 1      # 保留给历史辅助函数使用；主求解器�
 TX_POWER_MAX_DBM   = 23.0   # 与 validator.py 保持一致
 CCA_GUARD_DB       = 0.01   # 避免最优解贴在严格不等式 CCA < -82 dBm 上
 OPT_TOLERANCE_DB   = 0.001  # 连续优化停止精度
+DELTA_INT_TOLERANCE_DB = 1e-6  # 判定“功率调整量是否为整数 dB”的容差
 
 # 干扰强度分级阈值
 _INTERFERENCE_THRESHOLDS = [
@@ -58,6 +60,11 @@ def _power_delta(ap_id: str, proposed_powers: dict, ap_states: dict) -> float:
     if new is None:
         new = current
     return new - current
+
+
+def _delta_is_integer(delta: float) -> bool:
+    """功率调整量是否为整数 dB（在容差内）。"""
+    return abs(delta - round(delta)) <= DELTA_INT_TOLERANCE_DB
 
 
 # ------------------------------------------------------------------
@@ -359,16 +366,24 @@ def compute_feasible_ranges(ap_states: dict) -> dict:
     必须继续评估的全局约束，而不是单 AP 独立边界。
     """
     lower, upper, binding = _power_bounds(ap_states)
+    int_lower, int_upper = _integer_bounds(ap_states, lower, upper)
     ranges = {}
     for ap_id, state in ap_states.items():
         current = _fget(state, "tx_power_dbm", TX_POWER_MAX_DBM)
         min_dbm = round(lower[ap_id], 3)
         max_dbm = round(upper[ap_id], 3)
+        # 功率调整量必须为整数 dB → 可行功率收紧到整数格点。
+        min_int = int_lower[ap_id]
+        max_int = int_upper[ap_id]
+        has_int = min_int <= max_int
         ranges[ap_id] = {
             "current_dbm": current,
             "min_dbm": min_dbm,
             "max_dbm": max_dbm,
+            "min_int_dbm": min_int if has_int else None,
+            "max_int_dbm": max_int if has_int else None,
             "feasible_individual_range": min_dbm <= max_dbm + OPT_TOLERANCE_DB,
+            "has_feasible_integer": has_int,
             "min_delta_db": round(min_dbm - current, 3),
             "max_delta_db": round(max_dbm - current, 3),
             "lower_reasons": binding[ap_id]["lower_reasons"],
@@ -381,19 +396,22 @@ def compute_feasible_ranges(ap_states: dict) -> dict:
             ),
         }
 
+    # 候选提示直接给整数 dBm，确保调整量为整数 dB。
+    # minimal_necessary_drop 取整数上界（floor），即满足 CCA 的最小必要降功率。
     max_cca_candidate = {
-        ap_id: round(upper[ap_id], 3)
+        ap_id: float(int_upper[ap_id])
         for ap_id in ap_states
-        if lower[ap_id] <= upper[ap_id] + OPT_TOLERANCE_DB
+        if int_lower[ap_id] <= int_upper[ap_id]
     }
     conservative_candidate = {
-        ap_id: round((lower[ap_id] + upper[ap_id]) / 2, 3)
+        ap_id: float(round((int_lower[ap_id] + int_upper[ap_id]) / 2))
         for ap_id in ap_states
-        if lower[ap_id] <= upper[ap_id] + OPT_TOLERANCE_DB
+        if int_lower[ap_id] <= int_upper[ap_id]
     }
     return {
         "ranges": ranges,
         "sinr_coupled": True,
+        "integer_power_required": True,
         "candidate_hints": {
             "minimal_necessary_drop": max_cca_candidate,
             "conservative_mid_range": conservative_candidate,
@@ -402,49 +420,12 @@ def compute_feasible_ranges(ap_states: dict) -> dict:
             item["feasible_individual_range"] for item in ranges.values()
         ),
         "notes": [
+            "功率调整量必须为整数 dB，候选 tx_power_dbm 只能取整数（参考 min_int_dbm/max_int_dbm）。",
             "候选功率必须继续调用 evaluate_sr_candidate 验证 CCA/SINR/STA RSSI。",
             "max_dbm 不是建议值，只是单 AP 在当前 CCA 模型下的上界。",
-            "Co-SR 通常应优先比较接近 max_dbm 的候选，以避免不必要地过度降功率。",
+            "Co-SR 通常应优先比较接近 max_int_dbm 的候选，以避免不必要地过度降功率。",
         ],
     }
-
-
-def _sinr_feasible_seed(ap_states: dict, lower: dict, upper: dict) -> dict | None:
-    """
-    用固定点迭代求一个满足 SINR 下界的最低功率可行起点。
-
-    SINR 约束可写成“本 AP 至少需要多少信号功率”。从下界开始反复
-    抬高不满足 SINR 的 AP；若超过上界，说明当前约束不可行。
-    """
-    gamma = 10 ** (SINR_THRESHOLD_DB / 10)
-    powers = {ap_id: lower[ap_id] for ap_id in ap_states}
-
-    for _ in range(200):
-        changed = False
-        for ap_id, state in ap_states.items():
-            noise_mw = _dbm_to_mw(_fget(state, "noise_floor_dbm", -90.0))
-            interference_mw = noise_mw
-            for nbr_id, base_rssi in state.get("neighbor_rssi_dbm", {}).items():
-                if nbr_id not in ap_states:
-                    continue
-                delta_j = powers[nbr_id] - _fget(ap_states[nbr_id], "tx_power_dbm", 20.0)
-                interference_mw += _dbm_to_mw(float(base_rssi) + delta_j)
-
-            required_signal_dbm = _mw_to_dbm(gamma * interference_mw)
-            current = _fget(state, "tx_power_dbm", 20.0)
-            sta = _fget(state, "sta_rssi_dbm", -60.0)
-            required_power = current + required_signal_dbm - sta
-            next_power = max(lower[ap_id], required_power)
-
-            if next_power > upper[ap_id] + OPT_TOLERANCE_DB:
-                return None
-            if next_power > powers[ap_id] + OPT_TOLERANCE_DB:
-                powers[ap_id] = min(next_power, upper[ap_id])
-                changed = True
-        if not changed:
-            break
-
-    return powers if _is_feasible(ap_states, powers) else None
 
 
 def _objective(ap_states: dict, powers: dict) -> float:
@@ -461,91 +442,77 @@ def _is_feasible(ap_states: dict, powers: dict) -> bool:
     return ok
 
 
-def _clip_to_bounds(powers: dict, lower: dict, upper: dict) -> dict:
-    return {
-        ap_id: min(max(float(power), lower[ap_id]), upper[ap_id])
-        for ap_id, power in powers.items()
-    }
-
-
-def _optimize_continuous_powers(ap_states: dict) -> tuple[dict | None, dict]:
+def _integer_bounds(ap_states: dict, lower: dict, upper: dict) -> tuple[dict, dict]:
     """
-    连续 Co-SR 约束优化。
+    把连续可行界收紧到整数 dBm 格点。
 
-    目标：在满足 CCA / SINR / STA RSSI 的前提下，最小化所有 AP
-    相对当前功率的平方调整量。由于 AP 数量很小，这里使用确定性的
-    可行域模式搜索：在连续 dBm 空间中搜索，逐步收敛到
-    OPT_TOLERANCE_DB，而不是用 1 dB 离散贪心。
+    下界向上取整、上界向下取整，确保区间内每个取值都是整数，
+    从而保证“相对整数当前功率的调整量”也是整数 dB。
+    """
+    int_lower: dict[str, int] = {}
+    int_upper: dict[str, int] = {}
+    for ap_id in ap_states:
+        int_lower[ap_id] = math.ceil(lower[ap_id] - OPT_TOLERANCE_DB)
+        int_upper[ap_id] = math.floor(upper[ap_id] + OPT_TOLERANCE_DB)
+    return int_lower, int_upper
+
+
+def _optimize_integer_powers(ap_states: dict) -> tuple[dict | None, dict]:
+    """
+    整数 dB Co-SR 约束优化。
+
+    在满足 CCA / SINR / STA RSSI 的前提下，于整数 dBm 格点上最小化
+    所有 AP 相对当前功率的平方调整量。由于 AP 数量很小且每个 AP 的
+    整数可行档位有限，这里直接对整数格点做确定性穷举，保证给出的
+    每个 AP 功率调整量都是整数 dB。
     """
     lower, upper, binding = _power_bounds(ap_states)
-    for ap_id in ap_states:
-        if lower[ap_id] > upper[ap_id] + OPT_TOLERANCE_DB:
-            return None, {
-                "lower_bounds_dbm": lower,
-                "upper_bounds_dbm": upper,
-                "binding_bounds": binding,
-                "error": f"{ap_id} lower bound exceeds upper bound",
-            }
-
-    seed = _sinr_feasible_seed(ap_states, lower, upper)
-    if seed is None:
-        return None, {
-            "lower_bounds_dbm": lower,
-            "upper_bounds_dbm": upper,
-            "binding_bounds": binding,
-            "error": "no feasible point satisfies SINR within CCA/STA bounds",
-        }
-
-    ap_ids = list(ap_states)
-    directions: list[dict[str, float]] = []
-    for ap_id in ap_ids:
-        directions.append({ap_id: 1.0})
-        directions.append({ap_id: -1.0})
-    for inc in ap_ids:
-        for dec in ap_ids:
-            if inc != dec:
-                directions.append({inc: 1.0, dec: -1.0})
-
-    powers = dict(seed)
-    best_obj = _objective(ap_states, powers)
-    max_range = max((upper[ap] - lower[ap] for ap in ap_ids), default=1.0)
-    step = max(0.5, max_range / 2)
-    iterations = 0
-
-    while step > OPT_TOLERANCE_DB and iterations < 5000:
-        iterations += 1
-        best_candidate = None
-        best_candidate_obj = best_obj
-
-        for direction in directions:
-            candidate = dict(powers)
-            for ap_id, sign in direction.items():
-                candidate[ap_id] += sign * step
-            candidate = _clip_to_bounds(candidate, lower, upper)
-
-            if candidate == powers or not _is_feasible(ap_states, candidate):
-                continue
-
-            obj = _objective(ap_states, candidate)
-            if obj + 1e-9 < best_candidate_obj:
-                best_candidate = candidate
-                best_candidate_obj = obj
-
-        if best_candidate is None:
-            step /= 2
-        else:
-            powers = best_candidate
-            best_obj = best_candidate_obj
-
-    return powers, {
+    meta_base = {
         "lower_bounds_dbm": lower,
         "upper_bounds_dbm": upper,
         "binding_bounds": binding,
+    }
+
+    int_lower, int_upper = _integer_bounds(ap_states, lower, upper)
+    ap_ids = list(ap_states)
+    for ap_id in ap_ids:
+        if int_lower[ap_id] > int_upper[ap_id]:
+            return None, {
+                **meta_base,
+                "error": (
+                    f"{ap_id} 的可行区间 "
+                    f"[{round(lower[ap_id], 3)}, {round(upper[ap_id], 3)}] dBm "
+                    "内不存在整数功率，无法给出整数 dB 调整量"
+                ),
+            }
+
+    grid = [range(int_lower[ap_id], int_upper[ap_id] + 1) for ap_id in ap_ids]
+    best: dict | None = None
+    best_obj: float | None = None
+    feasible_count = 0
+
+    for combo in itertools.product(*grid):
+        powers = {ap_id: float(combo[i]) for i, ap_id in enumerate(ap_ids)}
+        if not _is_feasible(ap_states, powers):
+            continue
+        feasible_count += 1
+        obj = _objective(ap_states, powers)
+        if best_obj is None or obj < best_obj - 1e-9:
+            best, best_obj = powers, obj
+
+    if best is None:
+        return None, {
+            **meta_base,
+            "error": "整数 dBm 格点上不存在同时满足 CCA/SINR/STA RSSI 的可行解",
+        }
+
+    return best, {
+        **meta_base,
         "objective": "minimize_sum_squared_power_change_db",
         "objective_value": round(best_obj, 6),
-        "optimality_tolerance_db": OPT_TOLERANCE_DB,
-        "iterations": iterations,
-        "solver": "deterministic_continuous_pattern_search",
+        "integer_step_db": 1,
+        "feasible_integer_points": feasible_count,
+        "solver": "deterministic_integer_lattice_search",
     }
 
 
@@ -579,7 +546,7 @@ def recommend_tx_power_differentiated(ap_states: dict) -> dict:
             ...
         }
     """
-    powers, meta = _optimize_continuous_powers(ap_states)
+    powers, meta = _optimize_integer_powers(ap_states)
     if powers is None:
         return {
             ap_id: {
@@ -599,10 +566,11 @@ def recommend_tx_power_differentiated(ap_states: dict) -> dict:
     result = {}
     for ap_id, state in ap_states.items():
         current = _fget(state, "tx_power_dbm", 20.0)
-        optimal = round(powers[ap_id], 3)
+        # 整数格点求解，optimal 为整数 dBm；调整量也是整数 dB。
+        optimal = float(round(powers[ap_id]))
         result[ap_id] = {
             "optimal_dbm":     optimal,
-            # 兼容旧日志和 agent 文档字段；语义已改为连续最优值。
+            # 兼容旧日志和 agent 文档字段；语义已改为整数最优值。
             "recommended_dbm": optimal,
             "current_dbm":     current,
             "delta_db":        round(optimal - current, 3),
@@ -706,6 +674,7 @@ def evaluate_candidate(ap_states: dict, proposed_powers: dict) -> dict:
     min_sta_margin = 999.0
     max_cca = -200.0
     min_sinr = 999.0
+    integer_errors: list[str] = []
 
     for ap_id, state in ap_states.items():
         current = _fget(state, "tx_power_dbm", 20.0)
@@ -717,9 +686,23 @@ def evaluate_candidate(ap_states: dict, proposed_powers: dict) -> dict:
         min_sta_margin = min(min_sta_margin, _sta_rssi_margin(ap_id, ap_states, normalized))
         max_cca = max(max_cca, details[ap_id]["cca_max_dbm"])
         min_sinr = min(min_sinr, details[ap_id]["sinr_db"])
+        # 功率调整量必须为整数 dB。
+        delta = proposed - current
+        if not _delta_is_integer(delta):
+            msg = (
+                f"{ap_id.upper()}: 功率调整量 {delta:+.2f} dB 必须为整数 dB"
+                f"（当前 {current} → 提案 {proposed}）"
+            )
+            integer_errors.append(msg)
+            details[ap_id]["delta_is_integer"] = False
+            details[ap_id].setdefault("errors", []).append(msg.split(": ", 1)[1])
+        else:
+            details[ap_id]["delta_is_integer"] = True
+
+    errors = errors + integer_errors
 
     return {
-        "valid": ok,
+        "valid": ok and not integer_errors,
         "errors": errors,
         "proposed_powers": {ap_id: round(power, 3) for ap_id, power in normalized.items()},
         "score": {

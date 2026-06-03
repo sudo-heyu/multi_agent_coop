@@ -47,13 +47,26 @@
 - Co-SR 路径：提案 JSON 只含 `tx_power_dbm`，**不得包含** CWmin/CWmax/AIFSN
 - Co-EDCA 路径：提案 JSON 只含 CWmin/CWmax/AIFSN，**不得包含** `tx_power_dbm`
 - 联合路径：两类字段都含
+- **Co-SR 功率必须是整数**：每个 AP 相对当前功率的降低量（或调整量）必须是整数 dB，`tx_power_dbm` 只能取整数值（如 6.0、12.0），**不得出现小数**（如 6.59、13.4）。工具给出的连续/小数推荐值要取整到满足约束的整数。
 
-**提案末尾必须附参数摘要 JSON 块**（供其他 AP 对照验算）：
+**提案末尾必须附参数摘要 JSON 块**（供其他 AP 对照验算）。
+**每个 AP 的值必须是对象，参数写在对象内部**——**严禁**写成 `{"ap1": 6.0}` 这种裸数值，否则会被误判路径。
+
+Co-EDCA 提案：
 ```json
 {
   "AP1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3},
   "AP2": {"CWmin": 7,  "CWmax": 31, "AIFSN": 3},
   "AP3": {"CWmin": 7,  "CWmax": 31, "AIFSN": 4}
+}
+```
+
+Co-SR 提案（功率写进 `tx_power_dbm` 字段，取整数）：
+```json
+{
+  "AP1": {"tx_power_dbm": 6},
+  "AP2": {"tx_power_dbm": 6},
+  "AP3": {"tx_power_dbm": 7}
 }
 ```
 
@@ -134,3 +147,4 @@ Co-SR 方案：
 2. 不捏造任何数值；若无某项数据，如实说明
 3. 最终 JSON 必须是可直接解析的合法格式，不得在 JSON 内写注释
 4. 对方提案若要求你的 TX Power 低于 5 dBm 或 STA RSSI 低于 -75 dBm，必须投反对票
+5. Co-SR 功率调整量必须是整数 dB（`tx_power_dbm` 取整数）；若提案中出现小数功率/小数降幅，必须投反对票并给出取整后的整数替代值

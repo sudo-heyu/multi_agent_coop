@@ -2,7 +2,7 @@
 协商 Dashboard 服务（端口 5050）
 
 左：SSE 实时对话流（tail JSONL 日志）
-右：三项业务指标曲线图（轮询 state server /history）
+右：业务指标与 MAC 参数曲线图（轮询 state server /history）
 
 由 run.py 自动启动，也可手动运行：
   python dashboard/app.py [--port 5050] [--state-server http://localhost:5001]
@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, Response, request, jsonify
+from flask import Flask, Response, request, jsonify, stream_with_context
 import requests as _req
 
 app = Flask(__name__)
@@ -110,10 +110,6 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
 /* event styles */
 .ev-sys   { font-size: 12px; color: #6b7280; text-align: center; padding: 4px 0; }
 .ev-phase { border-left: 3px solid #374151; padding: 4px 12px; font-size: 13px; color: #9ca3af; margin: 4px 0; }
-.ev-strategy { padding: 8px 14px; border-radius: 4px; font-size: 13px; font-weight: bold; text-align: center; margin: 6px 0; }
-.ev-strategy.co_sr   { background: #052e16; color: #4ade80; border: 1px solid #166534; }
-.ev-strategy.co_edca { background: #0c1a2e; color: #60a5fa; border: 1px solid #1d4ed8; }
-.ev-strategy.joint   { background: #1e1040; color: #c4b5fd; border: 1px solid #6d28d9; }
 
 .ev-speak { background: #1f2937; border-left: 3px solid #374151; padding: 9px 13px; border-radius: 4px; font-size: 14px; line-height: 1.65; }
 .ev-speak .tag  { font-size: 12px; font-weight: bold; margin-bottom: 5px; }
@@ -140,12 +136,12 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
 .ev-tool       { font-size: 11px; color: #4b5563; padding: 2px 10px; border-left: 2px solid #374151; }
 
 /* ── Right: charts ── */
-#charts-panel { display: flex; flex-direction: column; overflow: hidden; }
-.chart-box { flex: 1; display: flex; flex-direction: column; border-bottom: 1px solid #1f2937; padding: 8px 16px 6px; min-height: 0; }
-.chart-box:last-child { border-bottom: none; }
+#charts-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(112px, 1fr); overflow: hidden; }
+.chart-box { display: flex; flex-direction: column; border-bottom: 1px solid #1f2937; border-right: 1px solid #1f2937; padding: 8px 12px 6px; min-width: 0; min-height: 0; }
+.chart-box:nth-child(2n) { border-right: none; }
 .chart-box h3 { font-size: 12px; color: #9ca3af; margin-bottom: 6px; flex-shrink: 0; }
 .chart-box canvas { flex: 1; min-height: 0; }
-#metrics-ts { font-size: 11px; color: #4b5563; padding: 4px 16px; flex-shrink: 0; }
+#metrics-ts { grid-column: 1 / -1; font-size: 11px; color: #4b5563; padding: 4px 16px; min-height: 22px; }
 </style>
 </head>
 <body>
@@ -163,11 +159,16 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
     <div class="chart-box"><h3>吞吐量 (Mbps)</h3><canvas id="c-tput"></canvas></div>
     <div class="chart-box"><h3>延迟 (ms)</h3><canvas id="c-lat"></canvas></div>
     <div class="chart-box"><h3>丢包率 (%)</h3><canvas id="c-loss"></canvas></div>
+    <div class="chart-box"><h3>Txpower (dBm)</h3><canvas id="c-txpower"></canvas></div>
+    <div class="chart-box"><h3>CWmin</h3><canvas id="c-cwmin"></canvas></div>
+    <div class="chart-box"><h3>CWmax</h3><canvas id="c-cwmax"></canvas></div>
+    <div class="chart-box"><h3>AIFSN</h3><canvas id="c-aifsn"></canvas></div>
     <div id="metrics-ts">指标：等待数据...</div>
   </div>
 </main>
 <script>
 // ── Chart.js ────────────────────────────────────────────────────
+const DEFAULT_TIME_WINDOW_S = 40;
 const AP_COLORS = {
   ap1: { border: "#e74c3c", bg: "rgba(231,76,60,0.1)" },
   ap2: { border: "#3498db", bg: "rgba(52,152,219,0.1)" },
@@ -175,12 +176,57 @@ const AP_COLORS = {
 };
 const APS = ["ap1","ap2","ap3"];
 let charts = {};
+let negotiationStartMs = null;
 
-function makeDataset(ap, field, history) {
+const CHART_SPECS = [
+  { key: "throughput_mbps", canvas: "c-tput",    label: "Mbps" },
+  { key: "latency_ms",      canvas: "c-lat",     label: "ms" },
+  { key: "packet_loss_pct", canvas: "c-loss",    label: "%" },
+  { key: "tx_power_dbm",    canvas: "c-txpower", label: "dBm" },
+  { key: "cwmin",           canvas: "c-cwmin",   label: "CWmin" },
+  { key: "cwmax",           canvas: "c-cwmax",   label: "CWmax" },
+  { key: "aifsn",           canvas: "c-aifsn",   label: "AIFSN" },
+];
+
+function parseTsMs(value) {
+  const ms = Date.parse(value || "");
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function historyStartMs(history) {
+  let first = null;
+  APS.forEach(ap => {
+    (history[ap] || []).forEach(row => {
+      const ms = parseTsMs(row.t);
+      if (ms !== null && (first === null || ms < first)) first = ms;
+    });
+  });
+  return first;
+}
+
+function elapsedSeconds(row, startMs) {
+  const ms = parseTsMs(row.t);
+  if (ms === null || startMs === null) return null;
+  return Math.max(0, (ms - startMs) / 1000);
+}
+
+function timelineMaxSeconds(history, startMs) {
+  let maxSec = DEFAULT_TIME_WINDOW_S;
+  APS.forEach(ap => {
+    (history[ap] || []).forEach(row => {
+      const sec = elapsedSeconds(row, startMs);
+      if (sec !== null && sec > maxSec) maxSec = sec;
+    });
+  });
+  return Math.ceil(maxSec / 10) * 10;
+}
+
+function makeDataset(ap, field, history, startMs) {
   const rows = history[ap] || [];
   return {
     label: ap.toUpperCase(),
-    data: rows.map(r => ({ x: r.t, y: r[field] })),
+    data: rows.map(r => ({ x: elapsedSeconds(r, startMs), y: r[field] }))
+      .filter(p => p.x !== null && p.y !== null && p.y !== undefined),
     borderColor: AP_COLORS[ap].border,
     backgroundColor: AP_COLORS[ap].bg,
     borderWidth: 2,
@@ -194,7 +240,7 @@ function makeChart(canvasId, field, yLabel) {
   const ctx = document.getElementById(canvasId).getContext("2d");
   return new Chart(ctx, {
     type: "line",
-    data: { datasets: APS.map(ap => makeDataset(ap, field, {})) },
+    data: { datasets: APS.map(ap => makeDataset(ap, field, {}, null)) },
     options: {
       animation: false,
       responsive: true,
@@ -202,9 +248,16 @@ function makeChart(canvasId, field, yLabel) {
       plugins: { legend: { position: "top", labels: { font: { size: 11 } } } },
       scales: {
         x: {
-          type: "time",
-          time: { unit: "minute", displayFormats: { minute: "HH:mm", second: "HH:mm:ss" } },
-          ticks: { maxTicksLimit: 6, font: { size: 10 } },
+          type: "linear",
+          min: 0,
+          max: DEFAULT_TIME_WINDOW_S,
+          title: { display: true, text: "时间 (s)", font: { size: 11 } },
+          ticks: {
+            stepSize: 5,
+            maxTicksLimit: 9,
+            font: { size: 10 },
+            callback: value => `${value}s`,
+          },
         },
         y: {
           title: { display: true, text: yLabel, font: { size: 11 } },
@@ -216,33 +269,28 @@ function makeChart(canvasId, field, yLabel) {
   });
 }
 
-const script = document.createElement("script");
-script.src = "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js";
-script.onload = () => {
-  charts = {
-    throughput_mbps: makeChart("c-tput", "throughput_mbps", "Mbps"),
-    latency_ms:      makeChart("c-lat",  "latency_ms",      "ms"),
-    packet_loss_pct: makeChart("c-loss", "packet_loss_pct", "%"),
-  };
+charts = Object.fromEntries(
+  CHART_SPECS.map(spec => [spec.key, makeChart(spec.canvas, spec.key, spec.label)])
+);
 
-  function refreshMetrics() {
-    fetch("/metrics").then(r => r.ok ? r.json() : {}).then(hist => {
-      const fields = ["throughput_mbps", "latency_ms", "packet_loss_pct"];
-      fields.forEach(f => {
-        const ch = charts[f]; if (!ch) return;
-        APS.forEach((ap, i) => {
-          ch.data.datasets[i].data = (hist[ap] || []).map(r => ({ x: r.t, y: r[f] }));
-        });
-        ch.update();
+function refreshMetrics() {
+  fetch("/metrics").then(r => r.ok ? r.json() : {}).then(hist => {
+    const startMs = negotiationStartMs ?? historyStartMs(hist);
+    const maxSeconds = timelineMaxSeconds(hist, startMs);
+    CHART_SPECS.forEach(spec => {
+      const ch = charts[spec.key]; if (!ch) return;
+      APS.forEach((ap, i) => {
+        ch.data.datasets[i].data = makeDataset(ap, spec.key, hist, startMs).data;
+      });
+      ch.options.scales.x.max = maxSeconds;
+      ch.update();
     });
     document.getElementById("metrics-ts").textContent =
-      "指标更新: " + new Date().toLocaleTimeString();
-    }).catch(() => {});
-  }
-  refreshMetrics();
-  setInterval(refreshMetrics, 10000);
-};
-document.head.appendChild(script);
+      "指标更新: " + new Date().toLocaleTimeString() + ` · 时间轴 0-${maxSeconds}s`;
+  }).catch(() => {});
+}
+refreshMetrics();
+setInterval(refreshMetrics, 10000);
 
 // ── SSE conversation stream ─────────────────────────────────────
 const _sp     = new URLSearchParams(location.search);
@@ -273,49 +321,60 @@ function esc(s) {
 function app_(el) { body.appendChild(el); sd(); }
 
 // ── 流式发言状态 ────────────────────────────────────────────────
-let _streamEl    = null;
-let _streamBody  = null;
-let _streamAgent = null;
-let _curSeg      = null;   // 当前活跃 segment
+let _activeTurn = null;
+let _turnSeq = 0;
 
-// ── 打字机（segment 队列） ────────────────────────────────────────
-// 每个气泡有自己的 segment = {el: .body, buf: 待输出文字}
-// RAF 按队列顺序逐 segment 输出，互不干扰。
-const _TYPE_CPS_LIVE   = 80;
-const _TYPE_CPS_REPLAY = 200;
-const _typeSegs  = [];
-let   _typeRafId  = null;
-let   _typeLastTs = 0;
+// ── 打字机（turn 队列）────────────────────────────────────────────
+// turn = {id, agent, el, body, buf, received, done}
+const _TYPE_CPS_LIVE   = 140;
+const _TYPE_CPS_REPLAY = 260;
+const _turns = [];
+let _typeRafId = null;
+let _typeLastTs = 0;
 
 const _typeCPS = () => _isLive ? _TYPE_CPS_LIVE : _TYPE_CPS_REPLAY;
+const _hasBufferedText = () => _turns.some(t => t.buf.length > 0);
 
 function _typeTick(ts) {
-  if (!_typeSegs.some(s => s.buf.length > 0)) { _typeRafId = null; return; }
+  if (!_hasBufferedText()) { _typeRafId = null; return; }
   if (!_typeLastTs) _typeLastTs = ts;
-  const elapsed = ts - _typeLastTs;
-  _typeLastTs   = ts;
-  let budget    = Math.max(1, Math.round(_typeCPS() * elapsed / 1000));
-  for (const seg of _typeSegs) {
+  const elapsed = Math.max(16, ts - _typeLastTs);
+  _typeLastTs = ts;
+
+  let budget = Math.max(1, Math.floor(_typeCPS() * elapsed / 1000));
+  for (const turn of _turns) {
     if (budget <= 0) break;
-    if (!seg.buf.length) continue;
-    const take = Math.min(budget, seg.buf.length);
-    seg.el.textContent += seg.buf.slice(0, take);
-    seg.buf = seg.buf.slice(take);
+    if (!turn.buf.length) continue;
+    const take = Math.min(budget, turn.buf.length);
+    turn.body.textContent += turn.buf.slice(0, take);
+    turn.buf = turn.buf.slice(take);
     budget -= take;
+    if (turn.done && !turn.buf.length) turn.body.classList.remove("typing");
     sd();
-    if (!seg.buf.length) seg.el.classList.remove("typing");
   }
-  _typeRafId = _typeSegs.some(s => s.buf.length > 0) ? requestAnimationFrame(_typeTick) : null;
+  _typeRafId = _hasBufferedText() ? requestAnimationFrame(_typeTick) : null;
 }
 
 function _typeStartRAF() {
-  if (!_typeRafId) { _typeLastTs = 0; _typeRafId = requestAnimationFrame(_typeTick); }
+  if (!_typeRafId && _hasBufferedText()) {
+    _typeLastTs = 0;
+    _typeRafId = requestAnimationFrame(_typeTick);
+  }
 }
 
-function _typeFlushAll() {
-  if (_typeRafId) { cancelAnimationFrame(_typeRafId); _typeRafId = null; }
-  for (const s of _typeSegs) { s.el.textContent += s.buf; s.el.classList.remove("typing"); }
-  _typeSegs.length = 0; _typeLastTs = 0;
+function _typeReset() {
+  if (_typeRafId) cancelAnimationFrame(_typeRafId);
+  _typeRafId = null;
+  _typeLastTs = 0;
+  _turns.length = 0;
+  _activeTurn = null;
+}
+
+function _typeCompleteAll() {
+  for (const turn of _turns) {
+    turn.done = true;
+    if (!turn.buf.length) turn.body.classList.remove("typing");
+  }
 }
 
 function agentClass(ag) {
@@ -323,6 +382,62 @@ function agentClass(ag) {
 }
 function agentName(ag) {
   return ag === "coordinator" ? "协调者" : ag.toUpperCase();
+}
+
+function _startTurn(agent, phase, role) {
+  const ag = (agent || "coordinator").toLowerCase();
+  if (_activeTurn && _activeTurn.agent === ag && !_activeTurn.done) {
+    _activeTurn.buf = "";
+    _activeTurn.received = 0;
+    _activeTurn.body.textContent = "";
+    _activeTurn.body.classList.add("typing");
+    return _activeTurn;
+  }
+
+  const bubble = mk("ev-speak " + agentClass(ag),
+    `<div class="tag">${agentName(ag)}</div><div class="body typing"></div>`);
+  const bodyEl = bubble.querySelector(".body");
+  const turn = {
+    id: ++_turnSeq,
+    agent: ag,
+    phase: phase || 0,
+    role: role || "",
+    el: bubble,
+    body: bodyEl,
+    buf: "",
+    received: 0,
+    done: false,
+  };
+  _turns.push(turn);
+  _activeTurn = turn;
+  app_(bubble);
+  return turn;
+}
+
+function _appendTurnText(turn, text) {
+  const value = String(text || "");
+  if (!turn || !value) return;
+  turn.buf += value;
+  turn.received += value.length;
+  turn.body.classList.add("typing");
+  _typeStartRAF();
+}
+
+function _completeTurn(agent, response) {
+  const ag = (agent || "coordinator").toLowerCase();
+  let turn = _activeTurn && _activeTurn.agent === ag ? _activeTurn : null;
+
+  if (!turn) {
+    turn = _startTurn(ag, 0, "fallback");
+  }
+
+  if (turn.received === 0 && response) {
+    _appendTurnText(turn, response);
+  }
+
+  turn.done = true;
+  if (!turn.buf.length) turn.body.classList.remove("typing");
+  if (_activeTurn === turn) _activeTurn = null;
 }
 
 function render(d) {
@@ -334,8 +449,8 @@ function render(d) {
 
   if (ev === "session_start") {
     body.innerHTML = "";
-    _typeFlushAll(); _curSeg = null;
-    _streamEl = null; _streamBody = null; _streamAgent = null;
+    _typeReset();
+    negotiationStartMs = parseTsMs(d.ts) ?? Date.now();
     document.getElementById("session-meta").textContent =
       `session=${d.session_id}  model=${d.model}  scene=${d.scene}`;
     badge.textContent = "运行中"; badge.className = "running";
@@ -343,64 +458,26 @@ function render(d) {
     return;
   }
 
-  if (ev === "strategy_decided") {
-    const labels = { co_sr:"Co-SR  空间复用", co_edca:"Co-EDCA  拥塞控制", joint:"Joint  联合优化" };
-    app_(mk("ev-strategy " + d.strategy, "策略：" + (labels[d.strategy] || d.strategy)));
-    return;
-  }
-
   if (ev === "phase_start" || ev === "tool_call") {
     return;
   }
 
-  // 发言开始：为这个气泡创建新的 segment，加入打字机队列
   if (ev === "agent_speak_start") {
-    const ag  = (d.agent||"").toLowerCase();
-    const cls = agentClass(ag);
-    if (_streamAgent === ag && _streamEl && _curSeg) {
-      // 同一 agent 重试：清空当前 segment，重置气泡内容
-      _curSeg.buf = ''; _streamBody.textContent = '';
-      return;
-    }
-    const bubble = mk("ev-speak " + cls,
-      `<div class="tag">${agentName(ag)}</div><div class="body"></div>`);
-    _streamEl    = bubble;
-    _streamBody  = bubble.querySelector(".body");
-    _streamAgent = ag;
-    _curSeg      = {el: _streamBody, buf: ''};
-    _typeSegs.push(_curSeg);
-    app_(bubble);
+    _startTurn(d.agent, d.phase, d.role);
     return;
   }
 
-  // 文本片段：追加到当前 segment 缓冲，触发打字机
   if (ev === "agent_speak_chunk") {
-    if (_curSeg) {
-      _curSeg.buf += (d.text || "");
-      _curSeg.el.classList.add("typing");
-      _typeStartRAF();
-    }
+    const ag = (d.agent || "coordinator").toLowerCase();
+    const turn = (_activeTurn && _activeTurn.agent === ag && !_activeTurn.done)
+      ? _activeTurn
+      : _startTurn(ag, d.phase, d.role);
+    _appendTurnText(turn, d.text || "");
     return;
   }
 
-  // 发言完成：仅清除"谁在说话"状态，segment 继续在队列中被打字机消化
   if (ev === "agent_speak") {
-    const ag = (d.agent||"").toLowerCase();
-    if (_streamAgent === ag && _streamEl) {
-      _streamEl = null; _streamBody = null; _streamAgent = null; _curSeg = null;
-      return;
-    }
-    // 无前置 chunk 的回放：整段文字直接入队
-    const cls = agentClass(ag);
-    const bubble = mk("ev-speak " + cls,
-      `<div class="tag">${agentName(ag)}</div><div class="body"></div>`);
-    const bodyEl = bubble.querySelector(".body");
-    _curSeg = {el: bodyEl, buf: d.response || ''};
-    _typeSegs.push(_curSeg);
-    bodyEl.classList.add("typing");
-    app_(bubble);
-    if (_curSeg.buf) _typeStartRAF();
-    _streamEl = null; _streamBody = null; _streamAgent = null; _curSeg = null;
+    _completeTurn(d.agent, d.response || "");
     return;
   }
 
@@ -437,8 +514,7 @@ function render(d) {
   }
 
   if (ev === "session_end") {
-    _typeFlushAll(); _curSeg = null;
-    _streamEl = null; _streamBody = null; _streamAgent = null;
+    _typeCompleteAll();
     const ok = d.outcome === "success";
     badge.textContent = ok ? "完成" : d.outcome;
     badge.className   = ok ? "done" : "error";
@@ -519,8 +595,16 @@ def events():
                     yield ": ka\n\n"
 
     gen = stream_live() if live else stream_replay()
-    return Response(gen, content_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return Response(
+        stream_with_context(gen),
+        mimetype="text/event-stream",
+        direct_passthrough=True,
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/metrics")

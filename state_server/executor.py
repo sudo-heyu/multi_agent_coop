@@ -82,7 +82,7 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
         if dbm is None:
             results["tx_power"] = {"ok": False, "error": "params 中缺少 tx_power_dbm"}
         elif mock:
-            print(f"  [mock] iw dev {iface} set txpower fixed {int(dbm * 100)} (={dbm} dBm)")
+            print(f"[mock] iw dev {iface} set txpower fixed {int(dbm * 100)} (={dbm} dBm)")
             results["tx_power"] = {"ok": True, "value_dbm": dbm, "mock": True}
         else:
             ok, out = _apply_tx_power(iface, dbm)
@@ -95,7 +95,7 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
         if any(v is None for v in (cwmin, cwmax, aifsn)):
             results["edca"] = {"ok": False, "error": "params 中缺少 CWmin/CWmax/AIFSN"}
         elif mock:
-            print(f"  [mock] hostapd_cli set_edca_params 0 {aifsn} {cwmin} {cwmax} 0")
+            print(f"[mock] hostapd_cli set_edca_params 0 {aifsn} {cwmin} {cwmax} 0")
             results["edca"] = {"ok": True, "CWmin": cwmin, "CWmax": cwmax, "AIFSN": aifsn, "mock": True}
         else:
             ok, out = _apply_edca(iface, int(cwmin), int(cwmax), int(aifsn))
@@ -128,7 +128,7 @@ def apply():
         return jsonify({"ok": False, "error": "missing params"}), 400
 
     print(f"\n[executor] 收到决策推送 session={session_id} strategy={strategy}")
-    print(f"  params: {params}")
+    print(f"params: {params}")
 
     result = apply_params(strategy, params, _IFACE, _MOCK)
     result["ap_id"]      = _AP_ID
@@ -139,7 +139,7 @@ def apply():
     _last_result = result
 
     status = "ok" if result["ok"] else "error"
-    print(f"  [executor] 执行{'成功' if result['ok'] else '失败'} — {result['details']}")
+    print(f"[executor] 执行{'成功' if result['ok'] else '失败'} — {result['details']}")
     return jsonify(result), 200 if result["ok"] else 500
 
 

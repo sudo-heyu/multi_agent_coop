@@ -25,11 +25,12 @@
   "noise_floor_dbm": -92.0,
   "throughput_mbps": 18.4,
   "latency_ms": 312.0,
-  "packet_loss_pct": 1.2
+  "packet_loss_pct": 1.2,
+  "source": "ap"
 }
 ```
 
-所有字段必填，缺少任一返回 400。`ap_id` 固定为本机编号，不能乱填。
+除 `source` 外所有字段必填，缺少任一返回 400。`ap_id` 固定为本机编号，不能乱填。真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`，严禁把生成数据作为真实 QoS 观测上报。
 
 **响应**：
 
@@ -184,8 +185,8 @@ hostapd_cli -i wlan0 get_edca_params 0
 ## 四、本地联调（无真实硬件）
 
 ```bash
-# 终端 1
-python state_server/server.py
+# 终端 1（本地 mock 联调才允许 --allow-mock）
+python state_server/server.py --allow-mock
 
 # 终端 2
 python state_server/reporter.py --mock --all --server http://localhost:5001

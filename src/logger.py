@@ -7,7 +7,6 @@
 
 ━━━ 事件类型一览 ━━━
   session_start     运行开始（模型、场景、AP 初始状态）
-  strategy_decided  策略路由结果（co_sr / co_edca / joint）和提案方
   phase_start       协商阶段开始（阶段号 + 标签）
   tool_call         计算工具调用（工具名、输入、完整输出、耗时）
   agent_speak       Agent 发言（角色、指令、回复全文、耗时）
@@ -33,7 +32,6 @@ LOG_DIR = Path("logs")
 # 控制台各事件的前缀标签（对齐输出）
 _LABELS: dict[str, str] = {
     "session_start":      "会话开始",
-    "strategy_decided":   "策略",
     "phase_start":        "阶段",
     "tool_call":          "工具",
     "agent_speak":        "发言",
@@ -137,12 +135,6 @@ class SessionLogger:
         self._console("session_start",
                       f"id={self.session_id} model={model} scene={scene} "
                       f"log={self.log_path}")
-
-    def strategy_decided(self, strategy: str, proposer: str) -> None:
-        """策略路由结果和提案方已确定。"""
-        self._write("strategy_decided", strategy=strategy, proposer=proposer)
-        self._console("strategy_decided",
-                      f"strategy={strategy.upper()} proposer={proposer.upper()}")
 
     def phase_start(self, phase: int, label: str) -> None:
         """协商阶段开始。phase: 1=广播, 2=提案, 3=投票, 4=最终决策"""

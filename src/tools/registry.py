@@ -105,7 +105,9 @@ TOOL_DEFINITIONS: list[dict] = [
                 "评估一个候选 Co-SR TX Power 方案是否满足 CCA / SINR / STA RSSI 三重约束，"
                 "并返回总降功率、最大单 AP 降功率、STA RSSI 余量等代价指标。"
                 "提案方生成候选后必须调用；投票方验算提案时也调用。"
-                "【投票阶段】无需传入 proposed_powers，省略即自动验算当前被投票的提案。"
+                "【提案/自检阶段】必须显式传入 proposed_powers（你打算提出的功率），"
+                "否则会被当成空提案、退化为验算当前功率，结果无意义。"
+                "【投票阶段】才可省略 proposed_powers，省略即自动验算当前被投票的提案。"
             ),
             "parameters": {
                 "type": "object",
@@ -115,7 +117,7 @@ TOOL_DEFINITIONS: list[dict] = [
                         "description": (
                             "候选功率（dBm），键名为小写 ap_id。"
                             '例如：{"ap1": 7.0, "ap2": 7.0, "ap3": 8.0}。'
-                            "投票阶段验算当前提案时可省略此参数。"
+                            "提案/自检阶段必须传入；仅投票阶段验算当前提案时可省略。"
                         ),
                         "additionalProperties": {"type": "number"},
                     }
@@ -168,7 +170,9 @@ TOOL_DEFINITIONS: list[dict] = [
                 "验证提案中各 AP 的 EDCA 参数是否在合法范围内："
                 "CWmin ∈ [3, 1023]、CWmax ∈ [7, 1023]、AIFSN ∈ [1, 15]、CWmax > CWmin。"
                 "在投票验算阶段或提案修订后的自检中调用此工具。"
-                "【投票阶段】无需传入 proposed_edca，省略即自动验算当前被投票的提案。"
+                "【提案/自检阶段】必须显式传入 proposed_edca（你打算提出的 EDCA 参数），"
+                "否则会因参数缺失而无法验算。"
+                "【投票阶段】才可省略 proposed_edca，省略即自动验算当前被投票的提案。"
             ),
             "parameters": {
                 "type": "object",
@@ -178,7 +182,7 @@ TOOL_DEFINITIONS: list[dict] = [
                         "description": (
                             "各 AP 的 EDCA 参数，键名为小写 ap_id。"
                             '例如：{"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3}, ...}。'
-                            "投票阶段验算当前提案时可省略此参数。"
+                            "提案/自检阶段必须传入；仅投票阶段验算当前提案时可省略。"
                         ),
                         "additionalProperties": {
                             "type": "object",

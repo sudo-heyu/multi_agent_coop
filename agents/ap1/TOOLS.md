@@ -53,9 +53,12 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 **参数**：无（工具自动读取当前 AP 状态）
 
 **返回字段说明**：
-- `ranges`：每个 AP 的 `current_dbm` / `min_dbm` / `max_dbm` / 约束原因
-- `candidate_hints`：适合进一步评估的候选提示，例如 `minimal_necessary_drop`
+- `ranges`：每个 AP 的 `current_dbm` / `min_dbm` / `max_dbm` / `min_int_dbm` / `max_int_dbm` / 约束原因
+- `integer_power_required`：恒为 `true`，提醒功率调整量必须为整数 dB
+- `candidate_hints`：适合进一步评估的候选提示（已取整为整数 dBm），例如 `minimal_necessary_drop`
 - `notes`：使用区间时的注意事项
+
+**整数约束**：`tx_power_dbm` 只能取整数（参考 `min_int_dbm` / `max_int_dbm`）；功率降低量必须是整数 dB。
 
 ---
 
@@ -78,10 +81,16 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 }
 ```
 
+**传参规则（重要）**：
+- **提案 / 提交前自检**：必须显式传入 `proposed_powers`（你打算提出的功率）。此阶段没有"当前提案"可供回填，省略会被当成空提案、退化为验算当前功率，结果无意义。
+- **投票验算**：可省略 `proposed_powers`，工具会自动验算当前被投票的提案。
+
 **返回字段说明**：
-- `valid`：候选方案整体是否合法
+- `valid`：候选方案整体是否合法（功率调整量非整数 dB 时为 `false`）
 - `score`：`total_power_drop_db` / `max_single_ap_drop_db` / `min_sta_rssi_margin_db` 等
-- `per_ap`：每个 AP 的 `cca_ok` / `sinr_ok` / `sta_rssi_ok` / `errors`
+- `per_ap`：每个 AP 的 `cca_ok` / `sinr_ok` / `sta_rssi_ok` / `delta_is_integer` / `errors`
+
+**注意**：候选 `tx_power_dbm` 必须为整数，相对当前功率的调整量必须是整数 dB，否则 `valid=false`。
 
 ---
 
@@ -132,6 +141,10 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
   }
 }
 ```
+
+**传参规则（重要）**：
+- **提案 / 提交前自检**：必须显式传入 `proposed_edca`（你打算提出的 EDCA 参数）。此阶段没有"当前提案"可供回填，省略会直接报"参数缺失"。
+- **投票验算**：可省略 `proposed_edca`，工具会自动验算当前被投票的提案。
 
 **返回字段说明**：
 

@@ -44,6 +44,7 @@
 | `throughput_mbps` | float | Mbps | 实测吞吐量 |
 | `latency_ms` | float | ms | 端到端往返延迟 |
 | `packet_loss_pct` | float | % | 丢包率（0–100） |
+| `source` | string | — | 可选，默认视为 `ap`；真实部署不得使用 `mock` / `generated` / `synthetic` 等生成源 |
 
 **请求示例（ap1）**：
 
@@ -64,7 +65,8 @@ curl -X POST http://<SPARK_IP>:5001/state \
     "noise_floor_dbm": -92.0,
     "throughput_mbps": 18.4,
     "latency_ms": 312.0,
-    "packet_loss_pct": 1.2
+    "packet_loss_pct": 1.2,
+    "source": "ap"
   }'
 ```
 
@@ -168,7 +170,8 @@ curl http://<SPARK_IP>:5001/health
 2. **上报周期建议 10 秒**，超过 60 秒未上报服务器会将该 AP 标记为 `stale`
 3. **`neighbor_rssi_dbm`** 填写本机扫描到的邻居 BSS 信号强度，key 使用对方的 `ap_id`
 4. **时间戳建议使用 UTC**，格式 `2026-05-19T07:15:00.000000+00:00`
-5. 所有字段均为必填，缺少任一字段服务器返回 400
+5. 除 `source` 外所有字段均为必填，缺少任一字段服务器返回 400
+6. 真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`，禁止把生成数据作为真实 QoS 观测上报
 
 ---
 
@@ -179,13 +182,14 @@ curl http://<SPARK_IP>:5001/health
 ```bash
 python state_server/server.py
 # 服务监听 0.0.0.0:5001
+# 默认真实上报模式，拒收生成数据源
 ```
 
 ## 本地 mock 测试（无香蕉派时）
 
 ```bash
-# 终端 1：启动服务器
-python state_server/server.py
+# 终端 1：启动服务器；只有本地 mock 测试才允许 --allow-mock
+python state_server/server.py --allow-mock
 
 # 终端 2：模拟三台香蕉派上报
 python state_server/reporter.py --mock --all

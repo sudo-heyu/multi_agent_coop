@@ -120,7 +120,7 @@ class APAgent:
             payload["tools"] = tools
 
         payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode())
-        print(f"  [PPIO] 请求大小: {payload_bytes} bytes / {payload_bytes//4} 估算tokens  消息数: {len(messages)}", flush=True)
+        print(f"[PPIO] 请求大小: {payload_bytes} bytes / {payload_bytes//4} 估算tokens  消息数: {len(messages)}", flush=True)
         resp = _HTTP.post(PPIO_URL, headers=self._ppio_headers, json=payload, timeout=180)
         if not resp.ok:
             try:
@@ -137,7 +137,7 @@ class APAgent:
                          "args_valid": _is_valid_json(tc.get("function", {}).get("arguments", "{}"))}
                         for tc in m["tool_calls"]
                     ])
-                print(f"  [{i}] role={m['role']} content={repr(str(m.get('content',''))[:60])}{tc_info}", flush=True)
+                print(f"[{i}] role={m['role']} content={repr(str(m.get('content',''))[:60])}{tc_info}", flush=True)
             raise RuntimeError(
                 f"PPIO {resp.status_code}: {err_body}"
             )
@@ -184,6 +184,19 @@ class APAgent:
         tools: list[dict] | None = None,
     ) -> Iterator[str]:
         """PPIO OpenAI SSE 流式请求，逐块产出内容。"""
+        yield from self._stream_chat_ppio_message(messages, tools)
+
+    def _stream_chat_ppio_message(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> Iterator[str]:
+        """
+        PPIO OpenAI-compatible SSE 请求。
+
+        逐块 yield content，同时累计 delta.tool_calls，并在 generator return 中
+        返回标准 message dict，供工具调用循环继续处理。
+        """
         payload: dict = {
             "model":  PPIO_MODEL,
             "stream": True,
@@ -192,9 +205,18 @@ class APAgent:
         if tools:
             payload["tools"] = tools
 
+        content_parts: list[str] = []
+        tool_parts: dict[int, dict] = {}
+
         with _HTTP.post(PPIO_URL, headers=self._ppio_headers,
                         json=payload, timeout=180, stream=True) as resp:
-            resp.raise_for_status()
+            if not resp.ok:
+                try:
+                    err_body = resp.json()
+                except Exception:
+                    err_body = resp.text
+                raise RuntimeError(f"PPIO {resp.status_code}: {err_body}")
+
             for raw in resp.iter_lines():
                 if not raw:
                     continue
@@ -208,10 +230,44 @@ class APAgent:
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+
                 content = delta.get("content") or ""
                 if content:
+                    content_parts.append(content)
                     yield content
+
+                for tc_delta in delta.get("tool_calls") or []:
+                    idx = tc_delta.get("index")
+                    if idx is None:
+                        idx = len(tool_parts)
+                    acc = tool_parts.setdefault(idx, {
+                        "id": "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    })
+                    if tc_delta.get("id"):
+                        acc["id"] = tc_delta["id"]
+                    if tc_delta.get("type"):
+                        acc["type"] = tc_delta["type"]
+
+                    fn_delta = tc_delta.get("function") or {}
+                    if fn_delta.get("name"):
+                        acc["function"]["name"] += fn_delta["name"]
+                    if fn_delta.get("arguments"):
+                        acc["function"]["arguments"] += fn_delta["arguments"]
+
+        tool_calls = [
+            tc for _, tc in sorted(tool_parts.items())
+            if tc.get("id") or tc.get("function", {}).get("name") or tc.get("function", {}).get("arguments")
+        ]
+        return {
+            "role": "assistant",
+            "content": "".join(content_parts),
+            "tool_calls": tool_calls,
+        }
 
     def speak_stream(
         self,
@@ -335,16 +391,12 @@ class APAgent:
         tool_log: list | None,
         tool_callback: Callable[[str, dict, dict, float], None] | None,
     ) -> Iterator[str]:
-        """PPIO 后端的工具调用循环：工具轮用非流式，最终回复用流式。"""
+        """PPIO 后端的工具调用循环：全程 SSE 流式解析 content 与 tool_calls。"""
         for _ in range(MAX_TOOL_ROUNDS):
-            msg = self._request_chat_ppio(messages, tools)
+            msg = yield from self._stream_chat_ppio_message(messages, tools)
             tool_calls = msg.get("tool_calls") or []
 
             if not tool_calls:
-                # 无工具调用：直接 yield 已取得的内容，不再重发请求
-                content = msg.get("content") or ""
-                if content:
-                    yield content
                 return
 
             # 存入历史前确保每个 tool_call 的 arguments 是合法 JSON 字符串，

@@ -5,6 +5,7 @@
 AP agent 通过 GET /state 获取所有 AP 的最新状态。
 """
 import threading
+import argparse
 from collections import deque
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template_string
@@ -14,12 +15,14 @@ app = Flask(__name__)
 VALID_AP_IDS = {"ap1", "ap2", "ap3"}
 STALE_THRESHOLD_SECONDS = 60
 HISTORY_MAXLEN = 120  # 保留最近 120 条，约 20 分钟（10s/条）
+GENERATED_SOURCES = {"mock", "generated", "synthetic", "simulated", "simulation", "random"}
+ALLOW_MOCK_SOURCE = False
 
 # 内存存储：{ap_id: {"data": {...}, "timestamp": datetime}}
 _store: dict = {}
 _lock = threading.Lock()
 
-# 历史缓冲：{ap_id: deque([{"t":..., "throughput_mbps":..., "latency_ms":..., "packet_loss_pct":...}])}
+# 历史缓冲：{ap_id: deque([{"t":..., 指标字段与 MAC 参数字段...}])}
 _history: dict = {ap: deque(maxlen=HISTORY_MAXLEN) for ap in ["ap1", "ap2", "ap3"]}
 
 REQUIRED_FIELDS = {
@@ -61,8 +64,8 @@ _INDEX_HTML = """
     .na   { color: #aaa; }
     .charts-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 20px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
       margin-top: 8px;
     }
     .chart-box {
@@ -72,7 +75,7 @@ _INDEX_HTML = """
       box-shadow: 0 1px 4px rgba(0,0,0,.1);
     }
     .chart-box h3 { margin: 0 0 10px; font-size: 14px; color: #333; }
-    canvas { width: 100% !important; height: 200px !important; }
+    canvas { width: 100% !important; height: 170px !important; }
     #last-update { color: #888; font-size: 12px; margin-bottom: 12px; }
   </style>
 </head>
@@ -130,21 +133,81 @@ _INDEX_HTML = """
       <h3>丢包率 (%)</h3>
       <canvas id="chart-loss"></canvas>
     </div>
+    <div class="chart-box">
+      <h3>Txpower (dBm)</h3>
+      <canvas id="chart-txpower"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>CWmin</h3>
+      <canvas id="chart-cwmin"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>CWmax</h3>
+      <canvas id="chart-cwmax"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>AIFSN</h3>
+      <canvas id="chart-aifsn"></canvas>
+    </div>
   </div>
 
 <script>
+const DEFAULT_TIME_WINDOW_S = 40;
 const AP_COLORS = {
   ap1: { border: "#e74c3c", bg: "rgba(231,76,60,0.1)" },
   ap2: { border: "#3498db", bg: "rgba(52,152,219,0.1)" },
   ap3: { border: "#2ecc71", bg: "rgba(46,204,113,0.1)" },
 };
 const APS = ["ap1", "ap2", "ap3"];
+const CHART_SPECS = [
+  { key: "throughput_mbps", chart: "throughput", canvas: "chart-throughput", label: "Mbps" },
+  { key: "latency_ms",      chart: "latency",    canvas: "chart-latency",    label: "ms" },
+  { key: "packet_loss_pct", chart: "loss",       canvas: "chart-loss",       label: "%" },
+  { key: "tx_power_dbm",    chart: "txpower",    canvas: "chart-txpower",    label: "dBm" },
+  { key: "cwmin",           chart: "cwmin",      canvas: "chart-cwmin",      label: "CWmin" },
+  { key: "cwmax",           chart: "cwmax",      canvas: "chart-cwmax",      label: "CWmax" },
+  { key: "aifsn",           chart: "aifsn",      canvas: "chart-aifsn",      label: "AIFSN" },
+];
 
-function makeDataset(ap, field, history) {
+function parseTsMs(value) {
+  const ms = Date.parse(value || "");
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function historyStartMs(history) {
+  let first = null;
+  APS.forEach(ap => {
+    (history[ap] || []).forEach(row => {
+      const ms = parseTsMs(row.t);
+      if (ms !== null && (first === null || ms < first)) first = ms;
+    });
+  });
+  return first;
+}
+
+function elapsedSeconds(row, startMs) {
+  const ms = parseTsMs(row.t);
+  if (ms === null || startMs === null) return null;
+  return Math.max(0, (ms - startMs) / 1000);
+}
+
+function timelineMaxSeconds(history, startMs) {
+  let maxSec = DEFAULT_TIME_WINDOW_S;
+  APS.forEach(ap => {
+    (history[ap] || []).forEach(row => {
+      const sec = elapsedSeconds(row, startMs);
+      if (sec !== null && sec > maxSec) maxSec = sec;
+    });
+  });
+  return Math.ceil(maxSec / 10) * 10;
+}
+
+function makeDataset(ap, field, history, startMs) {
   const rows = history[ap] || [];
   return {
     label: ap.toUpperCase(),
-    data: rows.map(r => ({ x: r.t, y: r[field] })),
+    data: rows.map(r => ({ x: elapsedSeconds(r, startMs), y: r[field] }))
+      .filter(p => p.x !== null && p.y !== null && p.y !== undefined),
     borderColor: AP_COLORS[ap].border,
     backgroundColor: AP_COLORS[ap].bg,
     borderWidth: 2,
@@ -158,7 +221,7 @@ function makeChart(canvasId, field, yLabel) {
   const ctx = document.getElementById(canvasId).getContext("2d");
   return new Chart(ctx, {
     type: "line",
-    data: { datasets: APS.map(ap => makeDataset(ap, field, {})) },
+    data: { datasets: APS.map(ap => makeDataset(ap, field, {}, null)) },
     options: {
       animation: false,
       responsive: true,
@@ -166,9 +229,16 @@ function makeChart(canvasId, field, yLabel) {
       plugins: { legend: { position: "top", labels: { font: { size: 11 } } } },
       scales: {
         x: {
-          type: "time",
-          time: { unit: "minute", displayFormats: { minute: "HH:mm", second: "HH:mm:ss" } },
-          ticks: { maxTicksLimit: 6, font: { size: 10 } },
+          type: "linear",
+          min: 0,
+          max: DEFAULT_TIME_WINDOW_S,
+          title: { display: true, text: "时间 (s)", font: { size: 11 } },
+          ticks: {
+            stepSize: 5,
+            maxTicksLimit: 9,
+            font: { size: 10 },
+            callback: value => `${value}s`,
+          },
         },
         y: {
           title: { display: true, text: yLabel, font: { size: 11 } },
@@ -180,40 +250,32 @@ function makeChart(canvasId, field, yLabel) {
   });
 }
 
-// 需要 Chart.js 时间轴适配器
-const script = document.createElement("script");
-script.src = "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js";
-script.onload = () => {
-  const charts = {
-    throughput: makeChart("chart-throughput", "throughput_mbps", "Mbps"),
-    latency:    makeChart("chart-latency",    "latency_ms",      "ms"),
-    loss:       makeChart("chart-loss",       "packet_loss_pct", "%"),
-  };
+const charts = Object.fromEntries(
+  CHART_SPECS.map(spec => [spec.chart, makeChart(spec.canvas, spec.key, spec.label)])
+);
 
-  function refresh() {
-    fetch("/history")
-      .then(r => r.json())
-      .then(history => {
-        const fields = ["throughput_mbps", "latency_ms", "packet_loss_pct"];
-        const keys   = ["throughput", "latency", "loss"];
-        keys.forEach((key, i) => {
-          const chart = charts[key];
-          APS.forEach((ap, di) => {
-            const rows = history[ap] || [];
-            chart.data.datasets[di].data = rows.map(r => ({ x: r.t, y: r[fields[i]] }));
-          });
-          chart.update();
+function refresh() {
+  fetch("/history")
+    .then(r => r.json())
+    .then(history => {
+      const startMs = historyStartMs(history);
+      const maxSeconds = timelineMaxSeconds(history, startMs);
+      CHART_SPECS.forEach(spec => {
+        const chart = charts[spec.chart];
+        APS.forEach((ap, di) => {
+          chart.data.datasets[di].data = makeDataset(ap, spec.key, history, startMs).data;
         });
-        document.getElementById("last-update").textContent =
-          "最后更新: " + new Date().toLocaleTimeString();
-      })
-      .catch(() => {});
-  }
+        chart.options.scales.x.max = maxSeconds;
+        chart.update();
+      });
+      document.getElementById("last-update").textContent =
+        "最后更新: " + new Date().toLocaleTimeString() + ` · 时间轴 0-${maxSeconds}s`;
+    })
+    .catch(() => {});
+}
 
-  refresh();
-  setInterval(refresh, 5000);
-};
-document.head.appendChild(script);
+refresh();
+setInterval(refresh, 5000);
 </script>
 </body>
 </html>
@@ -268,6 +330,15 @@ def post_state():
     if ap_id not in VALID_AP_IDS:
         return jsonify({"error": f"unknown ap_id: {ap_id!r}"}), 400
 
+    source = str(body.get("source", "ap")).strip().lower()
+    if source in GENERATED_SOURCES and not ALLOW_MOCK_SOURCE:
+        return jsonify({
+            "error": (
+                f"generated data source {source!r} is not accepted by this server; "
+                "start with --allow-mock only for local mock tests"
+            )
+        }), 400
+
     try:
         ts = datetime.fromisoformat(body["timestamp"])
         if ts.tzinfo is None:
@@ -284,6 +355,10 @@ def post_state():
             "throughput_mbps": data.get("throughput_mbps"),
             "latency_ms":      data.get("latency_ms"),
             "packet_loss_pct": data.get("packet_loss_pct"),
+            "tx_power_dbm":    data.get("tx_power_dbm"),
+            "cwmin":           data.get("cwmin"),
+            "cwmax":           data.get("cwmax"),
+            "aifsn":           data.get("aifsn"),
         })
 
     return jsonify({"ok": True, "ap_id": ap_id}), 200
@@ -357,9 +432,22 @@ def health():
         ap_status = {
             ap_id: ap_id in _store for ap_id in VALID_AP_IDS
         }
-    return jsonify({"ok": True, "reported": ap_status}), 200
+    return jsonify({
+        "ok": True,
+        "reported": ap_status,
+        "allow_mock_source": ALLOW_MOCK_SOURCE,
+    }), 200
 
 
 if __name__ == "__main__":
-    print("状态服务器启动于 http://0.0.0.0:5001")
+    parser = argparse.ArgumentParser(description="全局 AP 状态服务器")
+    parser.add_argument(
+        "--allow-mock",
+        action="store_true",
+        help="仅本地联调使用：允许接收 source=mock/generated 的生成数据",
+    )
+    args = parser.parse_args()
+    ALLOW_MOCK_SOURCE = args.allow_mock
+    mode = "允许 mock 上报" if ALLOW_MOCK_SOURCE else "真实上报模式（拒收生成数据）"
+    print(f"状态服务器启动于 http://0.0.0.0:5001，{mode}")
     app.run(host="0.0.0.0", port=5001, debug=False)

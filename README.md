@@ -39,6 +39,7 @@ python run.py qwen3.6:27b --mock --scene joint
 ```bash
 python state_server/server.py
 # 监听 0.0.0.0:5001
+# 默认真实上报模式：拒收 source=mock/generated/synthetic 等生成数据
 # 浏览器打开 http://localhost:5001 可查看实时 AP 状态
 ```
 
@@ -48,7 +49,8 @@ python state_server/server.py
 # 在香蕉派上运行，--ap-id 替换为对应 ID（ap1 / ap2 / ap3）
 python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001
 
-# 本地 mock 上报（测试用，模拟全部三台 AP）
+# 本地 mock 上报仅用于测试；状态服务器需显式用 --allow-mock 启动
+python state_server/server.py --allow-mock
 python state_server/reporter.py --mock --all
 ```
 

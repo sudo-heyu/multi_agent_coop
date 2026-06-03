@@ -21,25 +21,8 @@ MAX_VOTE_ROUNDS = 3
 
 # 按工具名预分组，避免重复过滤
 _GET_LATEST_STATE = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "get_latest_ap_states"]
-_SR_PROPOSE_TOOLS = [
-    t for t in TOOL_DEFINITIONS
-    if t["function"]["name"] in {
-        "analyze_sr_interference",
-        "compute_sr_feasible_ranges",
-        "evaluate_sr_candidate",
-        "rank_sr_candidates",
-    }
-]
 _VALIDATE_SR   = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "evaluate_sr_candidate"]
 _VALIDATE_EDCA = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "validate_edca_proposal"]
-
-
-def _tools_for_propose(strategy: str) -> list:
-    if strategy == "co_sr":
-        return _GET_LATEST_STATE + _SR_PROPOSE_TOOLS
-    if strategy == "co_edca":
-        return _GET_LATEST_STATE + _VALIDATE_EDCA
-    return TOOL_DEFINITIONS  # joint
 
 
 def _tools_for_vote(_strategy: str) -> list:
@@ -49,11 +32,31 @@ def _tools_for_vote(_strategy: str) -> list:
     return _GET_LATEST_STATE + _VALIDATE_SR + _VALIDATE_EDCA
 
 
+def _normalize_proposal(proposal: dict) -> dict:
+    """
+    规范化提案为嵌套格式。
+
+    模型有时把 Co-SR 提案写成扁平的 {"ap1": 6.0} 而非
+    {"ap1": {"tx_power_dbm": 6.0}}。裸数值统一提升为 tx_power_dbm 嵌套形式，
+    使策略推断与投票注入都能识别（否则会被误判为 co_edca）。
+    """
+    normalized: dict = {}
+    for ap_id, value in proposal.items():
+        if isinstance(value, bool):
+            normalized[ap_id] = value
+        elif isinstance(value, (int, float)):
+            normalized[ap_id] = {"tx_power_dbm": float(value)}
+        else:
+            normalized[ap_id] = value
+    return normalized
+
+
 def _infer_strategy_from_proposal(proposal: dict) -> str:
     """Detect negotiation strategy from fields present in the proposal JSON."""
     has_sr = any(
-        isinstance(v, dict) and "tx_power_dbm" in v
+        (isinstance(v, dict) and "tx_power_dbm" in v) or isinstance(v, (int, float))
         for v in proposal.values()
+        if not isinstance(v, bool)
     )
     has_edca = any(
         isinstance(v, dict) and any(k in v for k in ("CWmin", "CWmax", "AIFSN"))
@@ -67,15 +70,6 @@ def _infer_strategy_from_proposal(proposal: dict) -> str:
         return "co_edca"
     return "co_edca"
 
-
-
-def _strategy_label(strategy: str) -> str:
-    return {
-        "co_sr":  "Co-SR",
-        "co_edca": "Co-EDCA",
-        "joint":  "Co-SR + Co-EDCA",
-        "noop":   "NOOP",
-    }.get(strategy, strategy)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -118,7 +112,7 @@ def _extract_proposal(text: str) -> dict | None:
             if isinstance(parsed, dict):
                 hit = _matches(parsed)
                 if hit is not None:
-                    return hit
+                    return _normalize_proposal(hit)
         except json.JSONDecodeError:
             pass
 
@@ -129,7 +123,7 @@ def _extract_proposal(text: str) -> dict | None:
             if isinstance(parsed, dict):
                 hit = _matches(parsed)
                 if hit is not None:
-                    return hit
+                    return _normalize_proposal(hit)
         except json.JSONDecodeError:
             pass
     return None
@@ -193,13 +187,13 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
         states = result.get("ap_states", {}) if isinstance(result, dict) else {}
         lines  = [hdr]
         if result.get("error"):
-            lines.append(f"  {status_fail('错误:')} {result['error']}")
+            lines.append(f"{status_fail('错误:')} {result['error']}")
         for ap_id in AP_IDS:
             state = states.get(ap_id, {}) if isinstance(states, dict) else {}
             neighbors = state.get("neighbor_rssi_dbm") or {}
             nbr_text  = " ".join(f"{ap}:{int(rssi)}" for ap, rssi in neighbors.items()) or "—"
             lines.append(
-                f"  {ap_label(ap_id)}"
+                f"{ap_label(ap_id)}"
                 f" TX={_fmt_num(state.get('tx_power_dbm'), 'dBm')}"
                 f" busy={_fmt_pct(state.get('channel_busy_ratio'))}"
                 f" retry={_fmt_pct(state.get('tx_retries_ratio'))}"
@@ -231,7 +225,7 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
         link_summary = status_warn("  ".join(link_texts)) if link_texts else dim("无强干扰链路")
         lines = [
             f"{hdr}  CoSR={sr_flag} strong={strong_cnt} moderate={mod_cnt}",
-            f"  {link_summary}  干扰源:{top_src}  受害:{top_vic}",
+            f"{link_summary}  干扰源:{top_src}  受害:{top_vic}",
         ]
         return "\n".join(lines)
 
@@ -245,11 +239,11 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             lo      = _fmt_num(item.get("min_dbm"), "")
             hi      = _fmt_num(item.get("max_dbm"), "")
             reasons = dim(",".join(item.get("upper_reasons", [])) or "—")
-            lines.append(f"  {ap_label(ap_id)} {cur}→[{lo},{hi}]dBm  上界:{reasons}")
+            lines.append(f"{ap_label(ap_id)} {cur}→[{lo},{hi}]dBm  上界:{reasons}")
         seed = result.get("feasible_seed")
         if seed:
             seed_text = " ".join(f"{ap}={_fmt_num(p,'dBm')}" for ap, p in seed.items())
-            lines.append(f"  {dim('可行起点:')} {seed_text}")
+            lines.append(f"{dim('可行起点:')} {seed_text}")
         return "\n".join(lines)
 
     # ── evaluate_sr_candidate / validate_sr_proposal ──────────────────
@@ -265,12 +259,12 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
                 if not item.get("valid"):
                     errors   = item.get("errors") or []
                     err_text = "; ".join(e[:60] for e in errors[:2]) if errors else "未知"
-                    lines.append(f"  {status_fail(ap_id + ' FAIL:')} {err_text}")
+                    lines.append(f"{status_fail(ap_id + ' FAIL:')} {err_text}")
 
         score = result.get("score") if isinstance(result, dict) else None
         if isinstance(score, dict):
             lines.append(
-                f"  {dim('代价:')} 总降功={_fmt_num(score.get('total_power_drop_db'), 'dB')}"
+                f"{dim('代价:')} 总降功={_fmt_num(score.get('total_power_drop_db'), 'dB')}"
                 f" 最大单AP={_fmt_num(score.get('max_single_ap_drop_db'), 'dB')}"
                 f" STA余量={_fmt_num(score.get('min_sta_rssi_margin_db'), 'dB')}"
                 f" minSINR={_fmt_num(score.get('min_sinr_db'), 'dB')}"
@@ -287,7 +281,7 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             ok     = item.get("valid")
             sflag  = status_ok("OK") if ok else status_fail("FAIL")
             lines.append(
-                f"    #{item.get('rank')} {item.get('name')} {sflag}: {pw_txt}"
+                f"#{item.get('rank')} {item.get('name')} {sflag}: {pw_txt}"
                 f" | 降功={_fmt_num(score.get('total_power_drop_db'),'dB')}"
                 f" 最大={_fmt_num(score.get('max_single_ap_drop_db'),'dB')}"
             )
@@ -324,21 +318,21 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             item = result.get(ap_id, {})
             if not item.get("valid"):
                 lines.append(
-                    f"  {status_fail('[FAIL]')} {ap_id}: {'; '.join(item.get('errors') or [])}"
+                    f"{status_fail('[FAIL]')} {ap_id}: {'; '.join(item.get('errors') or [])}"
                 )
 
         for ap_id, eff in (effectiveness.get("per_ap") or {}).items():
             for w in eff.get("warnings") or []:
-                lines.append(f"  {status_warn('[WARN]')} {ap_id}: {w}")
+                lines.append(f"{status_warn('[WARN]')} {ap_id}: {w}")
         for w in (effectiveness.get("fairness") or {}).get("warnings") or []:
-            lines.append(f"  {status_warn('[WARN]')} 公平性: {w}")
+            lines.append(f"{status_warn('[WARN]')} 公平性: {w}")
 
         return "\n".join(lines)
 
     compact = json.dumps(result, ensure_ascii=False)
     if len(compact) > 200:
         compact = compact[:200] + "..."
-    return f"{hdr}\n  {compact}"
+    return f"{hdr}\n{compact}"
 
 
 
@@ -403,7 +397,7 @@ class NegotiationOrchestrator:
             for future in as_completed(futures):
                 ap_id, ok, msg = future.result()
                 status = "✓" if ok else "✗"
-                print(f"  [{status}] {ap_id.upper()}: {msg}")
+                print(f"[{status}] {ap_id.upper()}: {msg}")
 
     # ──────────────────────────────────────────────────────────────────────
     # 内部辅助
@@ -492,9 +486,13 @@ class NegotiationOrchestrator:
             if tools else None
         )
         speaker = speaker or ap_id.upper()
+        line_dirty = False
 
         def on_tool(tool_name: str, raw_args: dict, result_dict: dict, dur_ms: float) -> None:
-            print(f"\n{_format_tool_console(tool_name, raw_args, result_dict, dur_ms)}", flush=True)
+            nonlocal line_dirty
+            prefix = "\n" if line_dirty else ""
+            print(f"{prefix}{_format_tool_console(tool_name, raw_args, result_dict, dur_ms)}", flush=True)
+            line_dirty = False
 
         _CHUNK_BATCH = 40   # 文件日志批次大小（减少 JSONL 条目数）
 
@@ -511,6 +509,7 @@ class NegotiationOrchestrator:
                 self.logger.agent_speak_start(ap_id, phase, role)
 
             print(f"\n{format_ap_name(speaker)}:")
+            line_dirty = False
             _buf: list[str] = []
             _buf_len = 0
             for chunk in self.agents[ap_id].speak_stream(
@@ -522,7 +521,10 @@ class NegotiationOrchestrator:
                 tool_callback=on_tool,
             ):
                 chunks.append(chunk)
-                print(strip_md(chunk), end="", flush=True)
+                plain_chunk = strip_md(chunk)
+                print(plain_chunk, end="", flush=True)
+                if plain_chunk:
+                    line_dirty = not plain_chunk.endswith("\n")
                 # 每个 token 立即推送到 dashboard（不经文件批次，保证流式显示）
                 if self.logger:
                     self.logger.push_chunk(ap_id, chunk)
@@ -536,6 +538,7 @@ class NegotiationOrchestrator:
             if _buf and self.logger:
                 self.logger.agent_speak_chunk(ap_id, "".join(_buf))
             print()
+            line_dirty = False
 
             content = "".join(chunks).strip()
             tool_log.extend(attempt_tool_log)
@@ -691,6 +694,9 @@ class NegotiationOrchestrator:
             "  · 预期改善和主要权衡\n"
             "最终提交前必须调用 evaluate_sr_candidate（Co-SR/联合路径）或 "
             "validate_edca_proposal（Co-EDCA/联合路径）自检相关约束。\n"
+            "【关键】提案阶段自检时，必须把你打算提出的参数显式作为工具参数传入"
+            "（evaluate_sr_candidate 传 proposed_powers，validate_edca_proposal 传 proposed_edca）；"
+            "空参调用只在投票阶段有效，提案阶段空参会因缺参而无法验算。\n"
             "提案末尾必须用 ```json 代码块附上参数摘要，JSON 顶层键必须是 ap1/ap2/ap3。"
         )
         content = self._speak_and_log(
@@ -875,14 +881,13 @@ class NegotiationOrchestrator:
 
         # 阶段二：触发判断（不预定策略，由提案 AP 自主选路）
         if not self._is_negotiation_needed(ap_state):
-            print("\n[策略决策] NOOP | 网络状况良好，无需协商。")
+            print("\n[NOOP] 网络状况良好，无需协商。")
             if self.logger:
-                self.logger.phase_start(2, "策略决策: NOOP")
-                self.logger.strategy_decided("noop", "ap1")
+                self.logger.phase_start(2, "NOOP：无需协商")
             self._finish_session("noop", 0, started_at)
             return self.conversation_log
 
-        print("\n[策略决策] 协商已触发，首个提案方 AP1 自主选路")
+        print("\n[协商触发] 首个提案方 AP1 自主选路")
         if self.logger:
             self.logger.phase_start(2, "协商触发，等待 AP1 自主选路")
 
@@ -906,9 +911,6 @@ class NegotiationOrchestrator:
                 return self.conversation_log
 
             strategy = _infer_strategy_from_proposal(proposal)
-            print(f"\n[策略推断] AP1 选择了 {_strategy_label(strategy)} 路径")
-            if self.logger:
-                self.logger.strategy_decided(strategy, "ap1")
 
             agree_set: set[str] = set()
 
@@ -978,15 +980,7 @@ class NegotiationOrchestrator:
                     if new_proposal is not None:
                         proposal_num += 1
                         current_proposer = voter_id
-                        new_strategy = _infer_strategy_from_proposal(new_proposal)
-                        if new_strategy != strategy:
-                            print(
-                                f"\n[策略切换] {voter_id.upper()} 反提案切换路径："
-                                f" {_strategy_label(strategy)} → {_strategy_label(new_strategy)}"
-                            )
-                            if self.logger:
-                                self.logger.strategy_decided(new_strategy, voter_id)
-                        strategy = new_strategy
+                        strategy = _infer_strategy_from_proposal(new_proposal)
                         proposal = new_proposal
                         agree_set = set()
                         # ap_cycle 已自然推进到 voter_id 之后，无需额外操作
