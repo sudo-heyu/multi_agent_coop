@@ -43,7 +43,7 @@ orchestrator 在第二阶段（提案）自动调用此工具，将结果注入�
 
 ## 函数接口
 
-### `classify_congestion(channel_busy_ratio, tx_retries_ratio) → str`
+### `classify_congestion(Data_rate_to_bandwidth_ratio, tx_retries_ratio) → str`
 
 判断单个 AP 的拥塞等级。
 
@@ -96,7 +96,7 @@ ok, errors = validate({"CWmin": 63, "CWmax": 15, "AIFSN": 4})
 ```python
 from src.tools.edca import evaluate_edca_effectiveness
 
-ap_states    = { "ap1": {"channel_busy_ratio": 0.82, "tx_retries_ratio": 0.31, ...}, ... }
+ap_states    = { "ap1": {"Data_rate_to_bandwidth_ratio": 0.82, "tx_retries_ratio": 0.31, ...}, ... }
 proposed_edca = { "ap1": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, ... }  # 太激进
 
 result = evaluate_edca_effectiveness(ap_states, proposed_edca)

@@ -12,8 +12,8 @@
 **位置**：`src/tools/registry.py` → 绑定当前状态源
 **适用阶段**：所有提案阶段、所有投票验算阶段、提案修订阶段
 
-获取所有 AP 的最新参数状态，包括 TX Power、EDCA 参数、信道占用率、
-重传率、邻居 RSSI、STA RSSI、噪声、吞吐、时延和丢包等指标。
+获取所有 AP 的最新参数状态，包括 TX Power、EDCA 参数、信道利用率（Data rate-to-bandwidth ratio）、
+重传率、邻居 RSSI、STA RSSI、噪声、吞吐（iperf/user 双路及各自 AC 类型）、时延和丢包等指标。
 
 **参数**：无
 
@@ -39,6 +39,32 @@
 - `primary_interferers`：主要干扰源排序
 - `primary_victims`：主要受害 AP 排序
 - `co_sr_triggered`：是否触发 Co-SR
+
+---
+
+## select_sr_concurrent_groups
+
+**位置**：`src/tools/sr.py` → `select_concurrent_groups()`
+**适用阶段**：Co-SR 或联合协商的提案阶段
+
+先枚举可行空间复用并发组，再给出组内推荐 TX Power。用于部分并发：
+例如最远的 `ap1` / `ap3` 可进入 `concurrent_group`，中间强干扰 `ap2`
+放入 `non_concurrent_aps`，不参与同一并发时刻。
+
+**参数**：
+```json
+{"min_group_size": 2}
+```
+
+**返回字段说明**：
+- `best_group`：排序后的最佳并发组，包含 `concurrent_group` / `non_concurrent_aps` / `recommended_powers`
+- `valid_groups`：所有可行并发组
+- `all_groups`：包含不可行组及其原因
+
+**提案要求**：若采用部分并发，最终 JSON 除每个 AP 的 `tx_power_dbm` 外，还应包含：
+```json
+{"_sr": {"concurrent_group": ["ap1", "ap3"], "non_concurrent_aps": ["ap2"]}}
+```
 
 ---
 
@@ -77,12 +103,13 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
     "ap1": 7.0,
     "ap2": 7.0,
     "ap3": 8.0
-  }
+  },
+  "concurrent_group": ["ap1", "ap3"]
 }
 ```
 
 **传参规则（重要）**：
-- **提案 / 提交前自检**：必须显式传入 `proposed_powers`（你打算提出的功率）。此阶段没有"当前提案"可供回填，省略会被当成空提案、退化为验算当前功率，结果无意义。
+- **提案 / 提交前自检**：必须显式传入 `proposed_powers`（你打算提出的功率）。部分并发时还必须传入 `concurrent_group`。此阶段没有"当前提案"可供回填，省略会被当成空提案、退化为验算当前功率，结果无意义。
 - **投票验算**：可省略 `proposed_powers`，工具会自动验算当前被投票的提案。
 
 **返回字段说明**：
@@ -122,22 +149,39 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 
 ## validate_edca_proposal
 
-**位置**：`src/tools/edca.py` → `validate()`
+**位置**：`src/tools/edca.py`
 **适用阶段**：投票验算阶段，或提案方在提交前自检
 
-检查各 AP 的 EDCA 参数是否在 IEEE 802.11 合法范围内：
+执行两项校验：
+
+**① 范围合规（IEEE 802.11 标准）**
 - CWmin ∈ [3, 1023]
 - CWmax ∈ [7, 1023]
 - AIFSN ∈ [1, 15]
 - CWmax > CWmin
 
+**② 优先级排序**（核心 QoS 约束）
+
+各 AP 状态中含 `traffic_priority` 字段（`high` / `medium` / `low`），表示该 AP 所承载业务的优先级。优先级决定 EDCA 参数的调整方向：
+
+- **高优先级（high）**：应使用**更小**的 CWmin、CWmax、AIFSN。更小的退避窗口和更短的 AIFS 间隔，使高优先级 AP 比低优先级 AP 更早开始竞争并更早接入信道，从而降低时延、保障 QoS。
+- **低优先级（low）**：应使用**更大**的 CWmin、CWmax、AIFSN，主动放慢竞争节奏，让出信道机会给高优先级业务。
+- **中优先级（medium）**：参数介于两者之间。
+
+工具强制要求不同优先级 AP 的参数满足单调性：
+```
+high.CWmin ≤ medium.CWmin ≤ low.CWmin
+high.AIFSN ≤ medium.AIFSN ≤ low.AIFSN
+```
+同优先级的多个 AP 之间无顺序约束。
+
 **参数**：
 ```json
 {
   "proposed_edca": {
-    "ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3},
+    "ap1": {"CWmin": 3,  "CWmax": 15, "AIFSN": 2},
     "ap2": {"CWmin": 7,  "CWmax": 31, "AIFSN": 3},
-    "ap3": {"CWmin": 7,  "CWmax": 31, "AIFSN": 4}
+    "ap3": {"CWmin": 15, "CWmax": 63, "AIFSN": 6}
   }
 }
 ```
@@ -150,14 +194,12 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 
 - 每个 AP（`ap1` / `ap2` / `ap3`）：`valid` / `errors` / 回传的 `CWmin` / `CWmax` / `AIFSN`
 - `effectiveness.per_ap.<ap_id>`：
-  - `recommended_level`：工具根据当前 busy/retry 判断的推荐等级
-  - `cwmin_delta_vs_rec`：提案 CWmin 与推荐值之差（负数表示更激进）
-  - `estimated_p_collision`：简化碰撞概率估算
-  - `warnings`：合理性警告列表（空=无异常）
-- `effectiveness.fairness.warnings`：AIFSN 差值 ≥ 3 时触发，说明低 AIFSN AP 将系统性占优
-- `effectiveness.all_ok`：所有 AP 及公平性均无警告时为 true
+  - `traffic_priority`：该 AP 的业务优先级
+  - `cwmin` / `aifsn`：提案参数（用于排序校验）
+- `effectiveness.priority_ordering.warnings`：优先级排序违规时触发（高优先级参数 > 低优先级参数）
+- `effectiveness.all_ok`：排序校验全部通过时为 true
 
-**投票建议**：若 `valid=false` 或 `effectiveness.warnings` 非空，应说明具体问题并表示不同意。
+**投票建议**：若 `valid=false` 或 `effectiveness.priority_ordering.ok=false`，应说明具体问题并表示不同意。
 
 ---
 
@@ -165,7 +207,7 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 
 | 阶段 | 你的角色 | 应调用的工具 |
 |------|---------|------------|
-| 提案（Co-SR） | 提案方 | `get_latest_ap_states` → `analyze_sr_interference` → `compute_sr_feasible_ranges` → `rank_sr_candidates` / `evaluate_sr_candidate` |
+| 提案（Co-SR） | 提案方 | `get_latest_ap_states` → `analyze_sr_interference` → `select_sr_concurrent_groups` → `evaluate_sr_candidate` |
 | 提案（Co-EDCA） | 提案方 | `get_latest_ap_states` → 自行提出 EDCA 候选 → `validate_edca_proposal` 自检 |
 | 提案（联合） | 提案方 | `get_latest_ap_states` → Co-SR 分析/候选工具 + `validate_edca_proposal` |
 | 投票（Co-SR） | 投票方 | `get_latest_ap_states` → `evaluate_sr_candidate`（传入提案中的功率值） |

@@ -11,9 +11,9 @@
 **必须覆盖的数据**：
 
 - MAC 参数：TX Power（dBm）、CWmin、CWmax、AIFSN
-- 信道指标：Channel Busy Ratio（%）、TX Retries Ratio（%）
+- 信道指标：Data rate-to-bandwidth ratio 信道利用率（%）、TX Retries Ratio（%）
 - 感知指标：邻居 AP RSSI（dBm）**【本机扫描所得，属于己方观测数据，必须播报】**、己方 STA RSSI（dBm）、Noise Floor（dBm）
-- 业务质量：吞吐量（Mbps）、延迟（ms）、丢包率（%）
+- 业务质量：吞吐量 iperf/user 双路（Mbps，各含接入类别 AC：BE/BK/VI/VO）、延迟（ms）、丢包率（%）
 
 **表达要求**：
 - 不要只机械罗列字段，也不要每次套用同一段话；可以按 MAC、信道、感知、业务质量的顺序自然说明。

@@ -28,46 +28,73 @@ DEFAULT_SERVER = "http://localhost:5001"
 DEFAULT_INTERVAL = 10  # 秒
 
 # ------------------------------------------------------------------
+# 业务优先级配置（按 AP 写死；硬件读不到此信息，由部署人员配置）
+# high  = 语音/视频等时延敏感业务 → 协商时调低 EDCA
+# medium= 通用数据业务（默认）
+# low   = 后台下载/批量传输 → 协商时调高 EDCA
+# ------------------------------------------------------------------
+AP_TRAFFIC_PRIORITY = {
+    "ap1": "high",
+    "ap2": "medium",
+    "ap3": "low",
+}
+
+# ------------------------------------------------------------------
 # 场景二 mock 数据
 # ------------------------------------------------------------------
 MOCK_STATE = {
     "ap1": {
         "tx_power_dbm": 16.0,
-        "cwmin": 3, "cwmax": 7, "aifsn": 1,
-        "channel_busy_ratio": 0.82,
-        "tx_retries_ratio": 0.31,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": AP_TRAFFIC_PRIORITY["ap1"],
+        "Data_rate_to_bandwidth_ratio": 0.55,
+        "tx_retries_ratio": 0.12,
         "neighbor_rssi_dbm": {"ap2": -68.0, "ap3": -75.0},
         "sta_rssi_dbm": -55.0,
         "noise_floor_dbm": -92.0,
-        "throughput_mbps": 18.4,
+        "throughput_mbps_iperf": 18.4,
         "latency_ms": 312.0,
         "packet_loss_pct": 1.2,
     },
     "ap2": {
         "tx_power_dbm": 16.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.55,
-        "tx_retries_ratio": 0.12,
+        "traffic_priority": AP_TRAFFIC_PRIORITY["ap2"],
+        "Data_rate_to_bandwidth_ratio": 0.50,
+        "tx_retries_ratio": 0.10,
         "neighbor_rssi_dbm": {"ap1": -68.0, "ap3": -71.0},
         "sta_rssi_dbm": -61.0,
         "noise_floor_dbm": -91.0,
-        "throughput_mbps": 28.7,
+        "throughput_mbps_iperf": 28.7,
         "latency_ms": 185.0,
         "packet_loss_pct": 0.4,
     },
     "ap3": {
         "tx_power_dbm": 16.0,
-        "cwmin": 15, "cwmax": 63, "aifsn": 4,
-        "channel_busy_ratio": 0.38,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": AP_TRAFFIC_PRIORITY["ap3"],
+        "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
         "neighbor_rssi_dbm": {"ap1": -75.0, "ap2": -71.0},
         "sta_rssi_dbm": -58.0,
         "noise_floor_dbm": -90.0,
-        "throughput_mbps": 34.1,
+        "throughput_mbps_iperf": 34.1,
         "latency_ms": 98.0,
         "packet_loss_pct": 0.1,
     },
 }
+
+
+# 业务优先级 → 用户流量接入类别（AC）：high=语音 VO，medium=尽力而为 BE，low=后台 BK
+_USER_AC_BY_PRIORITY = {"high": "VO", "medium": "BE", "low": "BK"}
+
+# 为 mock 数据补齐新增的只读观测字段（iperf/user 双路吞吐 + AC 类型）
+for _ap_id, _state in MOCK_STATE.items():
+    _state.setdefault("throughput_mbps_user", round(_state["throughput_mbps_iperf"] * 0.6, 1))
+    _state.setdefault("ac_iperf", "BK")  # iperf 测试流走后台队列
+    _state.setdefault(
+        "ac_user", _USER_AC_BY_PRIORITY.get(_state.get("traffic_priority", "medium"), "BE")
+    )
 
 
 # ------------------------------------------------------------------
@@ -81,11 +108,12 @@ def _perturb(ap_id: str) -> dict:
         return round(max(lo, min(hi, val + random.gauss(0, sigma))), 2)
 
     # 测量指标：加噪声
-    d["channel_busy_ratio"] = jitter(d["channel_busy_ratio"], 0.03, 0.0, 1.0)
+    d["Data_rate_to_bandwidth_ratio"] = jitter(d["Data_rate_to_bandwidth_ratio"], 0.03, 0.0, 1.0)
     d["tx_retries_ratio"]   = jitter(d["tx_retries_ratio"],   0.02, 0.0, 1.0)
     d["sta_rssi_dbm"]       = jitter(d["sta_rssi_dbm"],       1.5, -90.0, -20.0)
     d["noise_floor_dbm"]    = jitter(d["noise_floor_dbm"],    0.5, -110.0, -70.0)
-    d["throughput_mbps"]    = jitter(d["throughput_mbps"],    1.5,  0.0, 300.0)
+    d["throughput_mbps_iperf"]    = jitter(d["throughput_mbps_iperf"],    1.5,  0.0, 300.0)
+    d["throughput_mbps_user"]     = jitter(d["throughput_mbps_user"],     1.5,  0.0, 300.0)
     d["latency_ms"]         = jitter(d["latency_ms"],         15.0, 1.0, 2000.0)
     d["packet_loss_pct"]    = jitter(d["packet_loss_pct"],    0.15, 0.0, 100.0)
     d["neighbor_rssi_dbm"]  = {
@@ -108,20 +136,21 @@ def _run(cmd: str) -> str:
         return ""
 
 
-def read_real_state(iface: str = "wlan0") -> dict:  # noqa: ARG001
+def read_real_state(ap_id: str, iface: str = "wlan0") -> dict:  # noqa: ARG001
     """
     从系统命令读取真实指标。
     各字段来源：
       tx_power_dbm      : iw dev <iface> info | grep txpower
-      channel_busy_ratio: iw dev <iface> survey dump (busy_time / active_time)
+      Data_rate_to_bandwidth_ratio: iw dev <iface> survey dump (busy_time / active_time)
       tx_retries_ratio  : iw dev <iface> station dump (tx_retries / tx_packets)
       neighbor_rssi_dbm : iw dev <iface> scan (邻居 BSS signal，按 BSSID 聚合)
       sta_rssi_dbm      : iw dev <iface> station dump (关联 STA signal)
       noise_floor_dbm   : iw dev <iface> survey dump (noise)
       cwmin/cwmax/aifsn : iw dev <iface> get txq 或 /sys/kernel/debug/ieee80211/
-      throughput_mbps   : iperf3 客户端测量（需提前启动 iperf3 服务端）
+      throughput_mbps_iperf   : iperf3 客户端测量（需提前启动 iperf3 服务端）
       latency_ms        : ping -c 4 <网关> | tail -1 | awk '{print $4}' | cut -d/ -f2
       packet_loss_pct   : ping -c 20 <网关> | grep loss | awk '{print $6}'
+      traffic_priority  : 写死配置（AP_TRAFFIC_PRIORITY），硬件无法读取
     """
     # TODO: 在香蕉派上实现各字段的实际读取逻辑（第八步）
     raise NotImplementedError("真实模式尚未实现，请使用 --mock 进行测试")
@@ -151,7 +180,7 @@ def post_state(ap_id: str, data: dict, server: str, source: str = "ap") -> bool:
 def report_loop(ap_id: str, mock: bool, server: str, interval: int, iface: str = "wlan0"):
     source = "mock" if mock else "ap"
     while True:
-        data = _perturb(ap_id) if mock else read_real_state(iface)
+        data = _perturb(ap_id) if mock else read_real_state(ap_id, iface)
         post_state(ap_id, data, server, source=source)
         time.sleep(interval)
 

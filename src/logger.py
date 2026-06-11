@@ -4,7 +4,7 @@
 每次 orchestrator.run() 对应一个 JSONL 文件，按时间序列记录所有事件。
 
 文件路径：logs/session_<YYYYMMDD_HHMMSS>_<session_id>.jsonl
-参数时序：logs/state_trace_<YYYYMMDD_HHMMSS>_<session_id>.jsonl
+参数时序：logs/state/state_trace_<YYYYMMDD_HHMMSS>_<session_id>.jsonl
 
 ━━━ 事件类型一览 ━━━
   session_start     运行开始（模型、场景、AP 初始状态）
@@ -30,6 +30,7 @@ from typing import Any
 from .console_style import status_label
 
 LOG_DIR = Path("logs")
+STATE_LOG_DIR = LOG_DIR / "state"
 
 # 控制台各事件的前缀标签（对齐输出）
 _LABELS: dict[str, str] = {
@@ -62,9 +63,12 @@ def _extract_ap_parameters(ap_state: dict[str, Any]) -> dict[str, dict[str, Any]
         "CWmin",
         "CWmax",
         "AIFSN",
-        "channel_busy_ratio",
+        "Data_rate_to_bandwidth_ratio",
         "tx_retries_ratio",
-        "throughput_mbps",
+        "throughput_mbps_iperf",
+        "throughput_mbps_user",
+        "ac_iperf",
+        "ac_user",
         "latency_ms",
         "packet_loss_pct",
         "sta_rssi_dbm",
@@ -115,9 +119,10 @@ class SessionLogger:
         self._start_ms: float = _ts_ms()
 
         LOG_DIR.mkdir(exist_ok=True)
+        STATE_LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.log_path: Path = LOG_DIR / f"session_{ts}_{self.session_id}.jsonl"
-        self.state_trace_path: Path = LOG_DIR / f"state_trace_{ts}_{self.session_id}.jsonl"
+        self.state_trace_path: Path = STATE_LOG_DIR / f"state_trace_{ts}_{self.session_id}.jsonl"
         self._fh = open(self.log_path, "w", encoding="utf-8")
         self._state_fh = open(self.state_trace_path, "w", encoding="utf-8")
 
@@ -232,6 +237,33 @@ class SessionLogger:
             strategy=strategy,
             parameters=_extract_ap_parameters(decision),
             decision=decision,
+        )
+
+    def record_executor_apply(
+        self,
+        ap_id: str,
+        *,
+        ok: bool,
+        url: str,
+        payload: dict[str, Any],
+        response: Any,
+    ) -> None:
+        """记录向香蕉派执行服务下发参数后的响应。"""
+        self._write_state_trace(
+            "executor_apply",
+            ap_id=ap_id,
+            ok=ok,
+            url=url,
+            payload=payload,
+            response=response,
+        )
+        self._write(
+            "executor_apply",
+            ap_id=ap_id,
+            ok=ok,
+            url=url,
+            payload=payload,
+            response=response,
         )
 
     def phase_start(self, phase: int, label: str) -> None:

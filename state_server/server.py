@@ -26,6 +26,7 @@ _lock = threading.Lock()
 
 # 历史缓冲：{ap_id: deque([{"t":..., 指标字段与 MAC 参数字段...}])}
 _history: dict = {ap: deque(maxlen=HISTORY_MAXLEN) for ap in ["ap1", "ap2", "ap3"]}
+STATE_LOG_DIR = Path("logs") / "state"
 _trace_fh = None
 _trace_path: Path | None = None
 _trace_session_id: str | None = None
@@ -33,10 +34,18 @@ _trace_session_id: str | None = None
 REQUIRED_FIELDS = {
     "ap_id", "timestamp",
     "tx_power_dbm", "cwmin", "cwmax", "aifsn",
-    "channel_busy_ratio", "tx_retries_ratio",
+    "Data_rate_to_bandwidth_ratio", "tx_retries_ratio",
     "neighbor_rssi_dbm", "sta_rssi_dbm", "noise_floor_dbm",
-    "throughput_mbps", "latency_ms", "packet_loss_pct",
+    "throughput_mbps_iperf", "throughput_mbps_user", "ac_iperf", "ac_user",
+    "latency_ms", "packet_loss_pct",
 }
+
+
+def _throughput_total(data: dict):
+    """iperf + user 吞吐之和；任一缺失则返回可得的一项，全缺返回 None。"""
+    vals = [data.get("throughput_mbps_iperf"), data.get("throughput_mbps_user")]
+    present = [v for v in vals if isinstance(v, (int, float))]
+    return round(sum(present), 2) if present else None
 
 
 def _now() -> datetime:
@@ -108,9 +117,10 @@ _INDEX_HTML = """
   <table>
     <tr>
       <th>AP</th><th>状态</th><th>数据age(s)</th>
+      <th>业务优先级</th>
       <th>TX Power(dBm)</th><th>CWmin</th><th>CWmax</th><th>AIFSN</th>
-      <th>信道占用</th><th>重传率</th><th>STA RSSI(dBm)</th><th>噪声底(dBm)</th>
-      <th>吞吐量(Mbps)</th><th>延迟(ms)</th><th>丢包(%)</th>
+      <th>信道利用率</th><th>重传率</th><th>STA RSSI(dBm)</th><th>噪声底(dBm)</th>
+      <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>丢包(%)</th>
       <th>邻居 RSSI(dBm)</th><th>最后上报</th>
     </tr>
     {% for ap_id in ap_ids %}
@@ -120,20 +130,32 @@ _INDEX_HTML = """
       {% if e.data %}
       <td class="{{ 'stale' if e.stale else 'ok' }}">{{ 'STALE' if e.stale else 'OK' }}</td>
       <td>{{ e.age_seconds }}</td>
+      {% set prio = e.data.get('traffic_priority', '') %}
+      {% if prio == 'high' %}
+        <td style="color:#e74c3c;font-weight:bold">high ▲</td>
+      {% elif prio == 'low' %}
+        <td style="color:#3498db;font-weight:bold">low ▼</td>
+      {% elif prio == 'medium' %}
+        <td style="color:#f39c12">medium</td>
+      {% else %}
+        <td class="na">—</td>
+      {% endif %}
       <td>{{ e.data.tx_power_dbm }}</td>
       <td>{{ e.data.cwmin }}</td><td>{{ e.data.cwmax }}</td><td>{{ e.data.aifsn }}</td>
-      <td>{{ "%.0f%%"|format(e.data.channel_busy_ratio * 100) if e.data.channel_busy_ratio is not none else "—" }}</td>
+      <td>{{ "%.0f%%"|format(e.data.Data_rate_to_bandwidth_ratio * 100) if e.data.Data_rate_to_bandwidth_ratio is not none else "—" }}</td>
       <td>{{ "%.0f%%"|format(e.data.tx_retries_ratio * 100) if e.data.tx_retries_ratio is not none else "—" }}</td>
       <td>{{ e.data.sta_rssi_dbm if e.data.sta_rssi_dbm is not none else "—" }}</td>
       <td>{{ e.data.noise_floor_dbm }}</td>
-      <td>{{ e.data.throughput_mbps }}</td>
+      <td>{{ e.data.throughput_mbps_iperf }}</td>
+      <td>{{ e.data.throughput_mbps_user }}</td>
+      <td>{{ e.data.get('ac_iperf', '—') }} / {{ e.data.get('ac_user', '—') }}</td>
       <td>{{ e.data.latency_ms }}</td>
       <td>{{ e.data.packet_loss_pct }}</td>
       <td>{{ e.data.neighbor_rssi_dbm }}</td>
       <td style="font-size:11px">{{ e.timestamp[:19] if e.timestamp else '—' }}</td>
       {% else %}
       <td class="stale">NO DATA</td>
-      <td class="na" colspan="14">尚未收到上报</td>
+      <td class="na" colspan="17">尚未收到上报</td>
       {% endif %}
     </tr>
     {% endfor %}
@@ -143,8 +165,16 @@ _INDEX_HTML = """
   <div id="last-update">等待数据...</div>
   <div class="charts-grid">
     <div class="chart-box">
-      <h3>吞吐量 (Mbps)</h3>
-      <canvas id="chart-throughput"></canvas>
+      <h3>吞吐量 iperf (Mbps)</h3>
+      <canvas id="chart-throughput-iperf"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>吞吐量 user (Mbps)</h3>
+      <canvas id="chart-throughput-user"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>吞吐量 总和 (Mbps)</h3>
+      <canvas id="chart-throughput-total"></canvas>
     </div>
     <div class="chart-box">
       <h3>延迟 (ms)</h3>
@@ -181,7 +211,9 @@ const AP_COLORS = {
 };
 const APS = ["ap1", "ap2", "ap3"];
 const CHART_SPECS = [
-  { key: "throughput_mbps", chart: "throughput", canvas: "chart-throughput", label: "Mbps" },
+  { key: "throughput_mbps_iperf", chart: "throughput_iperf", canvas: "chart-throughput-iperf", label: "Mbps" },
+  { key: "throughput_mbps_user",  chart: "throughput_user",  canvas: "chart-throughput-user",  label: "Mbps" },
+  { key: "throughput_mbps_total", chart: "throughput_total", canvas: "chart-throughput-total", label: "Mbps" },
   { key: "latency_ms",      chart: "latency",    canvas: "chart-latency",    label: "ms" },
   { key: "packet_loss_pct", chart: "loss",       canvas: "chart-loss",       label: "%" },
   { key: "tx_power_dbm",    chart: "txpower",    canvas: "chart-txpower",    label: "dBm" },
@@ -373,7 +405,9 @@ def post_state():
         _store[ap_id] = {"data": data, "timestamp": ts}
         _history[ap_id].append({
             "t": ts.isoformat(),
-            "throughput_mbps": data.get("throughput_mbps"),
+            "throughput_mbps_iperf": data.get("throughput_mbps_iperf"),
+            "throughput_mbps_user":  data.get("throughput_mbps_user"),
+            "throughput_mbps_total": _throughput_total(data),
             "latency_ms":      data.get("latency_ms"),
             "packet_loss_pct": data.get("packet_loss_pct"),
             "tx_power_dbm":    data.get("tx_power_dbm"),
@@ -401,7 +435,7 @@ def post_state():
 def start_trace():
     body = request.get_json(force=True, silent=True) or {}
     session_id = str(body.get("session_id") or _utc_stamp())
-    trace_dir = Path(body.get("dir") or "logs")
+    trace_dir = Path(body.get("dir") or STATE_LOG_DIR)
     trace_dir.mkdir(exist_ok=True)
     path = trace_dir / f"telemetry_trace_{_utc_stamp()}_{session_id}.jsonl"
 

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import requests
 
 AP_IDS = ("ap1", "ap2", "ap3")
-_PERF_FIELDS = ("throughput_mbps", "latency_ms", "packet_loss_pct")
+_PERF_FIELDS = ("throughput_mbps_iperf", "throughput_mbps_user", "latency_ms", "packet_loss_pct")
 
 
 class MockTelemetryFeeder:
@@ -73,7 +73,8 @@ class MockTelemetryFeeder:
                             pass
                 # 协商后预期：吞吐 +12%、延迟 -25%、丢包 -40%
                 t = self._perf_target[ap]
-                t["throughput_mbps"] *= 1.12
+                t["throughput_mbps_iperf"] *= 1.12
+                t["throughput_mbps_user"] *= 1.12
                 t["latency_ms"] *= 0.75
                 t["packet_loss_pct"] *= 0.60
 

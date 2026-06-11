@@ -36,12 +36,15 @@
 | `cwmin` | int | — | 竞争窗口下限 |
 | `cwmax` | int | — | 竞争窗口上限 |
 | `aifsn` | int | — | 仲裁帧间间隔数 |
-| `channel_busy_ratio` | float | 0–1 | 信道繁忙时间占比 |
+| `Data_rate_to_bandwidth_ratio` | float | 0–1 | 信道利用率（data rate / bandwidth），原 `channel_busy_ratio` 改名 |
 | `tx_retries_ratio` | float | 0–1 | 重传包占比 |
 | `neighbor_rssi_dbm` | object | dBm | 邻居 AP 信号强度，key 为对方 ap_id |
 | `sta_rssi_dbm` | float | dBm | 己方关联 STA 的信号强度 |
 | `noise_floor_dbm` | float | dBm | 本底噪声 |
-| `throughput_mbps` | float | Mbps | 实测吞吐量 |
+| `throughput_mbps_iperf` | float | Mbps | iperf 测试流吞吐量 |
+| `throughput_mbps_user` | float | Mbps | 用户业务流吞吐量 |
+| `ac_iperf` | string | — | iperf 流接入类别 AC（`BE`/`BK`/`VI`/`VO`） |
+| `ac_user` | string | — | 用户流接入类别 AC（`BE`/`BK`/`VI`/`VO`） |
 | `latency_ms` | float | ms | 端到端往返延迟 |
 | `packet_loss_pct` | float | % | 丢包率（0–100） |
 | `source` | string | — | 可选，默认视为 `ap`；真实部署不得使用 `mock` / `generated` / `synthetic` 等生成源 |
@@ -58,12 +61,15 @@ curl -X POST http://<SPARK_IP>:5001/state \
     "cwmin": 3,
     "cwmax": 7,
     "aifsn": 1,
-    "channel_busy_ratio": 0.82,
+    "Data_rate_to_bandwidth_ratio": 0.82,
     "tx_retries_ratio": 0.31,
     "neighbor_rssi_dbm": {"ap2": -68.0, "ap3": -75.0},
     "sta_rssi_dbm": -55.0,
     "noise_floor_dbm": -92.0,
-    "throughput_mbps": 18.4,
+    "throughput_mbps_iperf": 18.4,
+    "throughput_mbps_user": 11.0,
+    "ac_iperf": "BK",
+    "ac_user": "VO",
     "latency_ms": 312.0,
     "packet_loss_pct": 1.2,
     "source": "ap"
@@ -102,12 +108,15 @@ curl http://<SPARK_IP>:5001/state
     "data": {
       "tx_power_dbm": 16.0,
       "cwmin": 3, "cwmax": 7, "aifsn": 1,
-      "channel_busy_ratio": 0.82,
+      "Data_rate_to_bandwidth_ratio": 0.82,
       "tx_retries_ratio": 0.31,
       "neighbor_rssi_dbm": {"ap2": -68.0, "ap3": -75.0},
       "sta_rssi_dbm": -55.0,
       "noise_floor_dbm": -92.0,
-      "throughput_mbps": 18.4,
+      "throughput_mbps_iperf": 18.4,
+      "throughput_mbps_user": 11.0,
+      "ac_iperf": "BK",
+      "ac_user": "VO",
       "latency_ms": 312.0,
       "packet_loss_pct": 1.2
     },

@@ -18,12 +18,12 @@
   "cwmin": 3,
   "cwmax": 7,
   "aifsn": 1,
-  "channel_busy_ratio": 0.82,
+  "Data_rate_to_bandwidth_ratio": 0.82,
   "tx_retries_ratio": 0.31,
   "neighbor_rssi_dbm": {"ap2": -68.0, "ap3": -75.0},
   "sta_rssi_dbm": -55.0,
   "noise_floor_dbm": -92.0,
-  "throughput_mbps": 18.4,
+  "throughput_mbps_iperf": 18.4,
   "latency_ms": 312.0,
   "packet_loss_pct": 1.2,
   "source": "ap"
@@ -124,13 +124,13 @@ python state_server/executor.py \
 | 字段 | 采集命令 |
 |---|---|
 | `tx_power_dbm` | `iw dev wlan0 info \| grep txpower` |
-| `channel_busy_ratio` | `iw dev wlan0 survey dump`，取 `busy_time / active_time` |
+| `Data_rate_to_bandwidth_ratio` | `iw dev wlan0 survey dump`，取 `busy_time / active_time` |
 | `tx_retries_ratio` | `iw dev wlan0 station dump`，取 `tx_retries / tx_packets` |
 | `neighbor_rssi_dbm` | `iw dev wlan0 scan`，按 BSSID→ap_id 映射提取 signal |
 | `sta_rssi_dbm` | `iw dev wlan0 station dump`，取关联 STA 的 signal（多 STA 取最强） |
 | `noise_floor_dbm` | `iw dev wlan0 survey dump`，取 `channel noise` |
 | `cwmin/cwmax/aifsn` | `hostapd_cli -i wlan0 get_edca_params 0`（队列 0 = BE） |
-| `throughput_mbps` | `iperf3 -c <SPARK_IP> -t 5 -J`，取 `sum_received.bits_per_second / 1e6` |
+| `throughput_mbps_iperf` | `iperf3 -c <SPARK_IP> -t 5 -J`，取 `sum_received.bits_per_second / 1e6` |
 | `latency_ms` | `ping -c 5 <SPARK_IP>`，取 avg RTT |
 | `packet_loss_pct` | `ping -c 20 <SPARK_IP>`，取丢包百分比 |
 

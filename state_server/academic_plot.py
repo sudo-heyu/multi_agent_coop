@@ -36,7 +36,9 @@ AP_LINESTYLES = {
 }
 
 VIEW_FIELDS = {
-    "Throughput": ("throughput_mbps", "Throughput", "Mbps"),
+    "Throughput iperf": ("throughput_mbps_iperf", "Throughput iperf", "Mbps"),
+    "Throughput user": ("throughput_mbps_user", "Throughput user", "Mbps"),
+    "Throughput total": ("throughput_mbps_total", "Throughput total", "Mbps"),
     "Latency": ("latency_ms", "Latency", "ms"),
     "Packet loss": ("packet_loss_pct", "Packet loss", "%"),
     "Txpower": ("tx_power_dbm", "Tx power", "dBm"),

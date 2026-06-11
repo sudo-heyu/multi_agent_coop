@@ -78,7 +78,7 @@ ap_state: {"ap1": {指标字典}, "ap2": {...}, "ap3": {...}}
 由 `_find_worst_ap()` 选出综合得分最高的 AP 作为提案发起方：
 
 ```python
-score = channel_busy_ratio + tx_retries_ratio * 2
+score = Data_rate_to_bandwidth_ratio + tx_retries_ratio * 2
 ```
 
 提案方收到所有 AP 的完整状态，判断协商路径（Co-SR / Co-EDCA / 联合）并给出具体参数值。

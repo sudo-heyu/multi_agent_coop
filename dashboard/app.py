@@ -156,7 +156,9 @@ main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
     <div id="conv-body"><div class="ev-sys">等待协商开始...</div></div>
   </div>
   <div id="charts-panel">
-    <div class="chart-box"><h3>吞吐量 (Mbps)</h3><canvas id="c-tput"></canvas></div>
+    <div class="chart-box"><h3>吞吐量 iperf (Mbps)</h3><canvas id="c-tput-iperf"></canvas></div>
+    <div class="chart-box"><h3>吞吐量 user (Mbps)</h3><canvas id="c-tput-user"></canvas></div>
+    <div class="chart-box"><h3>吞吐量 总和 (Mbps)</h3><canvas id="c-tput-total"></canvas></div>
     <div class="chart-box"><h3>延迟 (ms)</h3><canvas id="c-lat"></canvas></div>
     <div class="chart-box"><h3>丢包率 (%)</h3><canvas id="c-loss"></canvas></div>
     <div class="chart-box"><h3>Txpower (dBm)</h3><canvas id="c-txpower"></canvas></div>
@@ -179,7 +181,9 @@ let charts = {};
 let negotiationStartMs = null;
 
 const CHART_SPECS = [
-  { key: "throughput_mbps", canvas: "c-tput",    label: "Mbps" },
+  { key: "throughput_mbps_iperf", canvas: "c-tput-iperf", label: "Mbps" },
+  { key: "throughput_mbps_user",  canvas: "c-tput-user",  label: "Mbps" },
+  { key: "throughput_mbps_total", canvas: "c-tput-total", label: "Mbps" },
   { key: "latency_ms",      canvas: "c-lat",     label: "ms" },
   { key: "packet_loss_pct", canvas: "c-loss",    label: "%" },
   { key: "tx_power_dbm",    canvas: "c-txpower", label: "dBm" },

@@ -20,7 +20,7 @@
 
 | 函数 | 签名 | 返回 | 用途 |
 |---|---|---|---|
-| `classify_congestion` | `(channel_busy_ratio: float, tx_retries_ratio: float)` | `str` | 判断单个 AP 的拥塞等级：`low` / `medium` / `high` / `critical` |
+| `classify_congestion` | `(Data_rate_to_bandwidth_ratio: float, tx_retries_ratio: float)` | `str` | 判断单个 AP 的拥塞等级：`low` / `medium` / `high` / `critical` |
 | `recommend_edca` | `(congestion_level: str)` | `dict` | 将拥塞等级映射为推荐 EDCA 参数（`CWmin` / `CWmax` / `AIFSN`） |
 | `validate` | `(params: dict)` | `(bool, list[str])` | 验证 EDCA 参数是否在 IEEE 802.11 合法范围内，返回 `(合法, 错误列表)` |
 | `evaluate_edca_effectiveness` | `(ap_states: dict, proposed_edca: dict)` | `dict` | 评估提案参数合理性：拥塞匹配度、碰撞概率估算、跨 AP AIFSN 公平性 |

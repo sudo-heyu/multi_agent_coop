@@ -42,6 +42,20 @@ def _powers_from_proposal(proposal: dict | None) -> dict:
     }
 
 
+def _concurrent_group_from_proposal(proposal: dict | None) -> list[str]:
+    if not isinstance(proposal, dict):
+        return []
+    meta = proposal.get("_sr") or proposal.get("sr") or {}
+    if isinstance(meta, dict):
+        group = meta.get("concurrent_group") or meta.get("concurrent_aps")
+        if isinstance(group, list):
+            return [str(ap).lower() for ap in group]
+    group = proposal.get("concurrent_group")
+    if isinstance(group, list):
+        return [str(ap).lower() for ap in group]
+    return []
+
+
 # ------------------------------------------------------------------
 # 工具 JSON Schema 定义
 # ------------------------------------------------------------------
@@ -100,6 +114,29 @@ TOOL_DEFINITIONS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "select_sr_concurrent_groups",
+            "description": (
+                "先选择 Co-SR 空间复用并发组，再给出组内推荐功率。"
+                "用于支持部分并发：例如最远的 AP1/AP3 进入 concurrent_group，"
+                "中间强干扰 AP2 放入 non_concurrent_aps，不参与同一并发时刻。"
+                "该工具会枚举二元/三元并发组，返回可行组、推荐 tx_power_dbm、"
+                "组外 AP 以及排序后的 best_group。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min_group_size": {
+                        "type": "integer",
+                        "description": "最小并发组大小，默认 2。",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "evaluate_sr_candidate",
             "description": (
                 "评估一个候选 Co-SR TX Power 方案是否满足 CCA / SINR / STA RSSI 三重约束，"
@@ -120,6 +157,14 @@ TOOL_DEFINITIONS: list[dict] = [
                             "提案/自检阶段必须传入；仅投票阶段验算当前提案时可省略。"
                         ),
                         "additionalProperties": {"type": "number"},
+                    },
+                    "concurrent_group": {
+                        "type": "array",
+                        "description": (
+                            "可选。指定本次只验算哪些 AP 组成的部分并发组，"
+                            '例如 ["ap1", "ap3"]。省略时按旧逻辑验算所有 AP 同时并发。'
+                        ),
+                        "items": {"type": "string"},
                     }
                 },
                 "required": [],
@@ -167,11 +212,15 @@ TOOL_DEFINITIONS: list[dict] = [
         "function": {
             "name": "validate_edca_proposal",
             "description": (
-                "验证提案中各 AP 的 EDCA 参数是否在合法范围内："
-                "CWmin ∈ [3, 1023]、CWmax ∈ [7, 1023]、AIFSN ∈ [1, 15]、CWmax > CWmin。"
-                "在投票验算阶段或提案修订后的自检中调用此工具。"
+                "校验提案中各 AP 的 EDCA 参数。执行两项检查：\n"
+                "① 范围合规：CWmin ∈ [3, 1023]、CWmax ∈ [7, 1023]、AIFSN ∈ [1, 15]、CWmax > CWmin。\n"
+                "② 优先级排序：根据各 AP 状态中的 traffic_priority 字段，"
+                "校验不同优先级的 AP 之间 CWmin 和 AIFSN 是否满足单调性：\n"
+                "  高优先级（high）业务应使用更小的 CWmin 和 AIFSN，以更早接入信道、降低时延；\n"
+                "  低优先级（low）业务应使用更大的 CWmin 和 AIFSN，主动礼让信道竞争机会；\n"
+                "  要求 high.CWmin ≤ medium.CWmin ≤ low.CWmin，AIFSN 同理。\n"
                 "【提案/自检阶段】必须显式传入 proposed_edca（你打算提出的 EDCA 参数），"
-                "否则会因参数缺失而无法验算。"
+                "否则会因参数缺失而无法验算。\n"
                 "【投票阶段】才可省略 proposed_edca，省略即自动验算当前被投票的提案。"
             ),
             "parameters": {
@@ -266,10 +315,17 @@ def make_executor(
         elif tool_name == "compute_sr_feasible_ranges":
             result = _sr.compute_feasible_ranges(current_ap_states)
 
+        elif tool_name == "select_sr_concurrent_groups":
+            result = _sr.select_concurrent_groups(
+                current_ap_states,
+                int(tool_args.get("min_group_size", 2)),
+            )
+
         elif tool_name == "evaluate_sr_candidate":
             proposed = tool_args.get("proposed_powers") or _powers_from_proposal(proposal)
             proposed = {k.lower(): float(v) for k, v in proposed.items()}
-            result = _sr.evaluate_candidate(current_ap_states, proposed)
+            group = tool_args.get("concurrent_group") or _concurrent_group_from_proposal(proposal)
+            result = _sr.evaluate_candidate_for_group(current_ap_states, proposed, group or None)
 
         elif tool_name == "rank_sr_candidates":
             candidates = tool_args.get("candidates", {})
@@ -280,17 +336,29 @@ def make_executor(
             proposed = tool_args.get("proposed_powers") or _powers_from_proposal(proposal)
             # 规范化：AP1 → ap1
             proposed = {k.lower(): float(v) for k, v in proposed.items()}
-            result = _sr.evaluate_candidate(current_ap_states, proposed)
+            group = tool_args.get("concurrent_group") or _concurrent_group_from_proposal(proposal)
+            result = _sr.evaluate_candidate_for_group(current_ap_states, proposed, group or None)
 
         elif tool_name == "validate_edca_proposal":
             proposed_edca = tool_args.get("proposed_edca") or _edca_from_proposal(proposal)
-            result = {}
-            for ap_id, params in proposed_edca.items():
-                valid, errors = _edca.validate(params)
-                result[ap_id.lower()] = {"valid": valid, "errors": errors, **params}
-            result["effectiveness"] = _edca.evaluate_edca_effectiveness(
-                current_ap_states, proposed_edca
-            )
+            if not proposed_edca:
+                # 参数缺失时给出明确指导
+                result = {
+                    "error": (
+                        "validate_edca_proposal 需要 proposed_edca 参数。"
+                        "请在工具参数中显式传入每个 AP 的 EDCA 值，例如："
+                        '{"proposed_edca": {"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3}, ...}}'
+                    ),
+                    "ap_entries": [],
+                }
+            else:
+                result = {}
+                for ap_id, params in proposed_edca.items():
+                    valid, errors = _edca.validate(params)
+                    result[ap_id.lower()] = {"valid": valid, "errors": errors, **params}
+                result["effectiveness"] = _edca.evaluate_edca_effectiveness(
+                    current_ap_states, proposed_edca
+                )
 
         else:
             result = {"error": f"未知工具: {tool_name!r}"}

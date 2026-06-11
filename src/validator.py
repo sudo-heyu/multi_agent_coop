@@ -1,12 +1,12 @@
 """
-决策验证器 — 对 LLM 输出的最终 JSON 决策做确定性观测验收。
+决策验证器 — 对 LLM 输出的最终 JSON 决策做确定性下发验收。
 
 验收分三层：
   1. 参数范围检查：proposed 值在合法区间内（始终执行）
   2. 参数生效检查：观测值与 proposed 吻合（仅真实观测时执行）
-  3. KPI 达标检查：根据策略和协商前状态动态选取指标，
-                   先检查绝对上/下限，再对"协商前处于差状态"的指标检查是否改善
-                   （仅真实观测时执行，mock 模式跳过以避免对协商前坏状态误报）
+
+KPI 指标不再作为 Validator 的通过条件。
+只要最终参数合法且真实观测时确认已正常下发，即判定通过。
 """
 from __future__ import annotations
 
@@ -26,83 +26,6 @@ EDCA_LIMITS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# KPI 指标规则表
-#
-# direction       : "lower" = 越低越好 | "higher" = 越高越好
-# abs_max/abs_min : 绝对上/下界，观测值超出即报错（真实观测时检查）
-# bad_above       : lower 类指标"协商前处于差状态"的判定阈值
-# bad_below       : higher 类指标"协商前处于差状态"的判定阈值
-# min_rel_improvement : 协商前处于差状态时，要求的最低相对改善比例
-# min_abs_improvement : 同上，以绝对量计（dBm 等对数域指标使用）
-# max_abs_degradation : higher 类指标允许的最大绝对劣化量
-# max_rel_degradation : higher 类指标允许的最大相对劣化比例
-# optional        : True 时指标缺失不报硬错（仅警告）
-# ─────────────────────────────────────────────────────────────────────────────
-_METRIC_RULES: dict[str, dict] = {
-    # Co-SR 关注：信号质量
-    "sta_rssi_dbm": {
-        "label": "STA RSSI", "unit": "dBm", "direction": "higher",
-        "abs_min": -75.0,
-        # Co-SR 降功后 RSSI 线性下降是预期行为，不限制降幅；仅守住绝对下界
-    },
-    "max_neighbor_rssi_dbm": {       # 派生指标：max(neighbor_rssi_dbm.values())
-        "label": "Max Neighbor RSSI", "unit": "dBm", "direction": "lower",
-        "abs_max": -70.0,             # 降至触发阈值以下为理想
-        "bad_above": -70.0,
-        "min_abs_improvement": 2.0,   # 协商前超阈值时，期望至少降低 2 dBm
-    },
-    # Co-EDCA 关注：信道拥塞
-    "channel_busy_ratio": {
-        "label": "Channel Busy Ratio", "unit": "", "direction": "lower",
-        "abs_max": 0.75,
-        "bad_above": 0.60,
-        "min_rel_improvement": 0.10,
-    },
-    "tx_retries_ratio": {
-        "label": "TX Retries Ratio", "unit": "", "direction": "lower",
-        "abs_max": 0.25,
-        "bad_above": 0.15,
-        "min_rel_improvement": 0.10,
-    },
-    # 通用 QoS（可选，有则检查）
-    "latency_ms": {
-        "label": "Latency", "unit": "ms", "direction": "lower",
-        "abs_max": 500.0,
-        "bad_above": 200.0,
-        "min_rel_improvement": 0.05,
-        "optional": True,
-    },
-    "packet_loss_pct": {
-        "label": "Packet Loss", "unit": "%", "direction": "lower",
-        "abs_max": 2.0,
-        "bad_above": 1.0,
-        "min_rel_improvement": 0.05,
-        "optional": True,
-    },
-    "throughput_mbps": {
-        "label": "Throughput", "unit": "Mbps", "direction": "higher",
-        "abs_min": None,
-        "max_rel_degradation": 0.10,  # 不允许吞吐量下降超过 10%
-        "optional": True,
-    },
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 策略 → 关注指标（按重要性排列）
-# required 指标缺失时报错；optional 指标缺失时忽略
-# ─────────────────────────────────────────────────────────────────────────────
-_STRATEGY_METRICS: dict[str, list[str]] = {
-    "co_sr":   ["sta_rssi_dbm", "max_neighbor_rssi_dbm",
-                "packet_loss_pct", "latency_ms"],
-    "co_edca": ["channel_busy_ratio", "tx_retries_ratio",
-                "latency_ms", "packet_loss_pct", "throughput_mbps"],
-    "joint":   ["sta_rssi_dbm", "max_neighbor_rssi_dbm",
-                "channel_busy_ratio", "tx_retries_ratio",
-                "latency_ms", "packet_loss_pct", "throughput_mbps"],
-}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # 公开接口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -114,7 +37,7 @@ def validate_decision(
     observed_is_real: bool = False,
 ) -> dict:
     """
-    对最终决策 JSON 执行确定性观测验收。
+    对最终决策 JSON 执行确定性下发验收。
 
     Args:
         ap_state:        各 AP 协商前实测状态
@@ -122,8 +45,8 @@ def validate_decision(
         strategy:        "co_sr" | "co_edca" | "joint"
         observed_state:  观测周期结束后重新采集的 AP 状态；None 时回退为 ap_state
         observed_is_real: True 表示 observed_state 来自真实二次采集，
-                          才执行参数生效检查和 KPI 改善检查；
-                          False（mock/无采集器）时跳过这两项，仅检查参数范围合法性
+                          才执行参数生效检查；
+                          False（mock/无采集器）时仅检查参数范围合法性
 
     Returns:
         标准 ValidationReport dict
@@ -229,43 +152,6 @@ def validate_decision(
                 "errors": [f"{ap_id.upper()}: {e}" for e in edca_errors],
             })
 
-    # ── 层 3：KPI 达标检查（仅真实观测时执行）────────────────────────────────
-    if observed_is_real:
-        kpi_metrics = _STRATEGY_METRICS.get(strategy, [])
-        for ap_id in ap_ids:
-            report = per_ap.setdefault(ap_id, _empty_ap_entry())
-            before = ap_state.get(ap_id, {})
-            after = obs.get(ap_id, {})
-
-            kpi_errors: list[str] = []
-            kpi_details: dict[str, dict] = {}
-
-            for metric in kpi_metrics:
-                rule = _METRIC_RULES.get(metric)
-                if rule is None:
-                    continue
-
-                before_val = _get_metric(before, metric)
-                after_val = _get_metric(after, metric)
-
-                errs = _check_metric(metric, before_val, after_val, rule)
-                kpi_errors.extend(errs)
-                kpi_details[metric] = {
-                    "before": before_val,
-                    "after":  after_val,
-                    "errors": errs,
-                }
-                if after_val is not None:
-                    report["observed_params"][metric] = after_val
-
-            report["errors"].extend([f"{ap_id.upper()}: {e}" for e in kpi_errors])
-            report["checks"].append({
-                "check":   "KPI",
-                "ok":      len(kpi_errors) == 0,
-                "details": kpi_details,
-                "errors":  [f"{ap_id.upper()}: {e}" for e in kpi_errors],
-            })
-
     # ── 汇总 ─────────────────────────────────────────────────────────────────
     for ap_id in ap_ids:
         entry = per_ap.setdefault(ap_id, _empty_ap_entry())
@@ -278,92 +164,6 @@ def validate_decision(
 # ─────────────────────────────────────────────────────────────────────────────
 # 内部辅助
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _get_metric(state: dict, metric: str) -> float | None:
-    """从 AP 状态提取指标值；支持 max_neighbor_rssi_dbm 等派生指标。"""
-    if metric == "max_neighbor_rssi_dbm":
-        nbr = state.get("neighbor_rssi_dbm", {})
-        return max(nbr.values()) if nbr else None
-    val = state.get(metric)
-    return float(val) if val is not None else None
-
-
-def _check_metric(
-    metric: str,
-    before: float | None,
-    after: float | None,
-    rule: dict,
-) -> list[str]:
-    """
-    对单个 KPI 指标执行绝对限值检查 + 改善检查。
-
-    改善检查仅在 before 不为 None 且指标协商前处于"差状态"时触发。
-    """
-    errors: list[str] = []
-    label    = rule["label"]
-    unit     = rule.get("unit", "")
-    direction = rule["direction"]
-    optional  = rule.get("optional", False)
-
-    if after is None:
-        if not optional:
-            errors.append(f"观测结果缺少 {label}")
-        return errors
-
-    # ── 绝对限值 ──────────────────────────────────────────────────────────────
-    if direction == "lower":
-        abs_max = rule.get("abs_max")
-        if abs_max is not None and after > abs_max:
-            errors.append(f"{label}={after}{unit} 超过上限 {abs_max}")
-    else:  # higher
-        abs_min = rule.get("abs_min")
-        if abs_min is not None and after < abs_min:
-            errors.append(f"{label}={after}{unit} 低于下限 {abs_min}")
-
-    if before is None:
-        return errors
-
-    # ── 改善检查（需要 before 值）─────────────────────────────────────────────
-    if direction == "lower":
-        bad_above = rule.get("bad_above")
-        if bad_above is not None and before > bad_above:
-            if "min_abs_improvement" in rule:
-                # 对数域指标（dBm）：用绝对量衡量
-                improvement = before - after
-                min_imp = rule["min_abs_improvement"]
-                if improvement < min_imp:
-                    errors.append(
-                        f"{label} 改善不足：{before:.1f}→{after:.1f}{unit}，"
-                        f"改善 {improvement:.1f}，期望 ≥{min_imp:.1f}"
-                    )
-            elif "min_rel_improvement" in rule and before != 0:
-                # 比率指标：用相对量衡量
-                actual_pct = (before - after) / before
-                min_pct    = rule["min_rel_improvement"]
-                if actual_pct < min_pct:
-                    errors.append(
-                        f"{label} 改善不足：{before:.3f}→{after:.3f}，"
-                        f"实际改善 {actual_pct * 100:.1f}%，期望 ≥{min_pct * 100:.0f}%"
-                    )
-    else:  # higher
-        if "max_abs_degradation" in rule:
-            degradation = before - after
-            max_deg = rule["max_abs_degradation"]
-            if degradation > max_deg:
-                errors.append(
-                    f"{label} 下降过多：{before:.1f}→{after:.1f}{unit}，"
-                    f"下降 {degradation:.1f}，容忍值 {max_deg}"
-                )
-        if "max_rel_degradation" in rule and before > 0:
-            degradation_pct = (before - after) / before
-            max_deg_pct = rule["max_rel_degradation"]
-            if degradation_pct > max_deg_pct:
-                errors.append(
-                    f"{label} 下降过多：{before:.1f}→{after:.1f}{unit}，"
-                    f"下降 {degradation_pct * 100:.1f}%，容忍值 {max_deg_pct * 100:.0f}%"
-                )
-
-    return errors
 
 
 def _normalize_decision_keys(decision: dict, ap_ids: list[str]) -> dict:

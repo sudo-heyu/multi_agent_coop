@@ -36,6 +36,7 @@ from src.state_client import get_all_states, StateStaleError
 from state_server.mock_feeder import MockTelemetryFeeder
 
 DEFAULT_AP_CONFIG = Path(__file__).parent / "ap_endpoints.json"
+STATE_LOG_DIR = Path("logs") / "state"
 
 
 def start_dashboard(port: int = 5050, state_server: str = "http://localhost:5001"):
@@ -171,7 +172,7 @@ def start_telemetry_trace(server_url: str, session_id: str) -> str | None:
     try:
         r = requests.post(
             f"{server_url.rstrip('/')}/trace/start",
-            json={"session_id": session_id},
+            json={"session_id": session_id, "dir": str(STATE_LOG_DIR)},
             timeout=3,
         )
         if r.status_code != 200:
@@ -203,120 +204,132 @@ MOCK_SCENE_SR = {
     "ap1": {
         "tx_power_dbm": 20.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.45,
+        "traffic_priority": "medium",
+        "Data_rate_to_bandwidth_ratio": 0.45,
         "tx_retries_ratio": 0.08,
         # AP1 处接收：AP2 在 14dBm(-68.7 + (14-20)=-74.7)，AP3 在 8dBm(-76 + (8-20)=-88)
         "neighbor_rssi_dbm": {"ap2": -74.7, "ap3": -88.0},
         "sta_rssi_dbm": -45.0,
         "noise_floor_dbm": -92.0,
-        "throughput_mbps": 22.1,
+        "throughput_mbps_iperf": 22.1,
         "latency_ms": 210.0,
         "packet_loss_pct": 0.5,
     },
     "ap2": {
         "tx_power_dbm": 14.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.50,
+        "traffic_priority": "medium",
+        "Data_rate_to_bandwidth_ratio": 0.50,
         "tx_retries_ratio": 0.10,
         # AP2 处接收：AP1 在 20dBm(-68.6)，AP3 在 8dBm(-69.4 + (8-20)=-81.4)
         "neighbor_rssi_dbm": {"ap1": -68.6, "ap3": -81.4},
         "sta_rssi_dbm": -48.0,
         "noise_floor_dbm": -91.0,
-        "throughput_mbps": 20.3,
+        "throughput_mbps_iperf": 20.3,
         "latency_ms": 195.0,
         "packet_loss_pct": 0.3,
     },
     "ap3": {
         "tx_power_dbm": 8.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.38,
+        "traffic_priority": "medium",
+        "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.06,
         # AP3 处接收：AP1 在 20dBm(-76)，AP2 在 14dBm(-70 + (14-20)=-76)
         "neighbor_rssi_dbm": {"ap1": -76.0, "ap2": -76.0},
         "sta_rssi_dbm": -50.0,
         "noise_floor_dbm": -90.0,
-        "throughput_mbps": 28.5,
+        "throughput_mbps_iperf": 28.5,
         "latency_ms": 120.0,
         "packet_loss_pct": 0.1,
     },
 }
 
-# 场景二：Co-EDCA（EDCA 拥塞严重，邻居 RSSI 弱）
+# 场景二：Co-EDCA（三 AP 承载不同优先级业务，当前 EDCA 参数未差异化，需协商）
+# AP1 承载语音/视频（high），AP2 承载通用数据（medium），AP3 承载后台传输（low）
+# 邻居 RSSI 弱，不触发 Co-SR；通过优先级驱动 EDCA 差异化来保障 AP1 的 QoS
 MOCK_SCENE_EDCA = {
     "ap1": {
         "tx_power_dbm": 10.0,
-        "cwmin": 3, "cwmax": 7, "aifsn": 1,
-        "channel_busy_ratio": 0.82,
-        "tx_retries_ratio": 0.31,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": "high",
+        "Data_rate_to_bandwidth_ratio": 0.55,
+        "tx_retries_ratio": 0.12,
         "neighbor_rssi_dbm": {"ap2": -85.0, "ap3": -88.0},
         "sta_rssi_dbm": -55.0,
         "noise_floor_dbm": -92.0,
-        "throughput_mbps": 18.4,
+        "throughput_mbps_iperf": 18.4,
         "latency_ms": 312.0,
         "packet_loss_pct": 1.2,
     },
     "ap2": {
         "tx_power_dbm": 10.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.55,
-        "tx_retries_ratio": 0.12,
+        "traffic_priority": "medium",
+        "Data_rate_to_bandwidth_ratio": 0.50,
+        "tx_retries_ratio": 0.10,
         "neighbor_rssi_dbm": {"ap1": -85.0, "ap3": -87.0},
         "sta_rssi_dbm": -61.0,
         "noise_floor_dbm": -91.0,
-        "throughput_mbps": 28.7,
+        "throughput_mbps_iperf": 28.7,
         "latency_ms": 185.0,
         "packet_loss_pct": 0.4,
     },
     "ap3": {
         "tx_power_dbm": 10.0,
-        "cwmin": 15, "cwmax": 63, "aifsn": 4,
-        "channel_busy_ratio": 0.38,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": "low",
+        "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
         "neighbor_rssi_dbm": {"ap1": -88.0, "ap2": -87.0},
         "sta_rssi_dbm": -58.0,
         "noise_floor_dbm": -90.0,
-        "throughput_mbps": 34.1,
+        "throughput_mbps_iperf": 34.1,
         "latency_ms": 98.0,
         "packet_loss_pct": 0.1,
     },
 }
 
-# 场景三：联合（高功率 + 严重拥塞，同时触发 Co-SR 和 Co-EDCA）
-# neighbor_rssi 与场景一类似（STA 距本 AP 近，降功率不断连）
+# 场景三：联合（高功率 + 业务优先级分化，同时触发 Co-SR 和 Co-EDCA）
+# AP1 承载语音/视频（high），AP2 承载通用数据（medium），AP3 承载后台传输（low）
+# neighbor_rssi 与场景一类似（STA 距本 AP 近，降功率后不会断连）
 MOCK_SCENE_JOINT = {
     "ap1": {
         "tx_power_dbm": 20.0,
-        "cwmin": 3, "cwmax": 7, "aifsn": 1,
-        "channel_busy_ratio": 0.82,
-        "tx_retries_ratio": 0.31,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": "high",
+        "Data_rate_to_bandwidth_ratio": 0.55,
+        "tx_retries_ratio": 0.12,
         "neighbor_rssi_dbm": {"ap2": -68.4, "ap3": -76.0},
         "sta_rssi_dbm": -45.0,
         "noise_floor_dbm": -92.0,
-        "throughput_mbps": 18.4,
+        "throughput_mbps_iperf": 18.4,
         "latency_ms": 312.0,
         "packet_loss_pct": 1.2,
     },
     "ap2": {
         "tx_power_dbm": 20.0,
         "cwmin": 7, "cwmax": 15, "aifsn": 2,
-        "channel_busy_ratio": 0.55,
-        "tx_retries_ratio": 0.12,
+        "traffic_priority": "medium",
+        "Data_rate_to_bandwidth_ratio": 0.50,
+        "tx_retries_ratio": 0.10,
         "neighbor_rssi_dbm": {"ap1": -68.6, "ap3": -69.2},
         "sta_rssi_dbm": -48.0,
         "noise_floor_dbm": -91.0,
-        "throughput_mbps": 28.7,
+        "throughput_mbps_iperf": 28.7,
         "latency_ms": 185.0,
         "packet_loss_pct": 0.4,
     },
     "ap3": {
         "tx_power_dbm": 20.0,
-        "cwmin": 15, "cwmax": 63, "aifsn": 4,
-        "channel_busy_ratio": 0.38,
+        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "traffic_priority": "low",
+        "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
         "neighbor_rssi_dbm": {"ap1": -76.0, "ap2": -69.2},
         "sta_rssi_dbm": -50.0,
         "noise_floor_dbm": -90.0,
-        "throughput_mbps": 34.1,
+        "throughput_mbps_iperf": 34.1,
         "latency_ms": 98.0,
         "packet_loss_pct": 0.1,
     },
@@ -327,6 +340,24 @@ MOCK_SCENES = {
     "edca":  MOCK_SCENE_EDCA,
     "joint": MOCK_SCENE_JOINT,
 }
+
+# 业务优先级 → 用户流量接入类别（AC）：high=语音 VO，medium=尽力而为 BE，low=后台 BK
+_USER_AC_BY_PRIORITY = {"high": "VO", "medium": "BE", "low": "BK"}
+
+
+def _augment_observation_fields(scene: dict) -> None:
+    """为 mock 场景补齐新增的只读观测字段（iperf/user 双路吞吐 + AC 类型）。"""
+    for state in scene.values():
+        iperf = state.get("throughput_mbps_iperf", 0.0)
+        state.setdefault("throughput_mbps_user", round(iperf * 0.6, 1))
+        state.setdefault("ac_iperf", "BK")  # iperf 测试流走后台队列
+        state.setdefault(
+            "ac_user", _USER_AC_BY_PRIORITY.get(state.get("traffic_priority", "medium"), "BE")
+        )
+
+
+for _scene in MOCK_SCENES.values():
+    _augment_observation_fields(_scene)
 
 
 def _parse_executor_endpoints(raw: str) -> dict[str, str]:

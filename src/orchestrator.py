@@ -13,6 +13,7 @@ from .console_style import (
     tool_dur, tool_name, tool_prefix, BOLD, FG, AP_NAME_COLORS, color,
 )
 from .logger import SessionLogger
+from .tools import sr as _sr
 from .tools.registry import TOOL_DEFINITIONS, make_executor
 from .validator import validate_decision
 
@@ -21,15 +22,16 @@ MAX_VOTE_ROUNDS = 3
 
 # 按工具名预分组，避免重复过滤
 _GET_LATEST_STATE = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "get_latest_ap_states"]
+_ANALYZE_SR    = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "analyze_sr_interference"]
+_SELECT_SR     = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "select_sr_concurrent_groups"]
 _VALIDATE_SR   = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "evaluate_sr_candidate"]
 _VALIDATE_EDCA = [t for t in TOOL_DEFINITIONS if t["function"]["name"] == "validate_edca_proposal"]
 
 
 def _tools_for_vote(_strategy: str) -> list:
-    # 投票者始终拥有 get_latest_ap_states + 两个验算工具（共 3 个）。
-    # 不包含计算用工具（analyze_sr_interference 等），那些只有提案方才需要。
-    # 3 个工具定义的总大小与改动前的 2 个相当，不会触发 PPIO 的请求体大小限制。
-    return _GET_LATEST_STATE + _VALIDATE_SR + _VALIDATE_EDCA
+    # 投票者反对时会在同一轮里给出反提案；一旦它选择 Co-SR，
+    # 也必须先具备分析/选择可并发组的工具能力。
+    return _GET_LATEST_STATE + _ANALYZE_SR + _SELECT_SR + _VALIDATE_SR + _VALIDATE_EDCA
 
 
 def _normalize_proposal(proposal: dict) -> dict:
@@ -69,6 +71,46 @@ def _infer_strategy_from_proposal(proposal: dict) -> str:
     if has_edca:
         return "co_edca"
     return "co_edca"
+
+
+def _sr_concurrent_group_from_proposal(proposal: dict | None) -> list[str]:
+    if not isinstance(proposal, dict):
+        return []
+    meta = proposal.get("_sr") or proposal.get("sr") or {}
+    if isinstance(meta, dict):
+        group = meta.get("concurrent_group") or meta.get("concurrent_aps")
+        if isinstance(group, list):
+            return [str(ap).lower() for ap in group]
+    group = proposal.get("concurrent_group")
+    if isinstance(group, list):
+        return [str(ap).lower() for ap in group]
+    return []
+
+
+def _with_sr_concurrent_group(proposal: dict, ap_state: dict) -> dict:
+    """
+    Co-SR / joint 提案必须先确定可用并发组。
+
+    若模型已经显式给出 concurrent_group，则保留；若缺失，则使用确定性枚举器
+    自动注入 best_group，避免退回“全网 AP 同时并发”的旧缺省语义。
+    """
+    strategy = _infer_strategy_from_proposal(proposal)
+    if strategy not in ("co_sr", "joint"):
+        return proposal
+
+    groups = _sr.select_concurrent_groups(ap_state)
+    best = groups.get("best_group") if isinstance(groups, dict) else None
+    existing_group = _sr_concurrent_group_from_proposal(proposal)
+    if existing_group or not best:
+        return proposal
+
+    updated = dict(proposal)
+    sr_meta = dict(updated.get("_sr") or {})
+    sr_meta["concurrent_group"] = list(best.get("concurrent_group", []))
+    sr_meta["non_concurrent_aps"] = list(best.get("non_concurrent_aps", []))
+    sr_meta["source"] = "orchestrator_auto_select"
+    updated["_sr"] = sr_meta
+    return updated
 
 
 
@@ -171,7 +213,9 @@ def _format_tool_args(tname: str, raw_args: dict) -> str:
         powers = raw_args.get("proposed_powers", {})
         if isinstance(powers, dict):
             parts = [f"{ap}={_fmt_num(power, 'dBm')}" for ap, power in powers.items()]
-            return " " + " ".join(parts)
+            group = raw_args.get("concurrent_group")
+            group_text = f" group={','.join(group)}" if isinstance(group, list) else ""
+            return " " + " ".join(parts) + group_text
     # 以下工具参数在结果行显示，header 省略
     if tname in ("validate_edca_proposal", "rank_sr_candidates"):
         return ""
@@ -195,7 +239,7 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             lines.append(
                 f"{ap_label(ap_id)}"
                 f" TX={_fmt_num(state.get('tx_power_dbm'), 'dBm')}"
-                f" busy={_fmt_pct(state.get('channel_busy_ratio'))}"
+                f" busy={_fmt_pct(state.get('Data_rate_to_bandwidth_ratio'))}"
                 f" retry={_fmt_pct(state.get('tx_retries_ratio'))}"
                 f" STA={_fmt_num(state.get('sta_rssi_dbm'), 'dBm')}"
                 f" EDCA={state.get('cwmin','—')}/{state.get('cwmax','—')}/{state.get('aifsn','—')}"
@@ -233,17 +277,70 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
     if tname == "compute_sr_feasible_ranges":
         lines  = [hdr]
         ranges = result.get("ranges", {})
+        all_feasible = result.get("all_individual_ranges_feasible", True)
         for ap_id in AP_IDS:
             item    = ranges.get(ap_id, {}) if isinstance(ranges, dict) else {}
             cur     = _fmt_num(item.get("current_dbm"), "")
             lo      = _fmt_num(item.get("min_dbm"), "")
             hi      = _fmt_num(item.get("max_dbm"), "")
+            feasible = item.get("feasible_individual_range", True)
             reasons = dim(",".join(item.get("upper_reasons", [])) or "—")
-            lines.append(f"{ap_label(ap_id)} {cur}→[{lo},{hi}]dBm  上界:{reasons}")
-        seed = result.get("feasible_seed")
-        if seed:
+            if feasible:
+                lines.append(f"{ap_label(ap_id)} {cur}→[{lo},{hi}]dBm  上界:{reasons}")
+            else:
+                lines.append(
+                    f"{ap_label(ap_id)} {cur}→[{status_fail('无可行范围')}]  "
+                    f"上界 {hi} < 下界 {lo}（{reasons}）"
+                )
+        seed = result.get("candidate_hints", {}).get("minimal_necessary_drop")
+        if seed and isinstance(seed, dict) and seed:
             seed_text = " ".join(f"{ap}={_fmt_num(p,'dBm')}" for ap, p in seed.items())
             lines.append(f"{dim('可行起点:')} {seed_text}")
+        if not all_feasible:
+            lines.append(status_warn("警告：存在不可行范围，CCA 约束可能无法满足"))
+        return "\n".join(lines)
+
+    # ── select_sr_concurrent_groups ───────────────────────────────────
+    if tname == "select_sr_concurrent_groups":
+        lines = [hdr]
+        best = result.get("best_group") if isinstance(result, dict) else None
+        if best:
+            group = ",".join(best.get("concurrent_group", []))
+            non = ",".join(best.get("non_concurrent_aps", [])) or "—"
+            score = best.get("score", {})
+            powers = best.get("recommended_powers", {})
+            pw_txt = " ".join(f"{ap}={_fmt_num(p,'dBm')}" for ap, p in powers.items())
+            lines.append(
+                f"{status_ok('最佳并发组')} {group}  非并发:{non}  {pw_txt}"
+            )
+            lines.append(
+                f"{dim('代价:')} 总降功={_fmt_num(score.get('total_power_drop_db'), 'dB')}"
+                f" maxCCA={_fmt_num(score.get('max_cca_dbm'), 'dBm')}"
+                f" minSINR={_fmt_num(score.get('min_sinr_db'), 'dB')}"
+            )
+        else:
+            lines.append(status_fail("没有找到可行并发组"))
+            failed_groups = [
+                item for item in (result.get("all_groups") or [])
+                if isinstance(item, dict) and not item.get("valid")
+            ]
+            for item in failed_groups[:6]:
+                group = ",".join(item.get("concurrent_group", [])) or "—"
+                error = item.get("error") or "未给出具体错误"
+                lines.append(f"  {dim('候选组 ' + group + ':')} {error}")
+            diagnosis = result.get("diagnosis", {}) if isinstance(result, dict) else {}
+            for ap_id in AP_IDS:
+                info = diagnosis.get(ap_id, {}) if isinstance(diagnosis, dict) else {}
+                reasons = info.get("reasons") or []
+                if reasons:
+                    lines.append(f"  {dim(ap_id + ':')} " + "; ".join(reasons))
+                elif failed_groups:
+                    strongest = info.get("strongest_interferer")
+                    if isinstance(strongest, dict) and strongest.get("ap"):
+                        lines.append(
+                            f"  {dim(ap_id + ':')} 结构性 STA/噪声约束未触发；"
+                            f"最强邻居 {strongest.get('ap')}={_fmt_num(strongest.get('rssi_dbm'), 'dBm')}"
+                        )
         return "\n".join(lines)
 
     # ── evaluate_sr_candidate / validate_sr_proposal ──────────────────
@@ -251,11 +348,19 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
         all_ok = result.get("valid", False)
         flag   = status_ok("全部OK") if all_ok else status_fail("FAIL")
         lines  = [f"{hdr}  {flag}"]
+        group = result.get("concurrent_group")
+        non_concurrent = result.get("non_concurrent_aps")
+        if group:
+            group_text = ",".join(group)
+            non_text = ",".join(non_concurrent or []) or "—"
+            lines.append(f"{dim('并发组:')} {group_text}  {dim('非并发:')} {non_text}")
 
         if not all_ok:
             per_ap = result.get("per_ap", {})
             for ap_id in AP_IDS:
-                item = per_ap.get(ap_id, {}) if isinstance(per_ap, dict) else {}
+                if not isinstance(per_ap, dict) or ap_id not in per_ap:
+                    continue
+                item = per_ap.get(ap_id, {})
                 if not item.get("valid"):
                     errors   = item.get("errors") or []
                     err_text = "; ".join(e[:60] for e in errors[:2]) if errors else "未知"
@@ -289,6 +394,12 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
     # ── validate_edca_proposal ────────────────────────────────────────
     if tname == "validate_edca_proposal":
+        # 检查是否有错误返回（参数缺失）
+        if result.get("error"):
+            lines = [f"{hdr}  {status_fail('参数缺失')}"]
+            lines.append(f"  {dim(result['error'])}")
+            return "\n".join(lines)
+
         ap_entries = [ap_id for ap_id in AP_IDS if isinstance(result.get(ap_id), dict)]
         per_ap_ok = all(
             result.get(ap_id, {}).get("valid", True)
@@ -365,17 +476,17 @@ class NegotiationOrchestrator:
     # 决策推送
     # ──────────────────────────────────────────────────────────────────────
 
-    def _push_decision(self, decision: dict, strategy: str, session_id: str) -> None:
+    def _push_decision(self, decision: dict, strategy: str, session_id: str) -> dict[str, dict]:
         """
         并发向所有香蕉派执行服务推送最终决策。
         每个 AP 只收到属于自己的 params 子集。
         """
         if not self.executor_endpoints:
-            return
+            return {}
 
         import requests as _req
 
-        def _send(ap_id: str, url: str) -> tuple[str, bool, str]:
+        def _send(ap_id: str, url: str) -> tuple[str, bool, str, dict]:
             params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
             payload = {
                 "session_id": session_id,
@@ -387,20 +498,37 @@ class NegotiationOrchestrator:
                 r = _req.post(f"{url.rstrip('/')}/apply", json=payload, timeout=8)
                 ok = r.status_code == 200
                 msg = r.json().get("details", r.text) if ok else r.text
-                return ap_id, ok, str(msg)
+                return ap_id, ok, str(msg), payload
             except Exception as exc:
-                return ap_id, False, str(exc)
+                return ap_id, False, str(exc), payload
 
         print("\n[Executor] 开始向香蕉派推送决策...")
+        results: dict[str, dict] = {}
         with ThreadPoolExecutor(max_workers=len(self.executor_endpoints)) as pool:
             futures = {
                 pool.submit(_send, ap_id, url): ap_id
                 for ap_id, url in self.executor_endpoints.items()
             }
             for future in as_completed(futures):
-                ap_id, ok, msg = future.result()
+                ap_id, ok, msg, payload = future.result()
                 status = "✓" if ok else "✗"
                 print(f"[{status}] {ap_id.upper()}: {msg}")
+                url = self.executor_endpoints[ap_id]
+                results[ap_id] = {
+                    "ok": ok,
+                    "url": url,
+                    "payload": payload,
+                    "response": msg,
+                }
+                if self.logger:
+                    self.logger.record_executor_apply(
+                        ap_id,
+                        ok=ok,
+                        url=url,
+                        payload=payload,
+                        response=msg,
+                    )
+        return results
 
     # ──────────────────────────────────────────────────────────────────────
     # 内部辅助
@@ -463,11 +591,12 @@ class NegotiationOrchestrator:
             for state in ap_state.values()
             for rssi in (state.get("neighbor_rssi_dbm") or {}).values()
         )
-        edca_triggered = any(
-            float(state.get("channel_busy_ratio", 0.0)) > 0.60
-            and float(state.get("tx_retries_ratio", 0.0)) > 0.15
+        # Co-EDCA 触发：各 AP 存在不同的业务优先级（需要差异化 EDCA）
+        priorities = {
+            state.get("traffic_priority", "medium")
             for state in ap_state.values()
-        )
+        }
+        edca_triggered = len(priorities) > 1
 
         if sr_triggered and edca_triggered:
             return "joint"
@@ -577,7 +706,26 @@ class NegotiationOrchestrator:
                 and len(content[:content.index("```json")].strip()) < 30
             )
 
-            if not claimed_without_call and not missing_preamble or attempt == 1:
+            has_select_tool = "select_sr_concurrent_groups" in tool_names
+            proposal_candidate = _extract_proposal(content) if has_select_tool else None
+            missing_sr_group_selection = (
+                role in (
+                    "proposer",
+                    "proposal_json_repair",
+                    "voter",
+                    "counter_proposal_json_repair",
+                )
+                and attempt == 0
+                and proposal_candidate is not None
+                and _infer_strategy_from_proposal(proposal_candidate) in ("co_sr", "joint")
+                and not any(tc.get("tool") == "select_sr_concurrent_groups" for tc in attempt_tool_log)
+            )
+
+            if (
+                not claimed_without_call
+                and not missing_preamble
+                and not missing_sr_group_selection
+            ) or attempt == 1:
                 break
 
             if claimed_without_call:
@@ -590,13 +738,24 @@ class NegotiationOrchestrator:
                     "\n[协调者] 检测到上一轮回复声称使用工具，但未产生真实工具调用；要求重试。",
                     flush=True,
                 )
-            else:  # missing_preamble
+            elif missing_preamble:
                 retry_hint = (
                     "\n\n[系统提醒] 你的回复缺少必要的文字说明（在 JSON 之前应说明选择了哪种路径、"
                     "为什么、关键指标是什么、预期改善是什么）。请先给出完整的文字分析，再附上 JSON。"
                 )
                 print(
                     "\n[协调者] 检测到提案缺少文字说明，要求重新回复并先给出分析。",
+                    flush=True,
+                )
+            else:  # missing_sr_group_selection
+                retry_hint = (
+                    "\n\n[系统提醒] 你的参数 JSON 属于 Co-SR/联合路径，但本次发言没有先调用 "
+                    "select_sr_concurrent_groups。只要选择 Co-SR 方向，第一步必须真实调用 "
+                    "get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups，"
+                    "并在最终 JSON 的 _sr.concurrent_group 写明本轮可并发组。请重新回答。"
+                )
+                print(
+                    "\n[协调者] 检测到 Co-SR 提案未先选择可并发组，要求重新回复。",
                     flush=True,
                 )
             active_instruction = instruction + retry_hint
@@ -698,20 +857,43 @@ class NegotiationOrchestrator:
             f"{history_hint}"
             f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
             "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
-            "你可以根据分析结果，自由选择以下任一协商路径：\n\n"
+            "【路径选择规则（必须遵守）】\n"
+            "  · 如果各 AP 的 traffic_priority 字段存在差异（如 high / medium / low 不完全相同），\n"
+            "    必须选择 Co-EDCA 或联合路径——优先级差异是 EDCA 协商的专属触发条件，\n"
+            "    不得以信道繁忙或延迟偏高为由改选 Co-SR。\n"
+            "  · 只有当所有 AP 的 traffic_priority 相同且存在强干扰（邻居 RSSI > -70 dBm）时，\n"
+            "    才应选择纯 Co-SR 路径。\n\n"
+            "你可以根据分析结果，选择以下协商路径：\n\n"
             "【Co-SR】降低各 AP 的 TX Power，减少 OBSS 干扰。\n"
-            "  适用场景：邻居 RSSI > -70 dBm 或 SINR 持续低于 15 dB。\n"
-            "  Co-SR 目标是最小必要降功率；不要选择 1 dBm 这类过度保守的功率，"
-            "除非靠近可行区间上界的候选无法满足约束。\n"
-            "  工具链：analyze_sr_interference → compute_sr_feasible_ranges → "
-            "rank_sr_candidates → evaluate_sr_candidate\n"
-            "  提案 JSON 须包含 tx_power_dbm 字段（每个 AP）。\n\n"
-            "【Co-EDCA】调整 CWmin / CWmax / AIFSN，缓解信道竞争与高重传率。\n"
-            "  适用场景：channel_busy_ratio > 0.60 或 tx_retries_ratio > 0.15。\n"
-            "  工具链：validate_edca_proposal\n"
-            "  提案 JSON 须包含 CWmin、CWmax、AIFSN 字段（每个 AP）。\n\n"
-            "【联合（Co-SR + Co-EDCA）】同时调整两类参数。"
-            "提案 JSON 须同时包含 tx_power_dbm 与 EDCA 字段。\n\n"
+            "  适用场景：邻居 RSSI > -70 dBm 或 SINR 持续低于 15 dB，且各 AP 优先级相同。\n"
+            "  【硬性流程】只要选择 Co-SR 或联合路径，第一步必须先判断可用并发组："
+            "调用 get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups。\n"
+            "  Co-SR 目标是先选择可空间复用的并发组，再在保护 SINR 和 STA RSSI 的前提下最大化降功率；"
+            "不是所有 AP 都必须参与同一并发组。若中间 AP 与两侧干扰太强，"
+            "可以只让最远、互扰较弱的一组（如 ap1/ap3）并发，强干扰 AP 作为 non_concurrent_aps 保持不并发。\n"
+            "  工具链：analyze_sr_interference → select_sr_concurrent_groups → "
+            "evaluate_sr_candidate（传入 proposed_powers 和 concurrent_group）。\n"
+            "  若确实需要全网三 AP 同时并发，再使用 compute_sr_feasible_ranges / rank_sr_candidates 辅助比较。\n"
+            "  功率选择应是最大必要降功率：在 SINR 和 STA RSSI 约束允许的前提下，尽量降至可行区间下界（min_int_dbm）。\n"
+            "  提案 JSON 须包含每个 AP 的 tx_power_dbm，并额外包含 "
+            "`\"_sr\": {\"concurrent_group\": [\"ap1\", \"ap3\"], "
+            "\"non_concurrent_aps\": [\"ap2\"]}` 这样的并发组说明。\n\n"
+            "【Co-EDCA】根据各 AP 的业务优先级（traffic_priority）差异化调整 CWmin / CWmax / AIFSN，\n"
+            "  保障高优先级业务的信道接入优先权。\n"
+            "  适用场景：各 AP 承载不同优先级的业务（high / medium / low），当前 EDCA 参数未体现差异。\n"
+            "  调整规则：\n"
+            "    · 高优先级（high）业务：调低 CWmin、CWmax、AIFSN——更小的退避窗口和更短的\n"
+            "      AIFS 间隔使该 AP 更早开始竞争并更快接入信道，降低时延。\n"
+            "    · 低优先级（low）业务：调高 CWmin、CWmax、AIFSN——更大的退避让低优先级 AP\n"
+            "      主动放慢竞争节奏，把信道机会让给高优先级业务。\n"
+            "    · 中优先级（medium）：参数介于两者之间。\n"
+            "  硬性排序约束（提案必须满足）：\n"
+            "    high.CWmin ≤ medium.CWmin ≤ low.CWmin\n"
+            "    high.AIFSN ≤ medium.AIFSN ≤ low.AIFSN\n"
+            "  工具链：validate_edca_proposal（校验范围合规 + 优先级排序）\n"
+            "  提案 JSON 须包含每个 AP 的 CWmin、CWmax、AIFSN 字段。\n\n"
+            "【联合（Co-SR + Co-EDCA）】同时调整 TX Power 和 EDCA：降低 OBSS 干扰的同时，\n"
+            "  根据业务优先级差异化 EDCA 参数。提案 JSON 须同时包含 tx_power_dbm 与 EDCA 字段。\n\n"
             "提案须简洁说明：\n"
             "  · 选择了哪种路径，为什么（关键指标数据是什么）\n"
             "  · 每个 AP 的最终参数是多少，为何选择该方案（如有历史争议，说明如何化解）\n"
@@ -719,7 +901,8 @@ class NegotiationOrchestrator:
             "最终提交前必须调用 evaluate_sr_candidate（Co-SR/联合路径）或 "
             "validate_edca_proposal（Co-EDCA/联合路径）自检相关约束。\n"
             "【关键】提案阶段自检时，必须把你打算提出的参数显式作为工具参数传入"
-            "（evaluate_sr_candidate 传 proposed_powers，validate_edca_proposal 传 proposed_edca）；"
+            "（evaluate_sr_candidate 传 proposed_powers；部分并发时还必须传 concurrent_group；"
+            "validate_edca_proposal 传 proposed_edca）；"
             "空参调用只在投票阶段有效，提案阶段空参会因缺参而无法验算。\n"
             "提案末尾必须用 ```json 代码块附上参数摘要，JSON 顶层键必须是 ap1/ap2/ap3。"
         )
@@ -733,7 +916,7 @@ class NegotiationOrchestrator:
         )
         proposal = _extract_proposal(content)
         if proposal is not None:
-            return proposal
+            return _with_sr_concurrent_group(proposal, self._current_ap_states or ap_state)
 
         repair_instruction = (
             "上一轮提案没有输出可解析的参数 JSON。\n"
@@ -746,10 +929,13 @@ class NegotiationOrchestrator:
             repair_instruction,
             phase=3,
             role="proposal_json_repair",
-            tools=None,
+            tools=TOOL_DEFINITIONS,
             speaker=proposer_id.upper(),
         )
-        return _extract_proposal(content)
+        proposal = _extract_proposal(content)
+        if proposal is None:
+            return None
+        return _with_sr_concurrent_group(proposal, self._current_ap_states or ap_state)
 
     def _phase_vote_single(
         self,
@@ -767,7 +953,8 @@ class NegotiationOrchestrator:
 
         verify_hint = {
             "co_sr":   "关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量，以及它对你业务的直接影响",
-            "co_edca": "关注你自己的 CWmin/CWmax/AIFSN 建议值、工具返回的 valid/errors，以及退避变化是否可接受",
+            "co_edca": "关注你自己的 traffic_priority（高优先级需要更小的 CWmin/AIFSN，低优先级需要更大）、"
+                       "工具返回的 valid/errors 与优先级排序校验结果，以及参数差异化是否合理",
             "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
         }.get(strategy, "关注工具返回的 valid/errors 以及参数对你的影响")
 
@@ -813,6 +1000,10 @@ class NegotiationOrchestrator:
             "  4. 如果认为当前路径不合适，可以切换：\n"
             "     Co-SR → 提案 JSON 中使用 tx_power_dbm 字段\n"
             "     Co-EDCA → 提案 JSON 中使用 CWmin/CWmax/AIFSN 字段\n\n"
+            "如果你的反提案选择 Co-SR 或联合路径，必须先真实调用 "
+            "get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups "
+            "判断可用并发组，再在反提案 JSON 中写入 _sr.concurrent_group；"
+            "不能在未选组时直接给功率。\n\n"
             "然后附两个 ```json 块：\n"
             "第一块：```json\n{\"agreed\": false, \"reason\": \"...\"}\n```\n"
             "第二块：完整参数反提案，JSON 顶层键必须是 ap1/ap2/ap3。"
@@ -838,11 +1029,12 @@ class NegotiationOrchestrator:
         voter_id: str,
         vote_content: str,
         proposal_num: int,
+        ap_state: dict,
     ) -> dict | None:
         """从投票内容中提取反提案 JSON；提取失败则要求补充一次纯 JSON 回复。"""
         proposal = _extract_proposal(vote_content)
         if proposal is not None:
-            return proposal
+            return _with_sr_concurrent_group(proposal, self._current_ap_states or ap_state)
 
         repair_instruction = (
             "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
@@ -850,6 +1042,9 @@ class NegotiationOrchestrator:
             "给出一个能兼顾所有人需求的反提案。\n"
             "你可以自由选择协商路径：Co-SR 使用 tx_power_dbm 字段，Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，"
             "联合路径两类字段均出现。\n"
+            "如果选择 Co-SR 或联合路径，第一步必须真实调用 get_latest_ap_states、"
+            "analyze_sr_interference、select_sr_concurrent_groups，先判断可用并发组，"
+            "并在 JSON 中写入 _sr.concurrent_group。\n"
             "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3。不要写解释。"
         )
         content = self._speak_and_log(
@@ -857,10 +1052,13 @@ class NegotiationOrchestrator:
             repair_instruction,
             phase=3,
             role="counter_proposal_json_repair",
-            tools=None,
+            tools=TOOL_DEFINITIONS,
             speaker=voter_id.upper(),
         )
-        return _extract_proposal(content)
+        proposal = _extract_proposal(content)
+        if proposal is None:
+            return None
+        return _with_sr_concurrent_group(proposal, self._current_ap_states or ap_state)
 
     def _emit_final_decision(self, proposer_id: str, proposal: dict) -> dict | None:
         if self.logger:
@@ -882,6 +1080,12 @@ class NegotiationOrchestrator:
         )
 
         decision = _extract_json(content)
+        # 保留原始提案里的 _sr 元数据（LLM 被要求只输出 ap1/ap2/ap3 键，
+        # 会丢弃 concurrent_group，导致 validator 无法正确过滤非并发 AP）
+        if decision is not None and isinstance(proposal, dict):
+            for meta_key in ("_sr", "sr", "concurrent_group"):
+                if meta_key in proposal and meta_key not in decision:
+                    decision[meta_key] = proposal[meta_key]
         if self.logger:
             self.logger.final_decision(decision, content)
             self.logger.record_decision_parameters(
@@ -965,6 +1169,30 @@ class NegotiationOrchestrator:
                         # 全票通过 → 输出最终决策并验证
                         decision = self._emit_final_decision(current_proposer, proposal)
 
+                        precheck = validate_decision(
+                            ap_state, decision, strategy,
+                            observed_state=ap_state,
+                            observed_is_real=False,
+                        )
+                        print(
+                            f"\n[Validator] 参数预检 {'通过' if precheck['approved'] else '未通过'}"
+                            f" — {precheck['summary']}"
+                        )
+                        if self.logger:
+                            self.logger.validation_result(precheck)
+
+                        if not precheck["approved"]:
+                            err_detail = "；".join(precheck.get("global_errors") or [])
+                            self._record(
+                                "VALIDATOR",
+                                f"[参数预检未通过] {precheck.get('summary', '')}"
+                                + (f"\n具体问题：{err_detail}" if err_detail else ""),
+                            )
+                            break
+
+                        session_id = self.logger.session_id if self.logger else ""
+                        self._push_decision(decision, strategy, session_id)
+
                         observed_state, obs_error, obs_real = (
                             self._collect_observed_state(ap_state)
                         )
@@ -990,8 +1218,6 @@ class NegotiationOrchestrator:
                             self.last_decision = decision
                             self.last_strategy = strategy
                             self._finish_session("success", proposal_num, started_at)
-                            session_id = self.logger.session_id if self.logger else ""
-                            self._push_decision(decision, strategy, session_id)
                             return self.conversation_log
 
                         # 验证未通过：将原因写入对话记录，让 AP1 重提案时可见
@@ -1005,7 +1231,7 @@ class NegotiationOrchestrator:
                 else:  # reject
                     # 反对者立即成为新提案方
                     new_proposal = self._phase_counter_propose(
-                        voter_id, content, proposal_num + 1
+                        voter_id, content, proposal_num + 1, ap_state
                     )
                     if new_proposal is not None:
                         proposal_num += 1

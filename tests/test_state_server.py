@@ -1,4 +1,6 @@
 import copy
+import json
+import tempfile
 import unittest
 
 from state_server import server
@@ -11,12 +13,15 @@ BASE_PAYLOAD = {
     "cwmin": 4,
     "cwmax": 10,
     "aifsn": 3,
-    "channel_busy_ratio": 0.4,
+    "Data_rate_to_bandwidth_ratio": 0.4,
     "tx_retries_ratio": 0.1,
     "neighbor_rssi_dbm": {"ap2": -57.0, "ap3": -56.0},
     "sta_rssi_dbm": -71.0,
     "noise_floor_dbm": -83.0,
-    "throughput_mbps": 45.0,
+    "throughput_mbps_iperf": 45.0,
+    "throughput_mbps_user": 27.0,
+    "ac_iperf": "BK",
+    "ac_user": "BE",
     "latency_ms": 7.5,
     "packet_loss_pct": 0.0,
 }
@@ -28,6 +33,11 @@ class StateServerSourcePolicyTest(unittest.TestCase):
         server._store.clear()
         for rows in server._history.values():
             rows.clear()
+        if server._trace_fh is not None:
+            server._trace_fh.close()
+        server._trace_fh = None
+        server._trace_path = None
+        server._trace_session_id = None
         self.client = server.app.test_client()
 
     def test_default_server_rejects_generated_sources(self):
@@ -75,6 +85,25 @@ class StateServerSourcePolicyTest(unittest.TestCase):
         self.assertIn('text: "时间 (s)"', html)
         self.assertIn("timelineMaxSeconds", html)
         self.assertNotIn("chartjs-adapter-date-fns", html)
+
+    def test_trace_records_state_posts_to_state_log_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            start = self.client.post(
+                "/trace/start",
+                json={"session_id": "testsession", "dir": tmp},
+            ).get_json()
+            payload = copy.deepcopy(BASE_PAYLOAD)
+            payload["source"] = "ap"
+
+            self.client.post("/state", json=payload)
+            stop = self.client.post("/trace/stop").get_json()
+
+            self.assertEqual(start["path"], stop["path"])
+            with open(stop["path"], encoding="utf-8") as fh:
+                rows = [json.loads(line) for line in fh]
+            self.assertEqual(rows[0]["event"], "trace_start")
+            self.assertTrue(any(row["event"] == "state_post" for row in rows))
+            self.assertEqual(rows[-1]["event"], "trace_stop")
 
 
 if __name__ == "__main__":
