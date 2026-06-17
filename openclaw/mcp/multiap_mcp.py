@@ -39,6 +39,7 @@ from src.tools.edca import encode_params_edca
 from src.validator import validate_decision as _validate_decision
 from src.profile import apply_profile, agent_view
 from src.state_client import get_all_states, StateStaleError
+import orchestration as _orch
 
 STATE_SERVER = os.environ.get("MULTIAP_STATE_SERVER", "http://localhost:5001")
 PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
@@ -54,7 +55,7 @@ mcp = FastMCP("multiap-tools")
 # ──────────────────────────────────────────────────────────────────────
 
 def _full_state() -> dict:
-    """从状态服务器拉取全部 AP 状态并应用业务画像 + 字段白名单（含内部字段）。"""
+    """从状态服务器拉取全部 AP 状态并应用字段白名单与保守默认值（含内部字段）。"""
     return apply_profile(get_all_states(STATE_SERVER))
 
 
@@ -127,7 +128,8 @@ def rank_sr_candidates(candidates: dict, objective: str = "balanced") -> dict:
 @mcp.tool()
 def validate_edca_proposal(proposed_edca: dict) -> dict:
     """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin）
-    + 按 traffic_priority 的优先级单调性（high.CWmin ≤ medium ≤ low，AIFSN 同理），并评估拥塞匹配度。
+    + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
+    并评估拥塞匹配度。traffic_priority 不是 AP 固定身份；同优先级时不要强行制造梯度。
     proposed_edca 形如 {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。"""
     def _run() -> dict:
         if not proposed_edca:
@@ -146,6 +148,20 @@ def validate_edca_proposal(proposed_edca: dict) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 # Coordinator 专用工具（编排 / 验收 / 下发 / 驱动子 agent）
 # ──────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def run_fast_negotiation(max_validation_retries: int = 3, max_turns: int = 30) -> dict:
+    """阶段级快速协商：coordinator 调用一次，工具内部批量驱动 AP agents 完成广播、提案、投票、决策和验收。
+    用于控制耗时，避免 coordinator 在每个 AP 发言前后都重新选择发言人。"""
+    def _run() -> dict:
+        result = _orch.structured_relay(
+            max_validation_retries=int(max_validation_retries),
+            max_turns=int(max_turns),
+        )
+        result["transcript"] = _orch.session().transcript
+        return result
+    return _guard(_run)
+
 
 @mcp.tool()
 def validate_decision(decision: dict, strategy: str) -> dict:

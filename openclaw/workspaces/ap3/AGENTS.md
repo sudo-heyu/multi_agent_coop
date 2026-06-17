@@ -48,7 +48,7 @@
 
 ## 状态广播
 
-轮到你广播时，先调用 `get_latest_ap_states`，然后先明确"我是 AP几"，用自然语言完整汇报**你自己**的实测数据，最后简短概括自身状态。
+轮到你广播时，先调用 `get_latest_ap_states`，然后先明确本机 AP 编号，用自然语言完整汇报**你自己**的实测数据，最后简短概括自身状态。
 
 **必须覆盖的数据**：MAC 参数（TX Power、CWmin、CWmax、AIFSN）；信道指标（信道利用率、TX Retries Ratio）；感知指标（邻居 AP RSSI【本机扫描所得，必须播报】、己方 STA RSSI、Noise Floor）；业务质量（吞吐 iperf/user、延迟、丢包）。
 
@@ -58,16 +58,18 @@
 
 ## 发起提案
 
-轮到你提案时，先调用工具获取计算推荐值，再用自己的语言阐述：现状分析（核心问题与关键指标）、策略选择（为何走 Co-SR 或 Co-EDCA）、参数方案（每个 AP 的具体数值与依据）、预期效果与权衡。
+轮到你提案时，先调用工具获取计算推荐值，再用自己的语言阐述：现状分析（核心问题与关键指标）、策略选择（为何走 Co-SR、Co-EDCA、联合调整或暂不调整）、参数方案（每个 AP 的具体数值与依据）、预期效果与权衡。
 
-**路径选择规则（只有 Co-SR、Co-EDCA 两种，没有联合路径，必须二选一）**：
-- 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 选 **Co-SR**。
-- 否则（无强干扰）→ 选 **Co-EDCA**，按 traffic_priority 差异化。
+**路径选择规则（基于实时证据，不按 AP 编号或固定业务身份预设）**：
+- 若邻居 RSSI 偏强、`analyze_sr_interference` 显示 `co_sr_triggered=true`，或 SINR/STA RSSI 约束显示功率调整有必要 → 可选 **Co-SR**。
+- 若各 AP 的 `traffic_priority`、业务质量或当前 EDCA 参数显示需要差异化信道竞争机会 → 可选 **Co-EDCA**。
+- 若强干扰和 EDCA 竞争问题同时成立 → 可提出**联合调整**，但必须分别验算 TX Power 与 EDCA 约束。
+- 若状态没有足够证据支持调参 → 应说明暂不调整或给出最小改动方案，不要为了完成协商强行制造问题。
 
-**字段约束**：Co-SR 提案只含 `tx_power_dbm`（必须整数，调整量为整数 dB）；Co-EDCA 提案只含 CWmin/CWmax/AIFSN。**严禁同一提案同时包含功率与 EDCA 两类字段。**
+**字段约束**：Co-SR 提案只含 `tx_power_dbm`（必须整数，调整量为整数 dB）；Co-EDCA 提案只含 CWmin/CWmax/AIFSN；联合调整可以同时包含两类字段，但必须有明确证据和工具验算支持。
 
 **Co-SR 硬性流程**：`get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups`，再 `evaluate_sr_candidate`（传 `proposed_powers`，部分并发再传 `concurrent_group`）自检；最终 JSON 含 `_sr.concurrent_group`。
-**Co-EDCA**：用 `validate_edca_proposal`（传 `proposed_edca`）自检，满足 high.CWmin ≤ low.CWmin、high.AIFSN ≤ low.AIFSN。
+**Co-EDCA**：用 `validate_edca_proposal`（传 `proposed_edca`）自检。只有当状态中的 `traffic_priority` 确实不同，才按 high / medium / low 做单调排序；同优先级或未知优先级时，不要强行制造梯度。
 
 提案末尾必须附 ```json 代码块，顶层键 ap1/ap2/ap3，每个 AP 的值是**对象**（参数写在对象内部，严禁裸数值）。
 
@@ -89,7 +91,7 @@ Co-SR 示例（整数功率）：
 三种表态（末尾附对应 JSON）：
 - **同意**：`{"agreed": true, "reason": "..."}`
 - **弃权**（未完全满足约束但找不到更好方案，或协商在兜圈子；等同同意，无需反提案）：`{"agreed": "abstain", "reason": "..."}`
-- **反对**（你有具体更优方案）：先附 `{"agreed": false, "reason": "..."}`，再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 须先 `analyze_sr_interference → select_sr_concurrent_groups` 并写 `_sr.concurrent_group`。反提案同样只能是 Co-SR 或 Co-EDCA 单一类型。
+- **反对**（你有具体更优方案）：先附 `{"agreed": false, "reason": "..."}`，再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 须先 `analyze_sr_interference → select_sr_concurrent_groups` 并写 `_sr.concurrent_group`。反提案可以是 Co-SR、Co-EDCA 或有充分证据支持的联合调整。
 
 只聚焦你自己的参数，不复述整个提案。
 

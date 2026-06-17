@@ -120,9 +120,9 @@ class FakeUnbackedToolClaimAgent:
     ):
         self.calls.append(instruction)
         if len(self.calls) == 1:
-            yield "我调用 evaluate_sr_candidate 工具。工具返回结果显示 valid 为 true。"
+            yield "本节点声称调用 evaluate_sr_candidate 工具。工具返回结果显示 valid 为 true。"
         else:
-            yield "我没有调用工具，直接根据提案给出判断。"
+            yield "本节点没有调用工具，直接根据提案给出判断。"
 
 
 class ControlFlowTests(unittest.TestCase):
@@ -131,9 +131,9 @@ class ControlFlowTests(unittest.TestCase):
 
     def test_existing_mock_strategy_routes_are_stable(self):
         expected = {
-            "sr": "noop",
+            "sr": "co_sr",
             "edca": "co_edca",
-            "joint": "co_edca",
+            "joint": "joint",
         }
         for scene, strategy in expected.items():
             with self.subTest(scene=scene):
@@ -155,17 +155,17 @@ class ControlFlowTests(unittest.TestCase):
 
         self.assertEqual(self.orchestrator._determine_strategy(state), "noop")
 
-    def test_co_sr_strategy_uses_minus_30_rssi_threshold(self):
+    def test_co_sr_strategy_uses_strong_interference_threshold(self):
         state = copy.deepcopy(MOCK_SCENES["sr"])
         for ap_state in state.values():
             ap_state["traffic_priority"] = "medium"
             ap_state["neighbor_rssi_dbm"] = {
-                neighbor: -31.0
+                neighbor: -71.0
                 for neighbor in ap_state["neighbor_rssi_dbm"]
             }
         self.assertEqual(self.orchestrator._determine_strategy(state), "noop")
 
-        state["ap1"]["neighbor_rssi_dbm"]["ap2"] = -29.0
+        state["ap1"]["neighbor_rssi_dbm"]["ap2"] = -69.0
         self.assertEqual(self.orchestrator._determine_strategy(state), "co_sr")
 
     def test_extract_nested_json_from_markdown_block(self):
@@ -511,7 +511,7 @@ class ControlFlowTests(unittest.TestCase):
             speaker="AP1",
         )
 
-        self.assertEqual(content, "我没有调用工具，直接根据提案给出判断。")
+        self.assertEqual(content, "本节点没有调用工具，直接根据提案给出判断。")
         self.assertEqual(self.orchestrator.conversation_log[-1]["content"], content)
         self.assertEqual(len(agent.calls), 2)
         self.assertIn("系统没有收到真实 tool_call", agent.calls[1])

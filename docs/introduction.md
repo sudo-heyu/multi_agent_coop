@@ -1,6 +1,6 @@
 # 项目计划
 
-我为项目计划了如下实现步骤：
+项目计划如下：
 
 1. 本地大模型部署实现，主要依赖ollama,验收指标：能调用API;
    工作量：1h
@@ -132,7 +132,7 @@ AP1的agent在下一个采集周期检测到信道占用率与重传率的突变
 
 **AP1**
 
-我是 AP1，播报当前状态：
+AP1 播报当前状态：
 
 - MAC 参数：TX Power = 20.0 dBm，CWmin = 3，CWmax = 7，AIFSN = 1
 - 信道指标：Channel Busy = 82%，TX Retries = 31%
@@ -143,7 +143,7 @@ AP1的agent在下一个采集周期检测到信道占用率与重传率的突变
 
 **AP2**
 
-我是 AP2，播报当前状态：
+AP2 播报当前状态：
 
 - MAC 参数：TX Power = 20.0 dBm，CWmin = 7，CWmax = 15，AIFSN = 2
 - 信道指标：Channel Busy = 55%，TX Retries = 12%
@@ -154,7 +154,7 @@ AP1的agent在下一个采集周期检测到信道占用率与重传率的突变
 
 **AP3**
 
-我是 AP3，播报当前状态：
+AP3 播报当前状态：
 
 - MAC 参数：TX Power = 20.0 dBm，CWmin = 15，CWmax = 63，AIFSN = 4
 - 信道指标：Channel Busy = 38%，TX Retries = 5%
@@ -172,8 +172,8 @@ AP1的agent在下一个采集周期检测到信道占用率与重传率的突变
 
 路径判断：**联合（Co-SR + Co-EDCA）**
 
-- Co-SR 触发依据：AP2 和 AP3 对我的 RSSI 分别为 -69.0 dBm（强干扰）、-76.0 dBm（中等干扰），当前 20 dBm 功率显著越过 CCA 阈值 -82 dBm。
-- Co-EDCA 触发依据：我的信道繁忙率 82%、重传率 31%，同时超过两项触发阈值。
+- Co-SR 触发依据：AP2 和 AP3 对 AP1 的 RSSI 分别为 -69.0 dBm（强干扰）、-76.0 dBm（中等干扰），当前 20 dBm 功率显著越过 CCA 阈值 -82 dBm。
+- Co-EDCA 触发依据：AP1 信道繁忙率 82%、重传率 31%，同时超过两项触发阈值。
 
 Co-SR 工具连续优化结果：在满足 CCA、SINR、STA RSSI 约束的前提下，求得各 AP 的最小必要功率调整值。
 
@@ -193,9 +193,9 @@ Co-EDCA 工具映射结果：AP1 = critical，AP2 = medium，AP3 = low。
 
 **AP2（投票）**
 
-验算提案中针对我（AP2）的参数：
+验算提案中针对 AP2 的参数：
 
-- TX Power = 6 dBm：降功率后 STA RSSI = -48 + (6 − 20) = **-62.0 dBm**，高于安全下界 -75 dBm ✅；AP1 在 6 dBm 时我处 CCA = -83.0 dBm，低于阈值 -82 dBm ✅；SINR = 18.09 dB，高于下界 15 dB ✅
+- TX Power = 6 dBm：降功率后 STA RSSI = -48 + (6 − 20) = **-62.0 dBm**，高于安全下界 -75 dBm ✅；AP1 在 6 dBm 时 AP2 处 CCA = -83.0 dBm，低于阈值 -82 dBm ✅；SINR = 18.09 dB，高于下界 15 dB ✅
 - CWmin = 7，在 [3, 1023] ✅
 - CWmax = 31，在 [7, 1023]，且 31 > 7 ✅
 - AIFSN = 3，在 [1, 15] ✅
@@ -206,9 +206,9 @@ Co-EDCA 工具映射结果：AP1 = critical，AP2 = medium，AP3 = low。
 
 **AP3（投票）**
 
-验算提案中针对我（AP3）的参数：
+验算提案中针对 AP3 的参数：
 
-- TX Power = 6 dBm：降功率后 STA RSSI = -50 + (6 − 20) = **-64.0 dBm**，高于安全下界 -75 dBm ✅；最强邻居 AP2 在 6 dBm 时我处 CCA = -84.0 dBm，低于阈值 -82 dBm ✅；SINR = 18.23 dB ✅
+- TX Power = 6 dBm：降功率后 STA RSSI = -50 + (6 − 20) = **-64.0 dBm**，高于安全下界 -75 dBm ✅；最强邻居 AP2 在 6 dBm 时 AP3 处 CCA = -84.0 dBm，低于阈值 -82 dBm ✅；SINR = 18.23 dB ✅
 - CWmin = 15，在 [3, 1023] ✅
 - CWmax = 63，在 [7, 1023]，且 63 > 15 ✅
 - AIFSN = 2，在 [1, 15] ✅

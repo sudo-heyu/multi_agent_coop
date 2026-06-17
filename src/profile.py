@@ -1,39 +1,29 @@
 """
-真实硬件实验：业务画像 + 协商字段白名单。
+协商状态规范化：字段白名单 + EDCA 取值解码。
 
-本模块集中定义两件事，供协商流程在状态进入前统一处理：
+本模块不再给 AP 预设固定业务身份，也不覆盖上报的业务优先级。AP 的
+service_name / traffic_priority 来自状态服务器、mock 场景或真实上报；缺失时使用
+中性默认值，避免提示词和流程为了固定演示场景过拟合。
 
-  1. 各 AP 的【预设业务画像】——业务类型与优先级硬编码，不读取上报数据：
-       AP1 = 抖音视频（高优先级，时延敏感）
-       AP2 = 下载游戏（低优先级，吞吐敏感的后台传输）
-       AP3 = 下载游戏（低优先级，吞吐敏感的后台传输）
+保留的职责：
+  1. 只保留协商需要的字段，忽略白名单之外的上报数据。
+  2. 把 AP 上报的 cwmin/cwmax 指数 n 统一解码为实际 CW 值（CW = 2^n - 1）。
+  3. 对缺失或非法的业务字段做保守规范化：未知业务、medium 优先级。
 
-  2. 协商实际使用的【字段白名单】——只保留实验关心的参数，其余上报字段忽略。
-       AGENT_VISIBLE_FIELDS：展示给 agent、参与决策推理的字段。
-       INTERNAL_FIELDS：仅供工具内部计算、不展示给 agent 的字段
-                        （Co-SR 的 SINR 求解需要 noise_floor_dbm）。
-
-设计目标：所有状态数据进入协商流程前，统一经 apply_profile() 处理，
-确保下游（广播 / 提案 / 工具 / 验证器）只看到这些字段，
-且 traffic_priority 一律来自预设而非上报。
-
-此外，AP 上报的 cwmin/cwmax 是指数 n（CW = 2^n - 1），apply_profile 是所有状态
-进入协商流程的唯一收敛点，故在此统一解码为实际 CW 值，下游一律按实际 CW 推理。
+Co-SR / Co-EDCA 只是当前工具支持的两类调参能力。是否使用它们，应由实时状态
+中的干扰、EDCA 参数、业务优先级和 QoS 指标共同决定，而不是由 AP 编号决定。
 """
 
 from .tools.edca import decode_state_edca
 
-# ── 预设业务画像（硬编码，不依赖上报数据）────────────────────────────────────
-BUSINESS_PROFILE: dict[str, dict[str, str]] = {
-    "ap1": {"service_name": "抖音视频", "traffic_priority": "high"},
-    "ap2": {"service_name": "下载游戏", "traffic_priority": "low"},
-    "ap3": {"service_name": "下载游戏", "traffic_priority": "low"},
-}
+VALID_TRAFFIC_PRIORITIES: tuple[str, ...] = ("high", "medium", "low")
+DEFAULT_SERVICE_NAME = "未声明业务"
+DEFAULT_TRAFFIC_PRIORITY = "medium"
 
-# ── 协商对 agent 可见的字段（实验关心的 8 项）────────────────────────────────
+# ── 协商对 agent 可见的字段 ────────────────────────────────────────────────
 AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
-    "service_name",          # 预设业务类型（抖音视频 / 下载游戏）
-    "traffic_priority",      # 预设业务优先级（high / low，驱动 Co-EDCA）
+    "service_name",          # 上报/场景声明的业务类型；缺省为未声明业务
+    "traffic_priority",      # 上报/场景声明的业务优先级；缺省为 medium
     "tx_power_dbm",          # 发射功率（Co-SR 可调）
     "cwmin",                 # EDCA 竞争窗口下限（实际 CW 值，由上报指数解码而来）
     "cwmax",                 # EDCA 竞争窗口上限（实际 CW 值，由上报指数解码而来）
@@ -54,11 +44,11 @@ RETAINED_FIELDS: tuple[str, ...] = AGENT_VISIBLE_FIELDS + INTERNAL_FIELDS
 
 
 def apply_profile(ap_states: dict) -> dict:
-    """对原始上报状态应用业务画像与字段白名单。
+    """对原始上报状态应用字段白名单和保守默认值。
 
     - 只保留 RETAINED_FIELDS 中的字段，其余上报数据忽略。
-    - service_name / traffic_priority 一律覆盖为 BUSINESS_PROFILE 的预设值，
-      不读取上报值。
+    - service_name / traffic_priority 来自输入状态，不按 AP 编号覆盖。
+    - 缺失或非法 priority 统一视为 medium，使 EDCA 推理保持可用但不强行制造差异。
 
     返回新字典，不修改入参。
     """
@@ -69,10 +59,12 @@ def apply_profile(ap_states: dict) -> dict:
             continue
         filtered = {k: state[k] for k in RETAINED_FIELDS if k in state}
         filtered = decode_state_edca(filtered)  # cwmin/cwmax: 上报指数 → 实际 CW
-        preset = BUSINESS_PROFILE.get(ap_id.lower())
-        if preset:
-            filtered["service_name"] = preset["service_name"]
-            filtered["traffic_priority"] = preset["traffic_priority"]
+        service_name = filtered.get("service_name") or DEFAULT_SERVICE_NAME
+        filtered["service_name"] = str(service_name)
+        priority = str(filtered.get("traffic_priority") or DEFAULT_TRAFFIC_PRIORITY).lower()
+        if priority not in VALID_TRAFFIC_PRIORITIES:
+            priority = DEFAULT_TRAFFIC_PRIORITY
+        filtered["traffic_priority"] = priority
         result[ap_id] = filtered
     return result
 

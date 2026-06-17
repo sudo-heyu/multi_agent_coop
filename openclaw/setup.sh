@@ -14,16 +14,20 @@ STATE_SERVER="${MULTIAP_STATE_SERVER:-http://localhost:5001}"
 OLLAMA_MODEL="${MULTIAP_MODEL:-qwen3:14b}"
 CFG_DIR="$HOME/.openclaw-$PROFILE"
 CFG="$CFG_DIR/openclaw.json"
+PPIO_MODEL_ID="${MULTIAP_PPIO_MODEL_ID:-qwen/qwen3-next-80b-a3b-instruct}"
+PPIO_MODEL_ALIAS="${MULTIAP_PPIO_MODEL_ALIAS:-qwen80binstruct}"
+PPIO_MODEL_NAME="${MULTIAP_PPIO_MODEL_NAME:-qwen80binstruct}"
 
-AGENTS=(ap1 ap2 ap3)   # 架构 C：无协调者，三台 AP 自驱动协商
+AGENTS=(coordinator ap1 ap2 ap3)   # coordinator 只做阶段级触发，AP 负责自主协商内容
 
 echo "[setup] repo=$REPO profile=$PROFILE python=$PY model=ollama/$OLLAMA_MODEL"
 
 # 1) 确保每个 agent 的 workspace 目录存在（内容由各 workspace 的 *.md 提供）
 for a in "${AGENTS[@]}"; do
   mkdir -p "$REPO/openclaw/workspaces/$a"
+  mkdir -p "$CFG_DIR/agents/$a/sessions"
   if [ ! -e "$REPO/openclaw/workspaces/$a/IDENTITY.md" ]; then
-    printf '# 身份\n\n我是 %s。\n' "$a" > "$REPO/openclaw/workspaces/$a/IDENTITY.md"
+    printf '# 身份\n\n你是 %s。\n' "$a" > "$REPO/openclaw/workspaces/$a/IDENTITY.md"
   fi
 done
 
@@ -32,34 +36,48 @@ mkdir -p "$CFG_DIR"
 TOKEN="$(openssl rand -hex 24)"
 # PPIO key：优先环境变量，否则从仓库 .env 读取（不写入仓库内任何文件）
 PPIO_KEY="${PPIO_API_KEY:-$(sed -n 's/^PPIO_API_KEY=//p' "$REPO/.env" 2>/dev/null)}"
-PPIO_MODEL_ID="qwen/qwen3-next-80b-a3b-instruct"
 # 默认模型：有 PPIO key 用云端 80b（更稳更快），否则本地 ollama
 if [ -n "$PPIO_KEY" ]; then
-  MODEL_REF="${MULTIAP_MODEL_REF:-ppio/$PPIO_MODEL_ID}"
+  MODEL_REF="${MULTIAP_MODEL_REF:-$PPIO_MODEL_ALIAS}"
 else
   MODEL_REF="${MULTIAP_MODEL_REF:-ollama/$OLLAMA_MODEL}"
 fi
 echo "[setup] default model = $MODEL_REF  (ppio_key=$([ -n "$PPIO_KEY" ] && echo yes || echo no))"
-"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$MODEL_REF" "${AGENTS[@]}" <<'PYEOF'
+"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$PPIO_MODEL_ALIAS" "$PPIO_MODEL_NAME" "$MODEL_REF" "${AGENTS[@]}" <<'PYEOF'
 import json, sys
-cfg, repo, token, ollama_model, ppio_key, ppio_model_id, model_ref, *agents = sys.argv[1:]
+cfg, repo, token, ollama_model, ppio_key, ppio_model_id, ppio_model_alias, ppio_model_name, model_ref, *agents = sys.argv[1:]
+ppio_ref = f"ppio/{ppio_model_id}"
 providers = {"ollama": {
     "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
     "models": [{"id": ollama_model, "name": ollama_model, "input": ["text"]}]}}
+default_models = {
+    f"ollama/{ollama_model}": {"alias": "local-qwen"}
+}
 if ppio_key:
     providers["ppio"] = {
         "baseUrl": "https://api.ppio.com/openai/v1", "apiKey": ppio_key,
         "api": "openai-completions",
-        "models": [{"id": ppio_model_id, "name": "qwen:80b", "input": ["text"]}]}
+        "models": [{
+            "id": ppio_model_id,
+            "name": ppio_model_name,
+            "input": ["text"],
+            "compat": {"thinkingFormat": "qwen", "supportsStrictMode": False},
+        }]}
+    default_models[ppio_ref] = {
+        "alias": ppio_model_alias,
+        "params": {"temperature": 0.2},
+    }
 conf = {
     "meta": {"lastTouchedVersion": "multiap-setup"},
     "gateway": {"mode": "local", "bind": "loopback",
                 "auth": {"mode": "token", "token": token}},
     "models": {"providers": providers},
     "agents": {
-        "defaults": {"workspace": f"{repo}/openclaw/workspaces/ap1",
-                     "skipBootstrap": True, "model": {"primary": model_ref}},
-        "list": [{"id": a, "default": (a == "ap1"),
+        "defaults": {"workspace": f"{repo}/openclaw/workspaces/coordinator",
+                     "skipBootstrap": True,
+                     "models": default_models,
+                     "model": {"primary": model_ref}},
+        "list": [{"id": a, "default": (a == "coordinator"),
                   "workspace": f"{repo}/openclaw/workspaces/{a}"} for a in agents],
     },
 }
@@ -69,7 +87,7 @@ PYEOF
 
 # 3) 注册 MCP 工具服务
 "$OPENCLAW" --profile "$PROFILE" mcp set multiap-tools \
-  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\"}}" >/dev/null
+  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\",\"NO_PROXY\":\"localhost,127.0.0.1,::1\",\"no_proxy\":\"localhost,127.0.0.1,::1\"}}" >/dev/null
 
 # 4) 校验
 "$OPENCLAW" --profile "$PROFILE" config validate

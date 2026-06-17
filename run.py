@@ -113,7 +113,7 @@ def start_mock_server(server_url: str) -> tuple[bool, subprocess.Popen | None]:
     """
     mock 模式下确保本地 state server 以 --allow-mock 运行，供喂数器写入。
 
-    返回 (是否就绪, 我们启动的进程或 None)。复用已在线的服务器时进程为 None。
+    返回 (是否就绪, 本程序启动的进程或 None)。复用已在线的服务器时进程为 None。
     """
     if not _is_local_server(server_url):
         return False, None
@@ -206,6 +206,7 @@ def stop_telemetry_trace(server_url: str) -> None:
 # 进入协商前由 apply_profile 统一解码为实际 CW 值。
 MOCK_SCENE_SR = {
     "ap1": {
+        "service_name": "generic_data",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -220,6 +221,7 @@ MOCK_SCENE_SR = {
         "packet_loss_pct": 0.5,
     },
     "ap2": {
+        "service_name": "generic_data",
         "tx_power_dbm": 14.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -234,6 +236,7 @@ MOCK_SCENE_SR = {
         "packet_loss_pct": 0.3,
     },
     "ap3": {
+        "service_name": "generic_data",
         "tx_power_dbm": 8.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -249,11 +252,12 @@ MOCK_SCENE_SR = {
     },
 }
 
-# 场景二：Co-EDCA（三 AP 承载不同优先级业务，当前 EDCA 参数未差异化，需协商）
-# AP1 承载语音/视频（high），AP2 承载通用数据（medium），AP3 承载后台传输（low）
+# 场景二：Co-EDCA（三 AP 在本场景中承载不同优先级业务，当前 EDCA 参数未差异化，需协商）
+# 注意：这些业务类型是 mock 场景输入，不是 AP 编号的固定身份。
 # 邻居 RSSI 弱，不触发 Co-SR；通过优先级驱动 EDCA 差异化来保障 AP1 的 QoS
 MOCK_SCENE_EDCA = {
     "ap1": {
+        "service_name": "interactive_video",
         "tx_power_dbm": 10.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "high",
@@ -267,6 +271,7 @@ MOCK_SCENE_EDCA = {
         "packet_loss_pct": 1.2,
     },
     "ap2": {
+        "service_name": "best_effort_data",
         "tx_power_dbm": 10.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -280,6 +285,7 @@ MOCK_SCENE_EDCA = {
         "packet_loss_pct": 0.4,
     },
     "ap3": {
+        "service_name": "background_transfer",
         "tx_power_dbm": 10.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",
@@ -295,10 +301,11 @@ MOCK_SCENE_EDCA = {
 }
 
 # 场景三：联合（高功率 + 业务优先级分化，同时触发 Co-SR 和 Co-EDCA）
-# AP1 承载语音/视频（high），AP2 承载通用数据（medium），AP3 承载后台传输（low）
+# 本场景同时给出业务优先级差异，用于观察 Co-SR 与 Co-EDCA 是否需要联合处理。
 # neighbor_rssi 与场景一类似（STA 距本 AP 近，降功率后不会断连）
 MOCK_SCENE_JOINT = {
     "ap1": {
+        "service_name": "interactive_video",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "high",
@@ -312,6 +319,7 @@ MOCK_SCENE_JOINT = {
         "packet_loss_pct": 1.2,
     },
     "ap2": {
+        "service_name": "best_effort_data",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -325,6 +333,7 @@ MOCK_SCENE_JOINT = {
         "packet_loss_pct": 0.4,
     },
     "ap3": {
+        "service_name": "background_transfer",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",

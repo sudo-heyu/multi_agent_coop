@@ -913,11 +913,20 @@ def evaluate_candidate_for_group(
     min_sinr = 999.0
     total_sinr_margin = 0.0
     integer_errors: list[str] = []
+    power_direction_errors: list[str] = []
 
     checked_aps = set(details) if group else set(ap_states)
     for ap_id, state in ap_states.items():
         current = _fget(state, "tx_power_dbm", 20.0)
         proposed = normalized[ap_id]
+        if proposed > current + OPT_TOLERANCE_DB:
+            msg = (
+                f"{ap_id.upper()}: Co-SR 候选不应提高发射功率"
+                f"（当前 {current} → 提案 {proposed}）"
+            )
+            power_direction_errors.append(msg)
+            if ap_id in checked_aps:
+                details[ap_id].setdefault("errors", []).append(msg.split(": ", 1)[1])
         drop = max(0.0, current - proposed)
         total_drop += drop
         max_drop = max(max_drop, drop)
@@ -943,10 +952,10 @@ def evaluate_candidate_for_group(
             if ap_id in checked_aps:
                 details[ap_id]["delta_is_integer"] = True
 
-    errors = errors + integer_errors
+    errors = errors + integer_errors + power_direction_errors
 
     return {
-        "valid": ok and not integer_errors,
+        "valid": ok and not integer_errors and not power_direction_errors,
         "errors": errors,
         "concurrent_group": group or list(ap_states),
         "non_concurrent_aps": sorted(set(ap_states) - set(group or ap_states)),

@@ -2,14 +2,17 @@
 Co-EDCA 计算工具
 
 【优先级与 EDCA 参数的调整规则】
-  高优先级业务（high）：应调低 EDCA 参数——更小的 CWmin、CWmax、AIFSN。
+  traffic_priority 来自当前状态上报或场景输入，不是 AP 的固定身份。
+  当业务优先级或 QoS 目标存在差异时，可用 EDCA 参数表达竞争差异。
+
+  high：通常使用更小的 CWmin、CWmax、AIFSN。
     小 CWmin → 退避窗口短 → 更快完成退避 → 更早抢占信道 → 降低时延。
-    小 AIFSN → AIFS 间隔短 → 比低优先级业务更早开始退避竞争。
+    小 AIFSN → AIFS 间隔短 → 更早开始退避竞争。
 
-  低优先级业务（low）：应调高 EDCA 参数——更大的 CWmin、CWmax、AIFSN。
-    大 CWmin / AIFSN → 退避更长 → 主动让出信道竞争机会 → 保障高优先级 QoS。
+  low：通常使用更大的 CWmin、CWmax、AIFSN。
+    大 CWmin / AIFSN → 退避更长 → 降低自身竞争强度。
 
-  中优先级业务（medium）：参数介于高低优先级之间。
+  medium：参数通常介于 high 与 low 之间。
 
 【跨 AP 排序约束（硬性规则）】
   提案中不同优先级 AP 的参数必须满足单调性：
@@ -18,7 +21,8 @@ Co-EDCA 计算工具
   同优先级的多个 AP 之间无顺序约束。
 
 本模块仅提供机械校验（范围合规 + 优先级排序）；
-EDCA 参数的具体取值由 LLM agent 根据上述规则自行推理决定。
+EDCA 参数的具体取值由 LLM agent 根据实时状态自行推理决定。若所有 AP
+优先级相同或缺省为 medium，不应为了形成差异化方案强行制造梯度。
 """
 
 import math
@@ -176,13 +180,13 @@ def evaluate_edca_effectiveness(ap_states: dict, proposed_edca: dict) -> dict:
                     ordering_warnings.append(
                         f"{ap_a}（{_rank_name(rank_a)}优先级）CWmin={cwmin_a} "
                         f"> {ap_b}（{_rank_name(rank_b)}优先级）CWmin={cwmin_b}，"
-                        f"违反规则：高优先级业务应使用更小的 CWmin"
+                        f"违反规则：更高 priority 通常应使用不大于低 priority 的 CWmin"
                     )
                 if aifsn_a > aifsn_b:
                     ordering_warnings.append(
                         f"{ap_a}（{_rank_name(rank_a)}优先级）AIFSN={aifsn_a} "
                         f"> {ap_b}（{_rank_name(rank_b)}优先级）AIFSN={aifsn_b}，"
-                        f"违反规则：高优先级业务应使用更小的 AIFSN"
+                        f"违反规则：更高 priority 通常应使用不大于低 priority 的 AIFSN"
                     )
 
     all_ok = len(ordering_warnings) == 0

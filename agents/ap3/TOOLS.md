@@ -162,11 +162,13 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 
 **② 优先级排序**（核心 QoS 约束）
 
-各 AP 状态中含 `traffic_priority` 字段（`high` / `medium` / `low`），表示该 AP 所承载业务的优先级。优先级决定 EDCA 参数的调整方向：
+各 AP 状态中可能含 `traffic_priority` 字段（`high` / `medium` / `low`），该字段来自当前状态上报或场景输入，不是 AP 的固定身份。只有在优先级、QoS 或 EDCA 参数存在实际差异时，才需要用它驱动 EDCA 差异化：
 
-- **高优先级（high）**：应使用**更小**的 CWmin、CWmax、AIFSN。更小的退避窗口和更短的 AIFS 间隔，使高优先级 AP 比低优先级 AP 更早开始竞争并更早接入信道，从而降低时延、保障 QoS。
-- **低优先级（low）**：应使用**更大**的 CWmin、CWmax、AIFSN，主动放慢竞争节奏，让出信道机会给高优先级业务。
-- **中优先级（medium）**：参数介于两者之间。
+- **high**：通常使用更小的 CWmin、CWmax、AIFSN，以缩短退避和 AIFS 等待时间。
+- **low**：通常使用更大的 CWmin、CWmax、AIFSN，以降低自身竞争强度。
+- **medium**：参数通常介于 high 与 low 之间。
+
+如果所有 AP 的 `traffic_priority` 相同或缺省为 medium，不要为了展示 Co-EDCA 能力强行制造优先级梯度；应主要根据拥塞、重传、时延、丢包和现有 EDCA 参数判断是否需要调整。
 
 工具强制要求不同优先级 AP 的参数满足单调性：
 ```

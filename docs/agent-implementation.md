@@ -104,7 +104,7 @@ score = Data_rate_to_bandwidth_ratio + tx_retries_ratio * 2
 | `AGENTS.md` | 三步协议完整规则 | 行为约束的核心 |
 
 **AGENTS.md 的关键约束**：
-- 第一阶段：严禁引用其他 AP 数据（模型自发遵守，将邻居 RSSI 字段标注为"不播报（非我数据）"）
+- 第一阶段：严禁引用其他 AP 数据（模型自发遵守，将邻居 RSSI 字段标注为"不播报（非本节点数据）"）
 - 第二阶段：Co-EDCA 触发条件——重传率 > 15% 且信道占用 > 60%；Co-SR——邻居 RSSI > -30 dBm
 - 第三阶段：只验算与自身相关的参数；RSSI 安全下界 -75 dBm；参数范围约束
 - 最终 JSON：格式固定，JSON 内不得有注释

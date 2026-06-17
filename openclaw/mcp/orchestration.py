@@ -95,8 +95,10 @@ def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
     )
     env = dict(os.environ)
     env.setdefault("OLLAMA_API_KEY", "ollama-local")
+    env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
+    env["no_proxy"] = env["NO_PROXY"]
 
-    # qwen3:14b 偶发「incomplete terminal response」（payloads=0），多为瞬时；重试。
+    # 云端/本地模型偶发「incomplete terminal response」（payloads=0），多为瞬时；重试。
     last_err = ""
     for attempt in range(DRIVE_RETRIES):
         cmd = [OPENCLAW_BIN, "--profile", PROFILE, "agent", "--local",
@@ -116,6 +118,15 @@ def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
         if attempt < DRIVE_RETRIES - 1:
             __import__("time").sleep(2.0)
     raise RuntimeError(f"drive_ap({ap}) 连续 {DRIVE_RETRIES} 次失败: {last_err}")
+
+
+def _merge_no_proxy(current: str | None) -> str:
+    required = ["localhost", "127.0.0.1", "::1"]
+    values = [v.strip() for v in (current or "").split(",") if v.strip()]
+    for item in required:
+        if item not in values:
+            values.append(item)
+    return ",".join(values)
 
 
 def _reply_text(data: dict) -> str:
@@ -155,12 +166,10 @@ def read_vote(content: str) -> str:
 
 
 def resolve_strategy(proposal: dict | None) -> str | None:
-    """只允许 Co-SR / Co-EDCA 两种策略（联合已取消）。
-    提案含功率字段即按 Co-SR 验收（强干扰优先）；否则按 Co-EDCA。"""
+    """从提案字段推断策略，不按 AP 编号或固定业务身份预设路径。"""
     if not proposal:
         return None
-    s = _infer_strategy_from_proposal(proposal)
-    return "co_sr" if s == "joint" else s
+    return _infer_strategy_from_proposal(proposal)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -194,20 +203,23 @@ def propose_instruction(proposer_id: str) -> str:
         f"{history_hint}"
         f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
         "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
-        "【路径选择规则（只有 Co-SR、Co-EDCA 两种，没有联合路径，必须二选一）】\n"
-        "  · 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 选 Co-SR。\n"
-        "  · 否则（无强干扰）→ 选 Co-EDCA，按 traffic_priority 差异化。\n"
-        "  · 严禁同一提案同时包含功率与 EDCA 两类字段。\n\n"
+        "【路径选择规则（基于实时证据，不按 AP 编号或固定业务身份预设）】\n"
+        "  · 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 可选 Co-SR。\n"
+        "  · 若 traffic_priority、QoS 或当前 EDCA 参数显示需要差异化竞争机会 → 可选 Co-EDCA。\n"
+        "  · 若两类问题同时成立 → 可选联合调整；若证据不足 → 说明暂不调整或提出最小改动方案。\n"
+        "  · 不要为了完成协商强行制造 SR 或 EDCA 问题。\n\n"
         "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。第一步必须先判断"
         "可用并发组：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups；"
         "再用 evaluate_sr_candidate（传入 proposed_powers，部分并发再传 concurrent_group）自检。"
         "功率取最大必要降幅且为整数 dBm。提案 JSON 只含每个 AP 的 tx_power_dbm，并附 "
         '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。\n\n'
-        "【Co-EDCA】按各 AP 的 traffic_priority 差异化 CWmin/CWmax/AIFSN：high 用更小、low 用更大，"
-        "满足 high.CWmin ≤ low.CWmin、high.AIFSN ≤ low.AIFSN；用 validate_edca_proposal（传 proposed_edca）自检。"
-        "提案 JSON 只含每个 AP 的 CWmin/CWmax/AIFSN。\n\n"
+        "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
+        "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
+        "同优先级或未知优先级时不要强行制造梯度。用 validate_edca_proposal（传 proposed_edca）自检。\n\n"
+        "【联合调整】只有当强干扰与 EDCA 竞争问题同时有证据支持时使用，"
+        "同时调用 Co-SR 和 Co-EDCA 的相关验算工具，提案 JSON 可同时包含两类字段。\n\n"
         "提案须简洁说明：选哪条路径及原因、每个 AP 的最终参数与依据、预期改善与权衡。\n"
-        "提交前必须调用 evaluate_sr_candidate（Co-SR）或 validate_edca_proposal（Co-EDCA）自检；"
+        "提交前必须调用 evaluate_sr_candidate（Co-SR/联合）或 validate_edca_proposal（Co-EDCA/联合）自检；"
         "提案阶段自检必须把你打算提的参数显式作为工具参数传入。\n"
         "提案末尾必须用 ```json 代码块附参数摘要，顶层键必须是 ap1/ap2/ap3，"
         "每个 AP 的值必须是对象（参数写在对象内部，严禁裸数值）。"
@@ -218,7 +230,7 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
                      proposal: dict, proposal_num: int) -> str:
     verify_hint = {
         "co_sr":   "关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量",
-        "co_edca": "关注你自己的 traffic_priority（高优先级需更小 CWmin/AIFSN，低优先级需更大）、工具返回的 valid/errors 与优先级排序",
+        "co_edca": "关注你自己的 traffic_priority、QoS 指标、当前 EDCA 参数、工具返回的 valid/errors 与优先级排序",
         "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
     }.get(strategy, "关注工具返回的 valid/errors 以及参数对你的影响")
     if proposal_num >= 4:
@@ -243,7 +255,7 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
         "【弃权】未完全满足但找不到更好方案，或协商已重复。等同同意，无需反提案。末尾附 "
         "```json\n{\"agreed\": \"abstain\", \"reason\": \"...\"}\n```\n"
         "【反对】你有具体替代方案。同一条回复中先附 ```json\n{\"agreed\": false, \"reason\": \"...\"}\n``` "
-        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR，"
+        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 或联合，"
         "须先 get_latest_ap_states→analyze_sr_interference→select_sr_concurrent_groups 并写 _sr.concurrent_group。"
         f"{stall_hint}"
     )

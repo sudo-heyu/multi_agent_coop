@@ -21,7 +21,7 @@
 ## 1. 必须用 OpenClaw 达成的东西（硬性要求）
 
 1. **托管层**：`coordinator / ap1 / ap2 / ap3` 必须是真正的 OpenClaw agent（各自独立 workspace、session、身份），由 OpenClaw Gateway/embedded runtime 运行，模型经 OpenClaw 的 provider 机制调用（ollama / PPIO）。
-2. **编排层**：四阶段协商流程必须由 **coordinator 这个 OpenClaw agent（LLM）** 驱动，**不得**再由 `src/orchestrator.py` 这样的外部 Python 编排器主导控制流。coordinator 通过工具（含驱动子 agent 的 `ask_ap`）推进协议。
+2. **编排入口**：四阶段协商流程必须由 **coordinator 这个 OpenClaw agent（LLM）** 触发，**不得**再由 `src/orchestrator.py` 这样的外部 Python 编排器作为用户入口。为控制时延，coordinator 不逐句选择发言人，而是调用阶段级 MCP 工具批量推进协议。
 3. **工具层**：现有确定性计算/验算/状态/下发逻辑以 **OpenClaw MCP 工具**形式暴露给 agent 调用（允许保留 Python 实现，但必须通过 OpenClaw 的工具调用机制被使用，而非 prompt 注入或进程内直调）。
 4. **入口**：协商通过 `openclaw agent --agent coordinator ...` 触发；不再走 `python run.py` 里的 `NegotiationOrchestrator.run()` 作为编排主体（`run.py` 可降级为「准备数据 + 拉起 coordinator」的薄启动器）。
 5. **隔离**：全部配置位于独立 profile（`~/.openclaw-multiap/`），**不得**改动用户默认 profile（C3-PO）。
@@ -36,20 +36,19 @@
 - **Mock A —— 预设场景**：等价于现 `python run.py --mock --scene {sr,edca,joint}`。三套硬编码初始状态（见 `run.py` 的 `MOCK_SCENE_SR/EDCA/JOINT`）。
 - **Mock B —— 曲线喂数器**：等价于现 `state_server/mock_feeder.py`，向状态服务器持续喂入随时间变化的遥测，协商决策注入后曲线体现协商后改善。
 
-**策略集：仅 Co-SR、Co-EDCA 两种（联合策略已取消，2026-06-17）。** 因业务画像把优先级恒定为
-high/low，优先级差异始终存在，故以「是否存在强干扰」为主判据：强干扰→Co-SR，否则→Co-EDCA。
-严禁同一提案同时含功率与 EDCA 字段。
+**策略能力：重点展示 Co-SR 与 Co-EDCA 两类能力，但不把 AP 固定死在某个业务身份或路径。**
+路径选择必须基于实时状态：强干扰可触发 Co-SR；优先级/QoS/EDCA 参数差异可触发 Co-EDCA；两类问题同时成立时允许联合调整；证据不足时允许暂不调整或最小改动。
 
 三个场景的预期路径：
 | 场景 | 触发 | 预期策略 |
 |---|---|---|
 | `sr` | 邻居 RSSI 强（>-70dBm 区间），存在强干扰 | `co_sr`（降功率） |
 | `edca` | 邻居弱、无强干扰，优先级分化驱动 | `co_edca`（差异化 CWmin/CWmax/AIFSN） |
-| `joint`（场景保留） | 高功率 + 优先级分化；因含强干扰 | `co_sr`（联合已取消，归入 Co-SR） |
+| `joint`（场景保留） | 高功率 + 优先级/QoS 分化 | `joint` 或先处理主导问题，需由实时证据和工具验算支撑 |
 
 ### 2.2 四阶段协商流程（必须可观测）
 1. **广播**：ap1→ap2→ap3 依次播报自身实测状态；只播报己方数据 + 本机扫描的邻居 RSSI，不引用他人业务指标。
-2. **提案**：首轮固定由 ap1 发起、自主选路（仅 Co-SR / Co-EDCA 二选一）；提案前必须调用 `get_latest_ap_states`，Co-SR 路径必须先 `analyze_sr_interference → select_sr_concurrent_groups` 选并发组；提交前自检（`evaluate_sr_candidate` / `validate_edca_proposal`）。
+2. **提案**：首轮固定由 ap1 发起、自主选路（Co-SR / Co-EDCA / 联合 / 暂不调整）；提案前必须调用 `get_latest_ap_states`，Co-SR 或联合路径必须先 `analyze_sr_interference → select_sr_concurrent_groups` 选并发组；提交前自检（`evaluate_sr_candidate` / `validate_edca_proposal`）。
 3. **投票**：非提案 AP 逐一表态 `同意/弃权/反对`；反对者当场给出反提案并接管为新提案方。
 4. **决策 + 验收**：全票通过后输出最终 JSON（顶层键 ap1/ap2/ap3）；**确定性 Validator** 做参数范围 + 整数功率 + （真实观测时）生效校验；通过则下发执行。
 
@@ -57,8 +56,8 @@ high/low，优先级差异始终存在，故以「是否存在强干扰」为主
 - Co-SR：`tx_power_dbm ∈ [1,23]`；功率调整量相对协商前必须为**整数 dB**；CCA / SINR / STA-RSSI 约束（由计算工具保证）。
 - Co-EDCA：`CWmin∈[3,1023]`、`CWmax∈[7,1023]`、`AIFSN∈[1,15]`、`CWmax>CWmin`；优先级单调性 `high.CWmin ≤ medium ≤ low`（AIFSN 同理）。
 
-### 2.4 业务画像 + 字段白名单（必须一致）
-进入协商前统一 `apply_profile`：业务优先级**硬编码**（ap1=抖音视频/high，ap2=下载游戏/low，ap3=下载游戏/low），只保留白名单字段，上报的 cwmin/cwmax 指数 n 统一解码为实际 CW 值。`noise_floor_dbm` 为内部字段（SINR 计算用），不展示给 agent。
+### 2.4 状态规范化 + 字段白名单（必须一致）
+进入协商前统一 `apply_profile`：业务类型与优先级来自状态服务器、mock 场景或真实上报，不按 AP 编号硬编码；缺失时使用中性默认值（`service_name=未声明业务`、`traffic_priority=medium`）。只保留白名单字段，上报的 cwmin/cwmax 指数 n 统一解码为实际 CW 值。`noise_floor_dbm` 为内部字段（SINR 计算用），不展示给 agent。
 
 ### 2.5 协商控制约束（必须保留语义）
 - 重投上限 `MAX_VOTE_ROUNDS=3`、验证重试 `MAX_VALIDATION_RETRIES=3`、单轮最大发言 `MAX_TURNS=30`、工具调用上限。**必须保证终止**（不收敛时干净退出，不得死循环）。
@@ -80,17 +79,17 @@ high/low，优先级差异始终存在，故以「是否存在强干扰」为主
 │                                                              │
 │  Agents（托管层）：coordinator / ap1 / ap2 / ap3              │
 │    - 各自 workspace：IDENTITY/SOUL/AGENTS/TOOLS.md            │
-│    - 模型：ollama/qwen3:14b（默认）或 PPIO openai-compatible   │
+│    - 模型：PPIO qwen80binstruct（默认）或 ollama/qwen3:14b fallback │
 │                                                              │
-│  coordinator（编排层，LLM）：AGENTS.md = 四阶段协议 standing   │
-│    orders；用工具推进协议、驱动 AP、计票、验收、下发           │
+│  coordinator（阶段级入口，LLM）：调用 run_fast_negotiation；     │
+│    不逐句选发言人，工具批量驱动 AP、计票、验收、下发           │
 │                                                              │
 │  MCP 工具服务 multiap-tools（openclaw/mcp/multiap_mcp.py）：   │
 │    get_latest_ap_states / analyze_sr_interference /          │
 │    compute_sr_feasible_ranges / select_sr_concurrent_groups /│
 │    evaluate_sr_candidate / rank_sr_candidates /              │
-│    validate_edca_proposal / validate_decision /             │
-│    push_decision / ask_ap(驱动子 agent) / log_event          │
+│    validate_edca_proposal / run_fast_negotiation /           │
+│    validate_decision / push_decision / log_event             │
 └──────────────────────────────────────────────────────────────┘
         │ MCP stdio                      │ openclaw agent --local
         ▼                                ▼
@@ -120,14 +119,14 @@ high/low，优先级差异始终存在，故以「是否存在强干扰」为主
 - [x] 验证 agent 真实调用 `get_latest_ap_states`，返回值与 JOINT 场景一致（ap1 tx=20.0dBm，邻居 ap2=-68.4dBm）；计算/验算工具结果与 Python 实现逐项比对一致。
 
 ### Stage 2 —— 移植 AP 协商提示词
-- [ ] 将 `agents/ap{1,2,3}/{IDENTITY,SOUL,AGENTS,TOOLS}.md` 适配进 `openclaw/workspaces/ap*/`，工具名对齐 MCP 工具名。
+- [x] 将 `agents/ap{1,2,3}/{IDENTITY,SOUL,AGENTS,TOOLS}.md` 适配进 `openclaw/workspaces/ap*/`，工具名对齐 MCP 工具名。
 - [ ] 限制 AP agent 的工具集（AP 不应能调用 `ask_ap`），通过 per-agent tool allow/deny。
 - [ ] 验收：单个 AP 能完整广播；ap1 能在 joint 场景下完成一次合法提案（含工具链 + JSON）。
 
-### Stage 3 —— coordinator 协议编排（核心难点）
-- [ ] 写 `openclaw/workspaces/coordinator/AGENTS.md`：四阶段协议 + 表决/重试/接管/终止规则的 standing orders。
-- [ ] 完善 `ask_ap`（驱动子 agent）；新增确定性辅助工具：`infer_strategy`、`extract_proposal`、`tally_votes`、`pick_proposer`、以及**带状态计数器的终止工具**（把 `MAX_*` 上限做成工具返回 STOP，保证终止确定性）。
-- [ ] `validate_decision` / `push_decision` 接入 coordinator 收尾。
+### Stage 3 —— coordinator 阶段级编排（控制时延）
+- [x] 写 `openclaw/workspaces/coordinator/AGENTS.md`：阶段级触发规则，要求优先调用 `run_fast_negotiation`，避免逐句调度。
+- [x] 暴露 `run_fast_negotiation`：工具内部批量驱动 AP、解析提案/投票、处理反提案接管、Validator 重试与终止上限。
+- [x] `validate_decision` 接入 coordinator 收尾；`push_decision` 保留为单独下发工具。
 - [ ] 验收：joint 场景跑通一次端到端协商，输出 Validator 通过的合法决策。
 
 ### Stage 4 —— 两种 mock 复现 + 配套产物

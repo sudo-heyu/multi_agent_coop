@@ -7,6 +7,8 @@ import requests
 
 DEFAULT_SERVER = "http://localhost:5001"
 VALID_AP_IDS = ["ap1", "ap2", "ap3"]
+_SESSION = requests.Session()
+_SESSION.trust_env = False
 
 
 class StateStaleError(Exception):
@@ -25,7 +27,7 @@ def get_all_states(server_url: str = DEFAULT_SERVER) -> dict:
         StateStaleError: Any AP data is missing or stale.
     """
     try:
-        resp = requests.get(f"{server_url}/state", timeout=5)
+        resp = _SESSION.get(f"{server_url}/state", timeout=5)
         resp.raise_for_status()
     except requests.ConnectionError:
         raise ConnectionError(f"无法连接到状态服务器 {server_url}，请确认服务已启动")
@@ -57,7 +59,7 @@ def get_state(ap_id: str, server_url: str = DEFAULT_SERVER) -> dict:
         StateStaleError: The AP data is missing or stale.
     """
     try:
-        resp = requests.get(f"{server_url}/state/{ap_id}", timeout=5)
+        resp = _SESSION.get(f"{server_url}/state/{ap_id}", timeout=5)
         resp.raise_for_status()
     except requests.ConnectionError:
         raise ConnectionError(f"无法连接到状态服务器 {server_url}")

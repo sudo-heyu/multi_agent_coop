@@ -467,8 +467,8 @@ class NegotiationOrchestrator:
         self.conversation_log: list[dict] = []
         self.logger = logger
         self._current_ap_states: dict | None = None
-        # 观测状态在进入协商前统一应用业务画像 + 字段白名单，
-        # 确保 get_latest_ap_states / 最终验证观测看到的都是预设优先级与过滤后的字段。
+        # 观测状态在进入协商前统一应用字段白名单与保守默认值，
+        # 确保 get_latest_ap_states / 最终验证观测使用一致的规范化字段。
         if observation_state_getter is not None:
             _raw_getter = observation_state_getter
             self.observation_state_getter: Callable[[], dict] | None = (
@@ -600,12 +600,9 @@ class NegotiationOrchestrator:
 
     def _determine_strategy(self, ap_state: dict) -> str:
         """Deterministic fallback used by tests and non-LLM callers."""
-        sr_triggered = any(
-            float(rssi) > -30.0
-            for state in ap_state.values()
-            for rssi in (state.get("neighbor_rssi_dbm") or {}).values()
-        )
-        # Co-EDCA 触发：各 AP 存在不同的业务优先级（需要差异化 EDCA）
+        sr_triggered = bool(_sr.analyze_interference(ap_state).get("co_sr_triggered"))
+        # Co-EDCA 触发：状态中存在不同业务优先级，说明可能需要差异化 EDCA。
+        # priority 来自上报/场景输入；缺省 medium 不会强行制造差异。
         priorities = {
             state.get("traffic_priority", "medium")
             for state in ap_state.values()
@@ -836,7 +833,7 @@ class NegotiationOrchestrator:
             state_json = json.dumps(visible[ap_id], ensure_ascii=False, indent=2)
             instruction = (
                 f"请广播你（{ap_id.upper()}）的当前状态。\n"
-                "发言开头先明确说出你是哪个 AP，然后用自然语言完整说明你的实测参数，"
+                "发言开头先明确本机 AP 编号，然后用自然语言完整说明你的实测参数，"
                 "最后用一两句话简述你当前状态，例如信道是否偏忙、邻居信号是否偏强、"
                 "业务质量是否稳定。\n\n"
                 "你的实测数据如下，请覆盖所有字段，但不要只复制 JSON，也不要使用固定模板：\n"
@@ -872,15 +869,17 @@ class NegotiationOrchestrator:
             f"{history_hint}"
             f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
             "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
-            "【路径选择规则（必须遵守）】\n"
-            "  · 如果各 AP 的 traffic_priority 字段存在差异（如 high / medium / low 不完全相同），\n"
-            "    必须选择 Co-EDCA 或联合路径——优先级差异是 EDCA 协商的专属触发条件，\n"
-            "    不得以信道繁忙或延迟偏高为由改选 Co-SR。\n"
-            "  · 只有当所有 AP 的 traffic_priority 相同且存在强干扰（邻居 RSSI > -30 dBm）时，\n"
-            "    才应选择纯 Co-SR 路径。\n\n"
+            "【路径选择规则（基于实时证据，不按 AP 编号或固定业务身份预设）】\n"
+            "  · 若邻居 RSSI 偏强、analyze_sr_interference 显示 co_sr_triggered=true，"
+            "或 SINR/STA RSSI 约束显示功率调整有必要，可选择 Co-SR。\n"
+            "  · 若 traffic_priority、QoS 指标或当前 EDCA 参数显示需要差异化信道竞争机会，"
+            "可选择 Co-EDCA。\n"
+            "  · 若强干扰和 EDCA 竞争问题同时有证据支持，可选择联合路径。\n"
+            "  · 若状态没有足够证据支持调参，应说明暂不调整或提出最小改动方案，"
+            "不要为了完成协商强行制造问题。\n\n"
             "你可以根据分析结果，选择以下协商路径：\n\n"
             "【Co-SR】降低各 AP 的 TX Power，减少 OBSS 干扰。\n"
-            "  适用场景：邻居 RSSI > -30 dBm 或 SINR 持续低于 15 dB，且各 AP 优先级相同。\n"
+            "  适用场景：邻居 RSSI 偏强、工具判断存在强干扰，或 SINR / STA RSSI 约束显示需要调整功率。\n"
             "  【硬性流程】只要选择 Co-SR 或联合路径，第一步必须先判断可用并发组："
             "调用 get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups。\n"
             "  Co-SR 目标是先选择可空间复用的并发组，再在保护 SINR 和 STA RSSI 的前提下最大化降功率；"
@@ -893,22 +892,22 @@ class NegotiationOrchestrator:
             "  提案 JSON 须包含每个 AP 的 tx_power_dbm，并额外包含 "
             "`\"_sr\": {\"concurrent_group\": [\"ap1\", \"ap3\"], "
             "\"non_concurrent_aps\": [\"ap2\"]}` 这样的并发组说明。\n\n"
-            "【Co-EDCA】根据各 AP 的业务优先级（traffic_priority）差异化调整 CWmin / CWmax / AIFSN，\n"
-            "  保障高优先级业务的信道接入优先权。\n"
-            "  适用场景：各 AP 承载不同优先级的业务（high / medium / low），当前 EDCA 参数未体现差异。\n"
+            "【Co-EDCA】根据当前状态中的 traffic_priority、QoS 指标和 EDCA 参数差异，"
+            "调整 CWmin / CWmax / AIFSN。\n"
+            "  适用场景：存在业务优先级差异、拥塞/重传/时延/丢包异常，或当前 EDCA 参数与业务需求不匹配。\n"
             "  调整规则：\n"
-            "    · 高优先级（high）业务：调低 CWmin、CWmax、AIFSN——更小的退避窗口和更短的\n"
-            "      AIFS 间隔使该 AP 更早开始竞争并更快接入信道，降低时延。\n"
-            "    · 低优先级（low）业务：调高 CWmin、CWmax、AIFSN——更大的退避让低优先级 AP\n"
-            "      主动放慢竞争节奏，把信道机会让给高优先级业务。\n"
-            "    · 中优先级（medium）：参数介于两者之间。\n"
+            "    · high 通常使用更小的 CWmin、CWmax、AIFSN，以缩短退避和 AIFS 等待时间。\n"
+            "    · low 通常使用更大的 CWmin、CWmax、AIFSN，以降低自身竞争强度。\n"
+            "    · medium 通常介于两者之间。\n"
+            "  如果所有 AP 的 traffic_priority 相同或缺省为 medium，不要强行制造优先级梯度；"
+            "应主要根据拥塞、重传、时延、丢包和现有 EDCA 参数判断是否需要调整。\n"
             "  硬性排序约束（提案必须满足）：\n"
             "    high.CWmin ≤ medium.CWmin ≤ low.CWmin\n"
             "    high.AIFSN ≤ medium.AIFSN ≤ low.AIFSN\n"
             "  工具链：validate_edca_proposal（校验范围合规 + 优先级排序）\n"
             "  提案 JSON 须包含每个 AP 的 CWmin、CWmax、AIFSN 字段。\n\n"
             "【联合（Co-SR + Co-EDCA）】同时调整 TX Power 和 EDCA：降低 OBSS 干扰的同时，\n"
-            "  根据业务优先级差异化 EDCA 参数。提案 JSON 须同时包含 tx_power_dbm 与 EDCA 字段。\n\n"
+            "  同时根据实时 QoS / 优先级 / EDCA 参数差异调整 EDCA。提案 JSON 须同时包含 tx_power_dbm 与 EDCA 字段。\n\n"
             "提案须简洁说明：\n"
             "  · 选择了哪种路径，为什么（关键指标数据是什么）\n"
             "  · 每个 AP 的最终参数是多少，为何选择该方案（如有历史争议，说明如何化解）\n"
@@ -968,8 +967,8 @@ class NegotiationOrchestrator:
 
         verify_hint = {
             "co_sr":   "关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量，以及它对你业务的直接影响",
-            "co_edca": "关注你自己的 traffic_priority（高优先级需要更小的 CWmin/AIFSN，低优先级需要更大）、"
-                       "工具返回的 valid/errors 与优先级排序校验结果，以及参数差异化是否合理",
+            "co_edca": "关注你自己的 traffic_priority、QoS 指标、当前 EDCA 参数、"
+                       "工具返回的 valid/errors 与优先级排序校验结果，以及参数差异化是否有实时证据支持",
             "joint":   "关注你自己的 TX Power 与 EDCA 建议值、工具返回的 valid/errors，以及组合调整是否可接受",
         }.get(strategy, "关注工具返回的 valid/errors 以及参数对你的影响")
 
@@ -1055,8 +1054,9 @@ class NegotiationOrchestrator:
             "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
             "请回顾上方完整协商历史，综合所有 AP 此前提出的约束和顾虑，"
             "给出一个能兼顾所有人需求的反提案。\n"
-            "你可以自由选择协商路径：Co-SR 使用 tx_power_dbm 字段，Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，"
-            "联合路径两类字段均出现。\n"
+            "你可以根据实时证据选择协商路径：Co-SR 使用 tx_power_dbm 字段，"
+            "Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，联合路径两类字段均出现；"
+            "证据不足时不要为了形成反提案强行改变无关参数。\n"
             "如果选择 Co-SR 或联合路径，第一步必须真实调用 get_latest_ap_states、"
             "analyze_sr_interference、select_sr_concurrent_groups，先判断可用并发组，"
             "并在 JSON 中写入 _sr.concurrent_group。\n"
@@ -1121,8 +1121,7 @@ class NegotiationOrchestrator:
             conversation_log — list of {"speaker": str, "content": str}
         """
         started_at = time.time()
-        # 业务画像 + 字段白名单：预设各 AP 业务优先级，并只保留实验关心的字段，
-        # 其余上报数据在整个协商流程中忽略。
+        # 字段白名单 + EDCA 解码：保留协商关心的字段，并对缺失业务字段使用中性默认值。
         ap_state = apply_profile(ap_state)
         self._current_ap_states = ap_state
 
