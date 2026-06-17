@@ -27,7 +27,7 @@
 ## analyze_sr_interference
 
 **位置**：`src/tools/sr.py` → `analyze_interference()`
-**适用阶段**：Co-SR 或联合协商的提案阶段
+**适用阶段**：Co-SR 提案阶段
 
 分析当前 AP 间干扰关系，只返回事实和风险，不给最终功率建议。
 
@@ -45,7 +45,7 @@
 ## select_sr_concurrent_groups
 
 **位置**：`src/tools/sr.py` → `select_concurrent_groups()`
-**适用阶段**：Co-SR 或联合协商的提案阶段
+**适用阶段**：Co-SR 提案阶段
 
 先枚举可行空间复用并发组，再给出组内推荐 TX Power。用于部分并发：
 例如最远的 `ap1` / `ap3` 可进入 `concurrent_group`，中间强干扰 `ap2`
@@ -71,7 +71,7 @@
 ## compute_sr_feasible_ranges
 
 **位置**：`src/tools/sr.py` → `compute_feasible_ranges()`
-**适用阶段**：Co-SR 或联合协商的提案阶段
+**适用阶段**：Co-SR 提案阶段
 
 计算每个 AP 的 TX Power 可行区间。区间来自法定功率上下限、
 STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案仍需继续评估。
@@ -124,7 +124,7 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 ## rank_sr_candidates
 
 **位置**：`src/tools/sr.py` → `rank_candidates()`
-**适用阶段**：Co-SR 或联合协商的提案阶段
+**适用阶段**：Co-SR 提案阶段
 
 对多个候选 TX Power 方案排序，帮助比较协商方案。
 
@@ -209,7 +209,5 @@ high.AIFSN ≤ medium.AIFSN ≤ low.AIFSN
 |------|---------|------------|
 | 提案（Co-SR） | 提案方 | `get_latest_ap_states` → `analyze_sr_interference` → `select_sr_concurrent_groups` → `evaluate_sr_candidate` |
 | 提案（Co-EDCA） | 提案方 | `get_latest_ap_states` → 自行提出 EDCA 候选 → `validate_edca_proposal` 自检 |
-| 提案（联合） | 提案方 | `get_latest_ap_states` → Co-SR 分析/候选工具 + `validate_edca_proposal` |
 | 投票（Co-SR） | 投票方 | `get_latest_ap_states` → `evaluate_sr_candidate`（传入提案中的功率值） |
 | 投票（Co-EDCA） | 投票方 | `get_latest_ap_states` → `validate_edca_proposal`（传入提案中的 EDCA 参数） |
-| 投票（联合） | 投票方 | `get_latest_ap_states` → `evaluate_sr_candidate` + `validate_edca_proposal` |

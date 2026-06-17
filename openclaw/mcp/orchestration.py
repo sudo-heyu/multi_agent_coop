@@ -154,6 +154,15 @@ def read_vote(content: str) -> str:
     return "agree" if "同意" in without_negative else "reject"
 
 
+def resolve_strategy(proposal: dict | None) -> str | None:
+    """只允许 Co-SR / Co-EDCA 两种策略（联合已取消）。
+    提案含功率字段即按 Co-SR 验收（强干扰优先）；否则按 Co-EDCA。"""
+    if not proposal:
+        return None
+    s = _infer_strategy_from_proposal(proposal)
+    return "co_sr" if s == "joint" else s
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 阶段指令（忠实移植自 orchestrator.py）
 # ──────────────────────────────────────────────────────────────────────
@@ -185,22 +194,20 @@ def propose_instruction(proposer_id: str) -> str:
         f"{history_hint}"
         f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
         "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
-        "【路径选择规则（必须遵守）】\n"
-        "  · 如果各 AP 的 traffic_priority 字段存在差异（如 high / low 不完全相同），\n"
-        "    必须选择 Co-EDCA 或联合路径——优先级差异是 EDCA 协商的专属触发条件，\n"
-        "    不得以信道繁忙或延迟偏高为由改选纯 Co-SR。\n"
-        "  · 只有当所有 AP 的 traffic_priority 相同且存在强干扰时，才应选择纯 Co-SR 路径。\n\n"
-        "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。只要选择 Co-SR 或联合路径，第一步必须先判断"
+        "【路径选择规则（只有 Co-SR、Co-EDCA 两种，没有联合路径，必须二选一）】\n"
+        "  · 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 选 Co-SR。\n"
+        "  · 否则（无强干扰）→ 选 Co-EDCA，按 traffic_priority 差异化。\n"
+        "  · 严禁同一提案同时包含功率与 EDCA 两类字段。\n\n"
+        "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。第一步必须先判断"
         "可用并发组：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups；"
         "再用 evaluate_sr_candidate（传入 proposed_powers，部分并发再传 concurrent_group）自检。"
-        "功率取最大必要降幅且为整数 dBm。提案 JSON 含每个 AP 的 tx_power_dbm，并附 "
+        "功率取最大必要降幅且为整数 dBm。提案 JSON 只含每个 AP 的 tx_power_dbm，并附 "
         '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。\n\n'
         "【Co-EDCA】按各 AP 的 traffic_priority 差异化 CWmin/CWmax/AIFSN：high 用更小、low 用更大，"
         "满足 high.CWmin ≤ low.CWmin、high.AIFSN ≤ low.AIFSN；用 validate_edca_proposal（传 proposed_edca）自检。"
-        "提案 JSON 含每个 AP 的 CWmin/CWmax/AIFSN。\n\n"
-        "【联合】同时调整 TX Power 与 EDCA，提案 JSON 同时含两类字段。\n\n"
+        "提案 JSON 只含每个 AP 的 CWmin/CWmax/AIFSN。\n\n"
         "提案须简洁说明：选哪条路径及原因、每个 AP 的最终参数与依据、预期改善与权衡。\n"
-        "提交前必须调用 evaluate_sr_candidate（Co-SR/联合）或 validate_edca_proposal（Co-EDCA/联合）自检；"
+        "提交前必须调用 evaluate_sr_candidate（Co-SR）或 validate_edca_proposal（Co-EDCA）自检；"
         "提案阶段自检必须把你打算提的参数显式作为工具参数传入。\n"
         "提案末尾必须用 ```json 代码块附参数摘要，顶层键必须是 ap1/ap2/ap3，"
         "每个 AP 的值必须是对象（参数写在对象内部，严禁裸数值）。"
@@ -236,7 +243,7 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
         "【弃权】未完全满足但找不到更好方案，或协商已重复。等同同意，无需反提案。末尾附 "
         "```json\n{\"agreed\": \"abstain\", \"reason\": \"...\"}\n```\n"
         "【反对】你有具体替代方案。同一条回复中先附 ```json\n{\"agreed\": false, \"reason\": \"...\"}\n``` "
-        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR/联合，"
+        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR，"
         "须先 get_latest_ap_states→analyze_sr_interference→select_sr_concurrent_groups 并写 _sr.concurrent_group。"
         f"{stall_hint}"
     )
@@ -268,7 +275,7 @@ def run_propose(proposer_id: str) -> dict:
     proposal = _extract_proposal(reply)
     if proposal is not None:
         proposal = _with_sr_concurrent_group(proposal, _SESSION.ap_state)
-    strategy = _infer_strategy_from_proposal(proposal) if proposal else None
+    strategy = resolve_strategy(proposal)
     _SESSION.proposer = proposer_id
     _SESSION.proposal = proposal
     _SESSION.strategy = strategy
@@ -283,7 +290,7 @@ def run_vote(voter_id: str) -> dict:
     if s.proposal is None or s.proposer is None:
         return {"error": "当前无有效提案，请先 run_propose"}
     reply = drive_ap(voter_id, vote_instruction(
-        voter_id, s.proposer, s.strategy or "joint", s.proposal, s.proposal_num))
+        voter_id, s.proposer, s.strategy or "co_edca", s.proposal, s.proposal_num))
     s.record(voter_id.upper(), reply)
     vote = read_vote(reply)
     counter = None
@@ -300,7 +307,7 @@ def promote_counter(new_proposer: str, counter_proposal: dict) -> dict:
     s = _SESSION
     s.proposer = new_proposer
     s.proposal = _with_sr_concurrent_group(counter_proposal, s.ap_state)
-    s.strategy = _infer_strategy_from_proposal(s.proposal)
+    s.strategy = resolve_strategy(s.proposal)
     s.proposal_num += 1
     return {"proposer": new_proposer, "proposal": s.proposal,
             "strategy": s.strategy, "proposal_num": s.proposal_num}
@@ -400,7 +407,7 @@ def relay(max_steps: int = 30, first: str = "ap1", on_turn=None) -> dict:
 
     # 收尾：对最终决策做确定性 Validator 验收（安全网，验证而非决策）
     decision = _extract_proposal(last_reply) or _extract_json(last_reply)
-    strategy = _infer_strategy_from_proposal(decision) if decision else None
+    strategy = resolve_strategy(decision)
     validation = None
     if decision is not None and strategy:
         validation = _validate_decision(
