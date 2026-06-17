@@ -21,6 +21,8 @@ Co-EDCA 计算工具
 EDCA 参数的具体取值由 LLM agent 根据上述规则自行推理决定。
 """
 
+import math
+
 VALID_PRIORITIES: tuple[str, ...] = ("high", "medium", "low")
 
 _PRIORITY_RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
@@ -31,6 +33,56 @@ _LIMITS = {
     "CWmax": (7, 1023),
     "AIFSN": (1, 15),
 }
+
+
+# ── 竞争窗口的指数表示 ⇄ 实际值 ──────────────────────────────────────────────
+# 硬件（hostapd / iw）以指数 n 表示竞争窗口，实际竞争窗口 CW = 2^n - 1：
+#     n :  0   1   2   3    4    5   ...   10
+#    CW :  0   1   3   7   15   31   ...  1023
+# AP 上报的 cwmin/cwmax 是指数 n；协商内部统一使用实际 CW 值推理（范围 [3,1023]）；
+# 下发硬件时再转回指数。AIFSN 本身是直接计数值，不参与此转换。
+
+def ecw_to_cw(n: int) -> int:
+    """指数 n → 实际竞争窗口值 CW = 2^n - 1。"""
+    return (1 << int(n)) - 1
+
+
+def cw_to_ecw(cw: int) -> int:
+    """实际竞争窗口值 CW → 最接近的指数 n（硬件只能取 2^n - 1 的离散值）。"""
+    return max(0, round(math.log2(int(cw) + 1)))
+
+
+def decode_state_edca(state: dict) -> dict:
+    """把单个 AP 状态里上报的 cwmin/cwmax 指数解码为实际 CW 值（返回新字典）。
+
+    上报数据（来自 hostapd/iw）以指数 n 表示竞争窗口，本函数将其转换为协商内部
+    使用的实际 CW 值。其余字段原样保留；非数值的 cwmin/cwmax 跳过。
+    """
+    if not isinstance(state, dict):
+        return state
+    out = dict(state)
+    for key in ("cwmin", "cwmax"):
+        val = out.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            out[key] = ecw_to_cw(val)
+    return out
+
+
+def encode_params_edca(params: dict) -> dict:
+    """把决策参数里的 CWmin/CWmax 实际 CW 值编码为下发硬件用的指数 n（返回新字典）。
+
+    协商内部用实际 CW 值（15,127...）推理；下发到香蕉派 /apply 前在此统一转回指数
+    （15→4, 127→7），香蕉派拿到指数后直接写 hostapd。其余字段（tx_power_dbm /
+    AIFSN 等）原样保留；兼容大小写键名。返回新字典，不修改入参。
+    """
+    if not isinstance(params, dict):
+        return params
+    out = dict(params)
+    for key in ("CWmin", "CWmax", "cwmin", "cwmax"):
+        val = out.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            out[key] = cw_to_ecw(val)
+    return out
 
 
 def get_traffic_priority(ap_state: dict) -> str:

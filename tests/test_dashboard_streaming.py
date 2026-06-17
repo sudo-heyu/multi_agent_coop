@@ -1,16 +1,15 @@
 import json
-import queue
 import unittest
 
 from dashboard import app as dashboard_app
 
 
 def drain_live_queue():
-    while True:
-        try:
-            dashboard_app._live_queue.get_nowait()
-        except queue.Empty:
-            return
+    # 扇出模型：重置会话 backlog 与订阅者集合，隔离每个用例。
+    with dashboard_app._backlog_lock:
+        dashboard_app._backlog.clear()
+        with dashboard_app._subscribers_lock:
+            dashboard_app._subscribers.clear()
 
 
 class DashboardStreamingTests(unittest.TestCase):

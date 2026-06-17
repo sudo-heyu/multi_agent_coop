@@ -13,7 +13,9 @@ from .console_style import (
     tool_dur, tool_name, tool_prefix, BOLD, FG, AP_NAME_COLORS, color,
 )
 from .logger import SessionLogger
+from .profile import apply_profile, agent_view
 from .tools import sr as _sr
+from .tools.edca import encode_params_edca
 from .tools.registry import TOOL_DEFINITIONS, make_executor
 from .validator import validate_decision
 
@@ -236,12 +238,13 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             state = states.get(ap_id, {}) if isinstance(states, dict) else {}
             neighbors = state.get("neighbor_rssi_dbm") or {}
             nbr_text  = " ".join(f"{ap}:{int(rssi)}" for ap, rssi in neighbors.items()) or "—"
+            svc = state.get("service_name", "—")
+            prio = state.get("traffic_priority", "—")
             lines.append(
-                f"{ap_label(ap_id)}"
+                f"{ap_label(ap_id)} {dim(svc + '/' + prio)}"
                 f" TX={_fmt_num(state.get('tx_power_dbm'), 'dBm')}"
-                f" busy={_fmt_pct(state.get('Data_rate_to_bandwidth_ratio'))}"
-                f" retry={_fmt_pct(state.get('tx_retries_ratio'))}"
                 f" STA={_fmt_num(state.get('sta_rssi_dbm'), 'dBm')}"
+                f" tput={_fmt_num(state.get('throughput_mbps_user'), 'Mbps')}"
                 f" EDCA={state.get('cwmin','—')}/{state.get('cwmax','—')}/{state.get('aifsn','—')}"
                 f" {dim('[' + nbr_text + ']')}"
             )
@@ -464,7 +467,15 @@ class NegotiationOrchestrator:
         self.conversation_log: list[dict] = []
         self.logger = logger
         self._current_ap_states: dict | None = None
-        self.observation_state_getter = observation_state_getter
+        # 观测状态在进入协商前统一应用业务画像 + 字段白名单，
+        # 确保 get_latest_ap_states / 最终验证观测看到的都是预设优先级与过滤后的字段。
+        if observation_state_getter is not None:
+            _raw_getter = observation_state_getter
+            self.observation_state_getter: Callable[[], dict] | None = (
+                lambda: apply_profile(_raw_getter())
+            )
+        else:
+            self.observation_state_getter = None
         self.observation_wait_seconds = observation_wait_seconds
         # {"ap1": "http://192.168.1.11:5002", ...}；None 表示不推送
         self.executor_endpoints: dict[str, str] | None = executor_endpoints
@@ -488,6 +499,9 @@ class NegotiationOrchestrator:
 
         def _send(ap_id: str, url: str) -> tuple[str, bool, str, dict]:
             params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
+            # 决策内部用实际 CW 值；香蕉派写 hostapd 需要指数 n，发送前转换。
+            # encode_params_edca 返回新字典，不会污染 decision（后续验证仍用 CW 值）。
+            params = encode_params_edca(params)
             payload = {
                 "session_id": session_id,
                 "strategy":   strategy,
@@ -587,7 +601,7 @@ class NegotiationOrchestrator:
     def _determine_strategy(self, ap_state: dict) -> str:
         """Deterministic fallback used by tests and non-LLM callers."""
         sr_triggered = any(
-            float(rssi) > -70.0
+            float(rssi) > -30.0
             for state in ap_state.values()
             for rssi in (state.get("neighbor_rssi_dbm") or {}).values()
         )
@@ -817,8 +831,9 @@ class NegotiationOrchestrator:
         if self.logger:
             self.logger.phase_start(1, "广播自身状态")
 
+        visible = agent_view(ap_state)
         for ap_id in AP_IDS:
-            state_json = json.dumps(ap_state[ap_id], ensure_ascii=False, indent=2)
+            state_json = json.dumps(visible[ap_id], ensure_ascii=False, indent=2)
             instruction = (
                 f"请广播你（{ap_id.upper()}）的当前状态。\n"
                 "发言开头先明确说出你是哪个 AP，然后用自然语言完整说明你的实测参数，"
@@ -844,7 +859,7 @@ class NegotiationOrchestrator:
         if self.logger:
             self.logger.phase_start(3, f"{proposer_id.upper()} 发起提案（自主选路）")
 
-        state_summary = json.dumps(ap_state, ensure_ascii=False, indent=2)
+        state_summary = json.dumps(agent_view(ap_state), ensure_ascii=False, indent=2)
 
         history_hint = (
             "【重要】请先完整阅读上方的对话记录。\n"
@@ -861,11 +876,11 @@ class NegotiationOrchestrator:
             "  · 如果各 AP 的 traffic_priority 字段存在差异（如 high / medium / low 不完全相同），\n"
             "    必须选择 Co-EDCA 或联合路径——优先级差异是 EDCA 协商的专属触发条件，\n"
             "    不得以信道繁忙或延迟偏高为由改选 Co-SR。\n"
-            "  · 只有当所有 AP 的 traffic_priority 相同且存在强干扰（邻居 RSSI > -70 dBm）时，\n"
+            "  · 只有当所有 AP 的 traffic_priority 相同且存在强干扰（邻居 RSSI > -30 dBm）时，\n"
             "    才应选择纯 Co-SR 路径。\n\n"
             "你可以根据分析结果，选择以下协商路径：\n\n"
             "【Co-SR】降低各 AP 的 TX Power，减少 OBSS 干扰。\n"
-            "  适用场景：邻居 RSSI > -70 dBm 或 SINR 持续低于 15 dB，且各 AP 优先级相同。\n"
+            "  适用场景：邻居 RSSI > -30 dBm 或 SINR 持续低于 15 dB，且各 AP 优先级相同。\n"
             "  【硬性流程】只要选择 Co-SR 或联合路径，第一步必须先判断可用并发组："
             "调用 get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups。\n"
             "  Co-SR 目标是先选择可空间复用的并发组，再在保护 SINR 和 STA RSSI 的前提下最大化降功率；"
@@ -1106,6 +1121,9 @@ class NegotiationOrchestrator:
             conversation_log — list of {"speaker": str, "content": str}
         """
         started_at = time.time()
+        # 业务画像 + 字段白名单：预设各 AP 业务优先级，并只保留实验关心的字段，
+        # 其余上报数据在整个协商流程中忽略。
+        ap_state = apply_profile(ap_state)
         self._current_ap_states = ap_state
 
         # 阶段一：广播（ap1 → ap2 → ap3）

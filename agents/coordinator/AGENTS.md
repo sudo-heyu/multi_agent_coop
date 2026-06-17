@@ -8,7 +8,7 @@
 
 | 路径 | 触发条件 | 含义 |
 |------|----------|------|
-| co_sr | 某 AP 测到的邻居 RSSI ≥ -70 dBm | OBSS 干扰问题，需协商降低发射功率 |
+| co_sr | 某 AP 测到的邻居 RSSI ≥ -30 dBm | OBSS 干扰问题，需协商降低发射功率 |
 | co_edca | Data_rate_to_bandwidth_ratio ≥ 0.6 或 tx_retries_ratio ≥ 0.1 | 信道拥塞问题，需协商退避参数 |
 | joint | 两个条件同时满足 | 干扰与拥塞并存，联合调整 |
 | noop | 两个条件均不满足 | 网络正常，无需协商 |

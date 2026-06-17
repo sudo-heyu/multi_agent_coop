@@ -20,6 +20,10 @@ from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
 
+# 说明：协商内部使用实际 CW 值，但 CW→指数 n 的换算在【发送端】完成
+# （src/orchestrator.py _push_decision 与 push_edca.py）。本执行服务收到的
+# CWmin/CWmax 已是指数 n，直接写入 hostapd，不在此再次换算。
+
 app = Flask(__name__)
 
 # 由命令行参数填充
@@ -59,14 +63,16 @@ def _apply_tx_power(iface: str, dbm: float) -> tuple[bool, str]:
     return ok, out
 
 
-def _apply_edca(iface: str, cwmin: int, cwmax: int, aifsn: int) -> tuple[bool, str]:
+def _apply_edca(iface: str, ecwmin: int, ecwmax: int, aifsn: int) -> tuple[bool, str]:
     """
     设置 EDCA 参数（Best Effort 队列）。
-    hostapd_cli set_edca_params 格式：<queue> <aifs> <cwmin> <cwmax> <txop>
+    hostapd_cli set_edca_params 格式：<queue> <aifs> <cwmin_exp> <cwmax_exp> <txop>
+    其中 cwmin/cwmax 以【指数 n】表示（实际竞争窗口 CW = 2^n - 1）；
+    传入值已由发送端换算为指数，这里直接下发。
     queue: BE=0, BK=1, VI=2, VO=3
     """
     ok, out = _run(
-        f"hostapd_cli -i {iface} set_edca_params 0 {aifsn} {cwmin} {cwmax} 0"
+        f"hostapd_cli -i {iface} set_edca_params 0 {aifsn} {ecwmin} {ecwmax} 0"
     )
     return ok, out
 
@@ -95,6 +101,7 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
         if any(v is None for v in (cwmin, cwmax, aifsn)):
             results["edca"] = {"ok": False, "error": "params 中缺少 CWmin/CWmax/AIFSN"}
         elif mock:
+            # cwmin/cwmax 已是指数 n（发送端换算），直接下发。
             print(f"[mock] hostapd_cli set_edca_params 0 {aifsn} {cwmin} {cwmax} 0")
             results["edca"] = {"ok": True, "CWmin": cwmin, "CWmax": cwmax, "AIFSN": aifsn, "mock": True}
         else:

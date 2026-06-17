@@ -285,7 +285,7 @@ details = compute_validation(ap_states, {"ap1": 6.0, "ap2": 6.0, "ap3": 6.0})
 
 | 条件 | 策略 |
 |---|---|
-| 任一 AP 的 neighbor_rssi ≥ -70 dBm | Co-SR |
+| 任一 AP 的 neighbor_rssi ≥ -30 dBm | Co-SR |
 | 任一 AP 的 Data_rate_to_bandwidth_ratio ≥ 0.60 或 tx_retries_ratio ≥ 0.15 | Co-EDCA |
 | 两类条件同时满足 | Joint（同时调整 TX Power + EDCA） |
 

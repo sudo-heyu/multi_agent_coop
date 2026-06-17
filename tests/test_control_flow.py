@@ -131,9 +131,9 @@ class ControlFlowTests(unittest.TestCase):
 
     def test_existing_mock_strategy_routes_are_stable(self):
         expected = {
-            "sr": "co_sr",
+            "sr": "noop",
             "edca": "co_edca",
-            "joint": "joint",
+            "joint": "co_edca",
         }
         for scene, strategy in expected.items():
             with self.subTest(scene=scene):
@@ -154,6 +154,19 @@ class ControlFlowTests(unittest.TestCase):
             }
 
         self.assertEqual(self.orchestrator._determine_strategy(state), "noop")
+
+    def test_co_sr_strategy_uses_minus_30_rssi_threshold(self):
+        state = copy.deepcopy(MOCK_SCENES["sr"])
+        for ap_state in state.values():
+            ap_state["traffic_priority"] = "medium"
+            ap_state["neighbor_rssi_dbm"] = {
+                neighbor: -31.0
+                for neighbor in ap_state["neighbor_rssi_dbm"]
+            }
+        self.assertEqual(self.orchestrator._determine_strategy(state), "noop")
+
+        state["ap1"]["neighbor_rssi_dbm"]["ap2"] = -29.0
+        self.assertEqual(self.orchestrator._determine_strategy(state), "co_sr")
 
     def test_extract_nested_json_from_markdown_block(self):
         content = """
@@ -388,7 +401,8 @@ class ControlFlowTests(unittest.TestCase):
         state_text = strip_ansi(raw)
         self.assertIn("[工具] get_latest_ap_states", state_text)
         self.assertNotIn("状态源:", state_text)
-        self.assertIn("ap1: TX=20dBm", state_text)
+        self.assertIn("ap1:", state_text)
+        self.assertIn("TX=20dBm STA=-45dBm", state_text)
         self.assertIn("[ap2:-74 ap3:-88]", state_text)
         self.assertNotIn('"ap_states"', state_text)
 

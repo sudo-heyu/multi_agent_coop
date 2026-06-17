@@ -41,11 +41,14 @@ AP_TRAFFIC_PRIORITY = {
 
 # ------------------------------------------------------------------
 # 场景二 mock 数据
+#
+# cwmin/cwmax 与真实硬件上报一致，使用【指数 n】（实际竞争窗口 CW = 2^n - 1）：
+# cwmin=3 / cwmax=4 表示实际 CW 7 / 15。协商侧（apply_profile）会解码为实际 CW 值。
 # ------------------------------------------------------------------
 MOCK_STATE = {
     "ap1": {
         "tx_power_dbm": 16.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": AP_TRAFFIC_PRIORITY["ap1"],
         "Data_rate_to_bandwidth_ratio": 0.55,
         "tx_retries_ratio": 0.12,
@@ -58,7 +61,7 @@ MOCK_STATE = {
     },
     "ap2": {
         "tx_power_dbm": 16.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": AP_TRAFFIC_PRIORITY["ap2"],
         "Data_rate_to_bandwidth_ratio": 0.50,
         "tx_retries_ratio": 0.10,
@@ -71,7 +74,7 @@ MOCK_STATE = {
     },
     "ap3": {
         "tx_power_dbm": 16.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": AP_TRAFFIC_PRIORITY["ap3"],
         "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
@@ -147,6 +150,8 @@ def read_real_state(ap_id: str, iface: str = "wlan0") -> dict:  # noqa: ARG001
       sta_rssi_dbm      : iw dev <iface> station dump (关联 STA signal)
       noise_floor_dbm   : iw dev <iface> survey dump (noise)
       cwmin/cwmax/aifsn : iw dev <iface> get txq 或 /sys/kernel/debug/ieee80211/
+                          （cwmin/cwmax 按硬件原生格式上报【指数 n】，不在此转换；
+                           协商侧 apply_profile 会统一解码为实际 CW 值）
       throughput_mbps_iperf   : iperf3 客户端测量（需提前启动 iperf3 服务端）
       latency_ms        : ping -c 4 <网关> | tail -1 | awk '{print $4}' | cut -d/ -f2
       packet_loss_pct   : ping -c 20 <网关> | grep loss | awk '{print $6}'

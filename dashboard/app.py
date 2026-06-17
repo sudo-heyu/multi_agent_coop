@@ -20,14 +20,27 @@ import requests as _req
 app = Flask(__name__)
 _STATE_SERVER = "http://localhost:5001"
 
-# ── 实时事件队列（主进程 orchestrator → dashboard SSE）──────────────────────
-_live_queue:   _queue.SimpleQueue = _queue.SimpleQueue()
-_client_ready: threading.Event   = threading.Event()   # 浏览器已连上 SSE 时置位
+# ── 实时事件扇出（主进程 orchestrator → 所有 dashboard SSE 连接）─────────────
+# 每个 live SSE 连接持有独立队列，push_event 广播给全部订阅者。
+# 不能用单一共享队列竞争消费：多开标签页 / 刷新 / EventSource 自动重连会产生
+# 多个消费者，竞争 get() 会把 token 事件瓜分到不同连接，导致每个页面掉字。
+_subscribers:      set[_queue.SimpleQueue] = set()
+_subscribers_lock: threading.Lock          = threading.Lock()
+_backlog:          list[dict]              = []        # 本会话已发生事件，供新连接补播
+_backlog_lock:     threading.Lock          = threading.Lock()
+_client_ready:     threading.Event         = threading.Event()   # 浏览器已连上 SSE 时置位
 
 
 def push_event(d: dict) -> None:
-    """由 orchestrator 线程调用，将事件推入实时队列。"""
-    _live_queue.put(d)
+    """由 orchestrator 线程调用，将事件广播给所有已连接的实时客户端。"""
+    with _backlog_lock:
+        if d.get("event") == "session_start":
+            _backlog.clear()
+        _backlog.append(d)
+        with _subscribers_lock:
+            targets = list(_subscribers)
+    for q in targets:
+        q.put(d)
 
 
 def wait_for_client(timeout: float = 30.0) -> bool:
@@ -551,16 +564,30 @@ def events():
     log_arg = request.args.get("log", "").strip()
 
     def stream_live():
-        """实时模式：从内存队列读取，零延迟、零缓冲。"""
+        """实时模式：本连接独享队列，接收 push_event 广播的全部事件。"""
+        q: _queue.SimpleQueue = _queue.SimpleQueue()
+        # 在同一把 backlog 锁内快照已发生事件并注册订阅，确保 push_event 串行化，
+        # 新连接既不漏事件也不重复（详见 push_event 的加锁顺序）。
+        with _backlog_lock:
+            backlog_snapshot = list(_backlog)
+            with _subscribers_lock:
+                _subscribers.add(q)
         _client_ready.set()   # 通知 orchestrator 可以开始运行
-        while True:
-            try:
-                d = _live_queue.get(timeout=15)
+        try:
+            # 先补播本会话已发生的事件（让刷新/重连的页面从头重建），再接 live 流
+            for d in backlog_snapshot:
                 yield f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
-                if d.get("event") == "session_end":
-                    return
-            except _queue.Empty:
-                yield ": ka\n\n"  # keepalive
+            while True:
+                try:
+                    d = q.get(timeout=15)
+                    yield f"data: {json.dumps(d, ensure_ascii=False)}\n\n"
+                    if d.get("event") == "session_end":
+                        return
+                except _queue.Empty:
+                    yield ": ka\n\n"  # keepalive
+        finally:
+            with _subscribers_lock:
+                _subscribers.discard(q)
 
     def stream_replay():
         """回放模式：tail JSONL 文件（用于查看历史会话）。"""

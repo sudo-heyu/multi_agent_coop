@@ -17,6 +17,7 @@ push_edca.py — 直接向香蕉派下发 EDCA 参数决策
 
 import argparse
 import json
+import math
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -118,15 +119,21 @@ def validate_edca(ap_id: str, cwmin: int, cwmax: int, aifsn: int) -> None:
 
 # ── 下发逻辑 ──────────────────────────────────────────────────────────────────
 
+def _cw_to_ecw(cw: int) -> int:
+    """实际 CW 值 → 硬件指数 n（CW = 2^n - 1）。香蕉派写 hostapd 用指数。"""
+    return max(0, round(math.log2(int(cw) + 1)))
+
+
 def build_payload(ap_id: str, cwmin: int, cwmax: int, aifsn: int,
                   strategy: str, session_id: str) -> dict:
+    # 命令行输入的是实际 CW 值；香蕉派 /apply 直接写 hostapd，需要指数 n，发送前转换。
     return {
         "session_id": session_id,
         "strategy":   strategy,
         "ap_id":      ap_id,
         "params": {
-            "CWmin": cwmin,
-            "CWmax": cwmax,
+            "CWmin": _cw_to_ecw(cwmin),
+            "CWmax": _cw_to_ecw(cwmax),
             "AIFSN": aifsn,
         },
     }
@@ -165,7 +172,10 @@ def main() -> None:
 
     print(f"{'[DRY-RUN] ' if args.dry_run else ''}策略={args.strategy}  会话={session_id}")
     for ap_id, (cwmin, cwmax, aifsn) in target.items():
-        print(f"  {ap_id}: CWmin={cwmin}  CWmax={cwmax}  AIFSN={aifsn}")
+        print(
+            f"  {ap_id}: CWmin={cwmin}→指数{_cw_to_ecw(cwmin)}  "
+            f"CWmax={cwmax}→指数{_cw_to_ecw(cwmax)}  AIFSN={aifsn}"
+        )
     print()
 
     payloads = {
@@ -190,7 +200,10 @@ def main() -> None:
             ok, msg = future.result()
             cwmin, cwmax, aifsn = target[ap_id]
             mark = "✓" if ok else "✗"
-            print(f"[{mark}] {ap_id.upper()} CWmin={cwmin} CWmax={cwmax} AIFSN={aifsn}  →  {msg}")
+            print(
+                f"[{mark}] {ap_id.upper()} CWmin={cwmin}(指数{_cw_to_ecw(cwmin)}) "
+                f"CWmax={cwmax}(指数{_cw_to_ecw(cwmax)}) AIFSN={aifsn}  →  {msg}"
+            )
             if ok:
                 ok_count += 1
 

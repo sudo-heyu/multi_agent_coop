@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 
 import requests
 
+from src.tools.edca import cw_to_ecw
+
 AP_IDS = ("ap1", "ap2", "ap3")
 _PERF_FIELDS = ("throughput_mbps_iperf", "throughput_mbps_user", "latency_ms", "packet_loss_pct")
 
@@ -68,7 +70,11 @@ class MockTelemetryFeeder:
                 ):
                     if params.get(key) is not None:
                         try:
-                            self._state[ap][key] = cast(params[key])
+                            value = cast(params[key])
+                            # 决策为实际 CW 值；喂回的“上报数据”与真实上报一致用指数 n。
+                            if key in ("cwmin", "cwmax"):
+                                value = cw_to_ecw(value)
+                            self._state[ap][key] = value
                         except (TypeError, ValueError):
                             pass
                 # 协商后预期：吞吐 +12%、延迟 -25%、丢包 -40%

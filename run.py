@@ -2,12 +2,12 @@
 多 AP 协商系统触发脚本
 
 用法：
-  python run.py                            # 从状态服务器获取数据（默认模型 qwen3:14b）
+  python run.py                            # 从状态服务器获取数据（默认 PPIO 云端 qwen:80b）
   python run.py --mock                     # 使用 mock 数据（联合场景，触发 Co-SR + Co-EDCA）
   python run.py --mock --scene sr          # 仅 Co-SR 场景
   python run.py --mock --scene edca        # 仅 Co-EDCA 场景
-  python run.py qwen3:14b --mock           # 指定模型 + mock 数据
-  python run.py qwen:80b --mock            # 使用 PPIO qwen3-next-80b（需在 .env 填写 PPIO_API_KEY）
+  python run.py qwen:80b --mock            # 默认即此：PPIO qwen3-next-80b（需在 .env 填写 PPIO_API_KEY）
+  python run.py qwen3:14b --mock           # 显式回退到本地 Ollama 模型
   python run.py --server http://192.168.1.100:5001  # 指定服务器地址
 
   # 协商完成后主动推送决策到香蕉派执行服务（静态 IP）
@@ -200,10 +200,14 @@ def stop_telemetry_trace(server_url: str) -> None:
 # neighbor_rssi 反映各 AP 在其当前功率下被邻居接收到的信号强度（路径损耗 dB 线性）
 # AP2 接收到 AP1 的 -68.6 dBm，触发 Co-SR；AP3 距 AP1 较远，受影响较小
 # STA 紧靠本 AP（sta_rssi ≈ -45~-50 dBm），降功率后不会断连
+#
+# 注意：cwmin/cwmax 按真实上报约定使用【指数 n】（CW = 2^n - 1），
+# 与硬件 hostapd/iw 上报格式一致。这里 cwmin=3 / cwmax=4 表示实际 CW 7 / 15，
+# 进入协商前由 apply_profile 统一解码为实际 CW 值。
 MOCK_SCENE_SR = {
     "ap1": {
         "tx_power_dbm": 20.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
         "Data_rate_to_bandwidth_ratio": 0.45,
         "tx_retries_ratio": 0.08,
@@ -217,7 +221,7 @@ MOCK_SCENE_SR = {
     },
     "ap2": {
         "tx_power_dbm": 14.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
         "Data_rate_to_bandwidth_ratio": 0.50,
         "tx_retries_ratio": 0.10,
@@ -231,7 +235,7 @@ MOCK_SCENE_SR = {
     },
     "ap3": {
         "tx_power_dbm": 8.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
         "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.06,
@@ -251,7 +255,7 @@ MOCK_SCENE_SR = {
 MOCK_SCENE_EDCA = {
     "ap1": {
         "tx_power_dbm": 10.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "high",
         "Data_rate_to_bandwidth_ratio": 0.55,
         "tx_retries_ratio": 0.12,
@@ -264,7 +268,7 @@ MOCK_SCENE_EDCA = {
     },
     "ap2": {
         "tx_power_dbm": 10.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
         "Data_rate_to_bandwidth_ratio": 0.50,
         "tx_retries_ratio": 0.10,
@@ -277,7 +281,7 @@ MOCK_SCENE_EDCA = {
     },
     "ap3": {
         "tx_power_dbm": 10.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",
         "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
@@ -296,7 +300,7 @@ MOCK_SCENE_EDCA = {
 MOCK_SCENE_JOINT = {
     "ap1": {
         "tx_power_dbm": 20.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "high",
         "Data_rate_to_bandwidth_ratio": 0.55,
         "tx_retries_ratio": 0.12,
@@ -309,7 +313,7 @@ MOCK_SCENE_JOINT = {
     },
     "ap2": {
         "tx_power_dbm": 20.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
         "Data_rate_to_bandwidth_ratio": 0.50,
         "tx_retries_ratio": 0.10,
@@ -322,7 +326,7 @@ MOCK_SCENE_JOINT = {
     },
     "ap3": {
         "tx_power_dbm": 20.0,
-        "cwmin": 7, "cwmax": 15, "aifsn": 2,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",
         "Data_rate_to_bandwidth_ratio": 0.38,
         "tx_retries_ratio": 0.05,
@@ -387,8 +391,8 @@ def _parse_executor_endpoints(raw: str) -> dict[str, str]:
 
 def main():
     parser = argparse.ArgumentParser(description="多 AP 协商系统")
-    parser.add_argument("model", nargs="?", default="qwen3:14b",
-                        help="模型名：Ollama 本地模型（默认 qwen3:14b）或 qwen:80b（PPIO 云端）")
+    parser.add_argument("model", nargs="?", default="qwen:80b",
+                        help="模型名：qwen:80b（PPIO 云端，默认）或 Ollama 本地模型如 qwen3:14b")
     parser.add_argument("--mock", action="store_true",
                         help="使用 mock 数据，无需启动状态服务器")
     parser.add_argument("--scene", choices=["sr", "edca", "joint"], default="joint",
