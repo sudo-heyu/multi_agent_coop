@@ -23,12 +23,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 让本脚本无论从何处启动都能 import 仓库 src 包
+# 让本脚本无论从何处启动都能 import 仓库 src 包与同目录 orchestration
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+_HERE = Path(__file__).resolve().parent
+for _p in (str(REPO_ROOT), str(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from mcp.server.fastmcp import FastMCP
+
 
 from src.tools import sr as _sr
 from src.tools import edca as _edca
@@ -174,48 +177,6 @@ def push_decision(decision: dict, strategy: str, endpoints: dict) -> dict:
                 out[ap_id] = {"ok": False, "response": str(exc)}
         return {"results": out}
     return _guard(_run)
-
-
-@mcp.tool()
-def ask_ap(ap_id: str, instruction: str, thinking: str = "off") -> dict:
-    """让某个 AP agent（ap1/ap2/ap3）跑一个回合并返回其发言文本。
-    coordinator 用它驱动广播 / 提案 / 投票。底层调用 `openclaw agent --local --agent <ap_id>`。"""
-    def _run() -> dict:
-        ap = str(ap_id).lower()
-        if ap not in {"ap1", "ap2", "ap3"}:
-            return {"error": f"未知 AP: {ap_id!r}，应为 ap1/ap2/ap3"}
-        cmd = [
-            OPENCLAW_BIN, "--profile", PROFILE, "agent", "--local",
-            "--agent", ap, "--thinking", thinking,
-            "--message", instruction, "--json",
-        ]
-        env = dict(os.environ)
-        env.setdefault("OLLAMA_API_KEY", "ollama-local")
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
-        if proc.returncode != 0:
-            return {"error": f"ask_ap 调用失败(code={proc.returncode}): "
-                             f"{(proc.stderr or proc.stdout)[-400:]}"}
-        try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            return {"ap_id": ap, "reply": proc.stdout.strip()}
-        reply = _extract_reply(data)
-        return {"ap_id": ap, "reply": reply}
-    return _guard(_run)
-
-
-def _extract_reply(data: dict) -> str:
-    """从 `openclaw agent --json` 输出里取最终可见文本。"""
-    if not isinstance(data, dict):
-        return str(data)
-    for key in ("finalAssistantVisibleText", "finalAssistantRawText", "text", "reply"):
-        node = data.get(key)
-        if isinstance(node, str) and node.strip():
-            return node
-    result = data.get("result")
-    if isinstance(result, dict):
-        return _extract_reply(result)
-    return json.dumps(data, ensure_ascii=False)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ OLLAMA_MODEL="${MULTIAP_MODEL:-qwen3:14b}"
 CFG_DIR="$HOME/.openclaw-$PROFILE"
 CFG="$CFG_DIR/openclaw.json"
 
-AGENTS=(coordinator ap1 ap2 ap3)
+AGENTS=(ap1 ap2 ap3)   # 架构 C：无协调者，三台 AP 自驱动协商
 
 echo "[setup] repo=$REPO profile=$PROFILE python=$PY model=ollama/$OLLAMA_MODEL"
 
@@ -41,10 +41,10 @@ conf = {
         "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
         "models": [{"id": model, "name": model, "input": ["text"]}]}}},
     "agents": {
-        "defaults": {"workspace": f"{repo}/openclaw/workspaces/coordinator",
+        "defaults": {"workspace": f"{repo}/openclaw/workspaces/ap1",
                      "skipBootstrap": True, "model": {"primary": f"ollama/{model}"}},
         "list": [
-            {"id": a, "default": (a == "coordinator"),
+            {"id": a, "default": (a == "ap1"),
              "workspace": f"{repo}/openclaw/workspaces/{a}"}
             for a in agents
         ],
