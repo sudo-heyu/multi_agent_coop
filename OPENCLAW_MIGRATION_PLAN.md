@@ -36,16 +36,20 @@
 - **Mock A —— 预设场景**：等价于现 `python run.py --mock --scene {sr,edca,joint}`。三套硬编码初始状态（见 `run.py` 的 `MOCK_SCENE_SR/EDCA/JOINT`）。
 - **Mock B —— 曲线喂数器**：等价于现 `state_server/mock_feeder.py`，向状态服务器持续喂入随时间变化的遥测，协商决策注入后曲线体现协商后改善。
 
+**策略集：仅 Co-SR、Co-EDCA 两种（联合策略已取消，2026-06-17）。** 因业务画像把优先级恒定为
+high/low，优先级差异始终存在，故以「是否存在强干扰」为主判据：强干扰→Co-SR，否则→Co-EDCA。
+严禁同一提案同时含功率与 EDCA 字段。
+
 三个场景的预期路径：
 | 场景 | 触发 | 预期策略 |
 |---|---|---|
-| `sr` | 邻居 RSSI 强（>-70dBm 区间）、各 AP 业务优先级相同 | `co_sr`（降功率） |
-| `edca` | 各 AP 业务优先级分化（high/low），邻居弱 | `co_edca`（差异化 CWmin/CWmax/AIFSN） |
-| `joint` | 高功率 + 优先级分化同时成立 | `joint`（功率 + EDCA 联动） |
+| `sr` | 邻居 RSSI 强（>-70dBm 区间），存在强干扰 | `co_sr`（降功率） |
+| `edca` | 邻居弱、无强干扰，优先级分化驱动 | `co_edca`（差异化 CWmin/CWmax/AIFSN） |
+| `joint`（场景保留） | 高功率 + 优先级分化；因含强干扰 | `co_sr`（联合已取消，归入 Co-SR） |
 
 ### 2.2 四阶段协商流程（必须可观测）
 1. **广播**：ap1→ap2→ap3 依次播报自身实测状态；只播报己方数据 + 本机扫描的邻居 RSSI，不引用他人业务指标。
-2. **提案**：首轮固定由 ap1 发起、自主选路；提案前必须调用 `get_latest_ap_states`，Co-SR/联合路径必须先 `analyze_sr_interference → select_sr_concurrent_groups` 选并发组；提交前自检（`evaluate_sr_candidate` / `validate_edca_proposal`）。
+2. **提案**：首轮固定由 ap1 发起、自主选路（仅 Co-SR / Co-EDCA 二选一）；提案前必须调用 `get_latest_ap_states`，Co-SR 路径必须先 `analyze_sr_interference → select_sr_concurrent_groups` 选并发组；提交前自检（`evaluate_sr_candidate` / `validate_edca_proposal`）。
 3. **投票**：非提案 AP 逐一表态 `同意/弃权/反对`；反对者当场给出反提案并接管为新提案方。
 4. **决策 + 验收**：全票通过后输出最终 JSON（顶层键 ap1/ap2/ap3）；**确定性 Validator** 做参数范围 + 整数功率 + （真实观测时）生效校验；通过则下发执行。
 
