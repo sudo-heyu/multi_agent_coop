@@ -411,3 +411,81 @@ def relay(max_steps: int = 30, first: str = "ap1", on_turn=None) -> dict:
         "strategy": strategy, "validation": validation,
         "transcript_turns": len(_SESSION.transcript),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 结构化接力（推荐）：thin relay 确定性编排四阶段「轮次顺序」，
+# 每个 AP 仍经 OpenClaw agent 完全自主决定「发言内容」。
+# 不是 agent、不是 LLM、不是协调者——复刻原 orchestrator.run() 控制流，
+# 把 speak() 换成 openclaw agent。这是可靠复现结果的路径。
+# ══════════════════════════════════════════════════════════════════════
+
+import itertools as _it
+
+
+def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
+                     on_event=None) -> dict:
+    def emit(phase, who, reply):
+        if on_event:
+            on_event(phase, who, reply)
+
+    reset_session()
+    s = _SESSION
+
+    # 阶段一：广播（固定顺序 ap1→ap2→ap3）
+    for ap in AP_IDS:
+        emit("broadcast", ap, run_broadcast(ap)["reply"])
+
+    # 外层：Validator 未通过则从 ap1 重新提案
+    for retry in range(max_validation_retries):
+        proposer = "ap1"
+        p = run_propose(proposer)
+        emit("propose", proposer, p["reply"])
+        if not p["parsed"]:
+            return {"outcome": "proposal_parse_error", "decision": None,
+                    "strategy": None, "validation": None, "transcript_turns": len(s.transcript)}
+
+        agree: set[str] = set()
+        cycle = _it.cycle(AP_IDS)
+        while next(cycle) != "ap1":
+            pass  # 从 ap1 之后开始
+
+        for _ in range(max_turns):
+            voter = next(cycle)
+            if voter == s.proposer:
+                continue
+            rv = run_vote(voter)
+            emit("vote", voter, rv["reply"])
+
+            if rv["vote"] in ("agree", "abstain"):
+                agree.add(voter)
+                non_proposers = {a for a in AP_IDS if a != s.proposer}
+                if agree >= non_proposers:
+                    fr = run_final()
+                    emit("decide", s.proposer, fr["reply"])
+                    decision, strategy = fr["decision"], s.strategy
+                    val = (_validate_decision(s.ap_state, decision, strategy,
+                                              observed_state=s.ap_state, observed_is_real=False)
+                           if decision and strategy else None)
+                    if val and val["approved"]:
+                        return {"outcome": "success", "decision": decision,
+                                "strategy": strategy, "validation": val,
+                                "transcript_turns": len(s.transcript)}
+                    # 验收未过：写入对话记录，外层从 ap1 重提案
+                    errs = "；".join((val or {}).get("global_errors") or []) if val else "无法解析决策"
+                    s.record("VALIDATOR", f"[验证未通过] {(val or {}).get('summary','')}\n具体问题：{errs}")
+                    break
+            else:  # reject
+                counter = rv["counter_proposal"]
+                if counter is not None:
+                    promote_counter(voter, counter)
+                    agree = set()  # 新提案方接管，重新计票（cycle 自然推进到 voter 之后）
+                # counter 解析失败则跳过本轮，继续轮转
+        else:
+            return {"outcome": "max_turns_exceeded", "decision": None,
+                    "strategy": s.strategy, "validation": None,
+                    "transcript_turns": len(s.transcript)}
+
+    return {"outcome": "max_retries_exceeded", "decision": None,
+            "strategy": s.strategy, "validation": None,
+            "transcript_turns": len(s.transcript)}

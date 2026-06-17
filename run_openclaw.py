@@ -23,8 +23,8 @@ from state_server.mock_feeder import MockTelemetryFeeder
 import orchestration as orch
 
 
-def _print_turn(step, speaker, reply, ctrl):
-    print(f"\n{'═'*70}\n[第 {step+1} 步] {speaker.upper()}  →  next={ctrl.get('next')} done={ctrl.get('done')}  phase={ctrl.get('phase')}")
+def _print_event(phase, who, reply):
+    print(f"\n{'═'*70}\n[{phase}] {who.upper()}")
     print(reply.strip())
 
 
@@ -54,10 +54,10 @@ def main():
 
     orch.STATE_SERVER = args.server
     t0 = time.time()
-    result = orch.relay(max_steps=args.max_steps, first="ap1", on_turn=_print_turn)
+    result = orch.structured_relay(on_event=_print_event)
     dur = time.time() - t0
 
-    print(f"\n{'━'*70}\n[结果] done={result['done']} steps={result['steps']} 用时 {dur:.0f}s")
+    print(f"\n{'━'*70}\n[结果] outcome={result['outcome']} turns={result['transcript_turns']} 用时 {dur:.0f}s")
     print(f"[策略] {result['strategy']}")
     print(f"[最终决策] {result['decision']}")
     v = result["validation"]
