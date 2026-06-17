@@ -27,31 +27,43 @@ for a in "${AGENTS[@]}"; do
   fi
 done
 
-# 2) 写入 profile 配置（ollama provider + 4 个 agent + 默认模型）
+# 2) 写入 profile 配置（ollama + 可选 PPIO provider + agent + 默认模型）
 mkdir -p "$CFG_DIR"
 TOKEN="$(openssl rand -hex 24)"
-"$PY" - "$CFG" "$REPO" "$TOKEN" "$STATE_SERVER" "$OLLAMA_MODEL" "${AGENTS[@]}" <<'PYEOF'
+# PPIO key：优先环境变量，否则从仓库 .env 读取（不写入仓库内任何文件）
+PPIO_KEY="${PPIO_API_KEY:-$(sed -n 's/^PPIO_API_KEY=//p' "$REPO/.env" 2>/dev/null)}"
+PPIO_MODEL_ID="qwen/qwen3-next-80b-a3b-instruct"
+# 默认模型：有 PPIO key 用云端 80b（更稳更快），否则本地 ollama
+if [ -n "$PPIO_KEY" ]; then
+  MODEL_REF="${MULTIAP_MODEL_REF:-ppio/$PPIO_MODEL_ID}"
+else
+  MODEL_REF="${MULTIAP_MODEL_REF:-ollama/$OLLAMA_MODEL}"
+fi
+echo "[setup] default model = $MODEL_REF  (ppio_key=$([ -n "$PPIO_KEY" ] && echo yes || echo no))"
+"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$MODEL_REF" "${AGENTS[@]}" <<'PYEOF'
 import json, sys
-cfg, repo, token, state_server, model, *agents = sys.argv[1:]
+cfg, repo, token, ollama_model, ppio_key, ppio_model_id, model_ref, *agents = sys.argv[1:]
+providers = {"ollama": {
+    "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
+    "models": [{"id": ollama_model, "name": ollama_model, "input": ["text"]}]}}
+if ppio_key:
+    providers["ppio"] = {
+        "baseUrl": "https://api.ppio.com/openai/v1", "apiKey": ppio_key,
+        "api": "openai-completions",
+        "models": [{"id": ppio_model_id, "name": "qwen:80b", "input": ["text"]}]}
 conf = {
     "meta": {"lastTouchedVersion": "multiap-setup"},
     "gateway": {"mode": "local", "bind": "loopback",
                 "auth": {"mode": "token", "token": token}},
-    "models": {"providers": {"ollama": {
-        "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
-        "models": [{"id": model, "name": model, "input": ["text"]}]}}},
+    "models": {"providers": providers},
     "agents": {
         "defaults": {"workspace": f"{repo}/openclaw/workspaces/ap1",
-                     "skipBootstrap": True, "model": {"primary": f"ollama/{model}"}},
-        "list": [
-            {"id": a, "default": (a == "ap1"),
-             "workspace": f"{repo}/openclaw/workspaces/{a}"}
-            for a in agents
-        ],
+                     "skipBootstrap": True, "model": {"primary": model_ref}},
+        "list": [{"id": a, "default": (a == "ap1"),
+                  "workspace": f"{repo}/openclaw/workspaces/{a}"} for a in agents],
     },
 }
-with open(cfg, "w", encoding="utf-8") as fh:
-    json.dump(conf, fh, ensure_ascii=False, indent=2)
+open(cfg, "w", encoding="utf-8").write(json.dumps(conf, ensure_ascii=False, indent=2))
 print(f"[setup] wrote {cfg}")
 PYEOF
 
