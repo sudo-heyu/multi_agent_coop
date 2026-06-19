@@ -18,6 +18,9 @@ CFG="$CFG_DIR/openclaw.json"
 PPIO_MODEL_ID="${MULTIAP_PPIO_MODEL_ID:-qwen/qwen3-next-80b-a3b-instruct}"
 PPIO_MODEL_ALIAS="${MULTIAP_PPIO_MODEL_ALIAS:-qwen80binstruct}"
 PPIO_MODEL_NAME="${MULTIAP_PPIO_MODEL_NAME:-qwen80binstruct}"
+# 常驻 gateway 端口（serve.sh / drive_ap 都从此处读）。OpenClaw 默认给本 profile 的
+# launchd gateway 服务也用 18789，二者对齐即可让 AP 回合走常驻 gateway。
+GATEWAY_PORT="${MULTIAP_GATEWAY_PORT:-18789}"
 
 AGENTS=(coordinator ap1 ap2 ap3)   # coordinator 只做阶段级触发，AP 负责自主协商内容
 
@@ -49,9 +52,9 @@ else
   MODEL_REF="${MULTIAP_MODEL_REF:-ollama/$OLLAMA_MODEL}"
 fi
 echo "[setup] default model = $MODEL_REF  (ppio_key=$([ -n "$PPIO_KEY" ] && echo yes || echo no))"
-"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$PPIO_MODEL_ALIAS" "$PPIO_MODEL_NAME" "$MODEL_REF" "${AGENTS[@]}" <<'PYEOF'
+"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$PPIO_MODEL_ALIAS" "$PPIO_MODEL_NAME" "$MODEL_REF" "$GATEWAY_PORT" "${AGENTS[@]}" <<'PYEOF'
 import json, sys
-cfg, repo, token, ollama_model, ppio_key, ppio_model_id, ppio_model_alias, ppio_model_name, model_ref, *agents = sys.argv[1:]
+cfg, repo, token, ollama_model, ppio_key, ppio_model_id, ppio_model_alias, ppio_model_name, model_ref, gateway_port, *agents = sys.argv[1:]
 ppio_ref = f"ppio/{ppio_model_id}"
 providers = {"ollama": {
     "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
@@ -90,7 +93,7 @@ def _agent_entry(a):
 
 conf = {
     "meta": {"lastTouchedVersion": "multiap-setup"},
-    "gateway": {"mode": "local", "bind": "loopback",
+    "gateway": {"mode": "local", "bind": "loopback", "port": int(gateway_port),
                 "auth": {"mode": "token", "token": token}},
     "models": {"providers": providers},
     "agents": {

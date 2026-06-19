@@ -59,6 +59,25 @@ OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
 常用开关：`--scene {sr,edca,joint}` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--direct-relay`（绕过 coordinator，仍用 OpenClaw AP agent） · `--require-qwen80b` · `--observation-wait <秒>`。
 `run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
 
+### 后台常驻服务（加速冷启动）
+
+OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server。让协商时的 AP 回合改走**常驻 gateway**
+即可省掉这部分开销。OpenClaw 已为 `multiap` profile 注册了 launchd 网关服务 `ai.openclaw.multiap`
+（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。`serve.sh` 把它与 state server
+绑成一条命令：
+
+```bash
+bash openclaw/serve.sh start     # 起 state server(5001) + 确保 multiap gateway(18789) 在线
+bash openclaw/serve.sh status    # 查看两者状态
+bash openclaw/serve.sh stop      # 停 state server；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
+bash openclaw/serve.sh restart
+```
+
+- gateway 端口取自 profile 配置 `gateway.port`（默认 18789，与 launchd 服务一致）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。
+- 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。coordinator 入口仍走 `--local`（避免 MCP 实例重入死锁）。
+- **提速预期**：主要省掉每回合的 runtime/provider/插件冷启动与 MCP 反复 spawn；**不会缩短 PPIO 推理本身**（每回合 ~13s 的模型时间不变），整体收益取决于冷启动占比。
+- `serve.sh` 起的是裸 state server，数据新鲜度由喂数器（mock：`run_openclaw.py` 的连续喂数器）或香蕉派 reporter（真实）维持。
+
 ---
 
 ## 架构总览

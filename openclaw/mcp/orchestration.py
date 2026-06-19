@@ -49,6 +49,37 @@ OPENCLAW_BIN = (
     or str(Path.home() / ".openclaw" / "bin" / "openclaw")
 )
 DRIVE_RETRIES = int(os.environ.get("MULTIAP_DRIVE_RETRIES", "3"))
+GATEWAY_PORT_ENV = os.environ.get("MULTIAP_GATEWAY_PORT")  # 显式覆盖；否则从 profile 配置读
+
+
+def _gateway_port() -> int | None:
+    """常驻 gateway 端口：优先 env MULTIAP_GATEWAY_PORT，否则读 profile 配置 gateway.port。"""
+    if GATEWAY_PORT_ENV:
+        try:
+            return int(GATEWAY_PORT_ENV)
+        except ValueError:
+            return None
+    home = os.environ.get("OPENCLAW_HOME") or str(Path.home())
+    cfg = Path(home) / f".openclaw-{PROFILE}" / "openclaw.json"
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        port = (data.get("gateway") or {}).get("port")
+        return int(port) if port else 18789  # OpenClaw 默认 gateway 端口（launchd 服务亦用此）
+    except Exception:
+        return 18789
+
+
+def _gateway_up(port: int | None) -> bool:
+    """探测常驻 gateway 是否在本机监听。无端口/连接失败 → False（drive_ap 回退 --local）。"""
+    if not port:
+        return False
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
 
 # 工具调用展示回调（direct-relay 路径用）。structured_relay 进入时设置、退出时清理；
 # 其余路径（relay 总线、run_fast_negotiation）保持 None，drive_ap 自动跳过解析。
@@ -101,7 +132,11 @@ def drive_ap(
     thinking: str = "off",
     extra_env: dict[str, str] | None = None,
 ) -> str:
-    """让某个 AP agent 跑一个回合，返回其发言文本。底层 openclaw agent --local。
+    """让某个 AP agent 跑一个回合，返回其发言文本。底层 openclaw agent。
+
+    若 multiap 常驻 gateway 在线（见 serve.sh），则经 gateway 运行（免每回合的
+    runtime/provider/插件冷启动）；否则回退 `--local` embedded。coordinator 入口仍走
+    `--local`，故其 MCP 实例与 gateway 的 MCP 实例是不同进程，AP 回合经 gateway 不会重入死锁。
 
     每次调用使用全新的随机 session-id：本架构每次发言都是无状态的（完整对话记录
     通过 message 传入），新 session 既避免 OpenClaw 持久 main session 的锁/接管冲突，
@@ -119,14 +154,19 @@ def drive_ap(
     if extra_env:
         env.update(extra_env)
 
+    # 常驻 gateway 在线则走它（热 runtime/MCP）；否则 embedded 冷启动。
+    use_gateway = _gateway_up(_gateway_port())
+
     # 云端/本地模型偶发「incomplete terminal response」（payloads=0），多为瞬时；重试。
     last_err = ""
     sid = None
     for attempt in range(DRIVE_RETRIES):
         sid = f"{ap}-{uuid.uuid4().hex[:12]}"
-        cmd = [OPENCLAW_BIN, "--profile", PROFILE, "agent", "--local",
-               "--agent", ap, "--session-id", sid,
-               "--thinking", thinking, "--message", msg, "--json"]
+        cmd = [OPENCLAW_BIN, "--profile", PROFILE, "agent"]
+        if not use_gateway:
+            cmd.append("--local")
+        cmd += ["--agent", ap, "--session-id", sid,
+                "--thinking", thinking, "--message", msg, "--json"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         if proc.returncode == 0:
             try:
@@ -139,6 +179,9 @@ def drive_ap(
             last_err = "空回复(payloads=0)"
         else:
             last_err = (proc.stderr or proc.stdout)[-300:]
+            if use_gateway:
+                # gateway 模式失败（连接/进程级）→ 回退 embedded，后续尝试不再走 gateway
+                use_gateway = False
         if attempt < DRIVE_RETRIES - 1:
             __import__("time").sleep(2.0)
     raise RuntimeError(f"drive_ap({ap}) 连续 {DRIVE_RETRIES} 次失败: {last_err}")
