@@ -8,6 +8,59 @@
 
 ---
 
+## 运行指令
+
+> 全部用项目 `.venv`（Python 3.11）；系统 python3 是 3.9、缺 `mcp` 包会失败。
+
+**0. 依赖（一次性）**
+```bash
+pip install -r requirements.txt          # flask requests python-dotenv matplotlib mcp
+npm install -g openclaw                   # OpenClaw CLI
+# 模型二选一：PPIO 云端 qwen80binstruct（默认，在 .env 写 PPIO_API_KEY=...）/ 本机 ollama pull qwen3:14b
+```
+
+**1. 一次性配置隔离 profile**（必须用 .venv 的 python；不影响用户默认 profile）
+```bash
+MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash openclaw/setup.sh
+# 写 ~/.openclaw-multiap/openclaw.json + 注册 MCP multiap-tools，末尾 config validate 通过即成功
+```
+
+**2. Mock 模式运行**（无需真实 AP，`--scene` 可选 `sr` / `edca` / `joint`）
+```bash
+# 演示：弹出学术曲线 + Dashboard，协商后曲线体现改善
+.venv/bin/python run_openclaw.py --scene joint
+
+# 无头快速验证（本次三场景实测即此）
+.venv/bin/python run_openclaw.py --scene edca --no-academic-plot --no-dashboard --exit-after-run --max-steps 24
+```
+> ⚠️ **不要加 `--no-feeder`** —— 它只推一帧，长协商时状态会过期（`StateStaleError`）导致失败；需连续喂数器保持状态新鲜。
+
+**3. 直接触发 coordinator**（不经薄启动器，需先有状态服务器在喂数）
+```bash
+OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
+  openclaw --profile multiap agent --local --agent coordinator \
+  -m "开始协商，请直接调用 run_fast_negotiation 控制总耗时" --json
+```
+
+**4. 真实 AP 模式**
+```bash
+.venv/bin/python state_server/server.py                                               # ① 状态服务器（启动一次）
+.venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001    # ② 各香蕉派上报（ap1/ap2/ap3）
+.venv/bin/python run_openclaw.py --server http://localhost:5001 \
+  --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
+#  或 --ap-config ap_endpoints.json（默认自动读取仓库根）
+```
+
+**测试**
+```bash
+.venv/bin/python -m unittest discover -s tests          # 确定性套件 16/16
+```
+
+常用开关：`--scene {sr,edca,joint}` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--direct-relay`（绕过 coordinator，仍用 OpenClaw AP agent） · `--require-qwen80b` · `--observation-wait <秒>`。
+`run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
+
+---
+
 ## 架构总览
 
 ```
@@ -37,70 +90,6 @@
 
 编排「机制层」（阶段指令、驱动 AP、计票、反提案接管、Validator 重试与终止）实现在
 `openclaw/mcp/orchestration.py` 的 `structured_relay`，由 `run_fast_negotiation` 工具内部调用。
-
----
-
-## 快速开始
-
-### 依赖
-
-```bash
-pip install -r requirements.txt          # flask requests python-dotenv matplotlib mcp
-npm install -g openclaw                   # OpenClaw CLI
-
-# 模型：二选一
-#  · PPIO 云端 qwen80binstruct（默认、更稳）——在仓库 .env 写 PPIO_API_KEY=...
-#  · 本机 ollama 回退——ollama pull qwen3:14b
-```
-
-### 一次性配置（隔离 profile，不影响用户默认 profile）
-
-```bash
-bash openclaw/setup.sh
-# 写 ~/.openclaw-multiap/openclaw.json（providers + 4 agent + 默认模型 + per-agent 工具限制）
-# 注册 MCP 工具服务 multiap-tools，并执行 config validate
-```
-
-> 默认模型：检测到 `.env` 里有 `PPIO_API_KEY` 时用 PPIO `qwen80binstruct`，否则回退 `ollama/qwen3:14b`。
-
-### 一、Mock 模式（无需真实 AP，直接跑仿真场景）
-
-```bash
-# 默认 joint 场景；--scene 可选 sr / edca / joint
-python run_openclaw.py --scene edca
-
-# 常用开关
-python run_openclaw.py --scene sr --no-academic-plot --no-dashboard --exit-after-run
-#   --no-feeder        只推一帧（不持续喂曲线，长协商可能因状态过期失败，演示曲线请勿加）
-#   --direct-relay     调试用：绕过 coordinator，直接运行阶段接力（仍经 OpenClaw AP agent）
-#   --require-qwen80b  强制校验 profile 默认模型为 qwen80binstruct
-```
-
-`run_openclaw.py` 会准备场景数据、拉起状态服务器/Dashboard/学术曲线，再触发
-`coordinator` 调用 `run_fast_negotiation` 完成一轮协商，协商后把决策注入喂数器，曲线体现改善。
-
-### 二、真实 AP 模式
-
-```bash
-# 1) 状态服务器（DGX Spark，启动一次）
-python state_server/server.py
-#    默认拒收 source=mock/generated 等生成数据；浏览器开 http://localhost:5001 看实时状态
-
-# 2) 各香蕉派 AP 上报（--ap-id 换成 ap1/ap2/ap3）
-python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001
-
-# 3) 触发协商（推送决策到执行端点）
-python run_openclaw.py --server http://localhost:5001 \
-  --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002
-#  或 --ap-config ap_endpoints.json（默认自动读取仓库根 ap_endpoints.json）
-```
-
-也可直接触发 coordinator（不经薄启动器）：
-
-```bash
-OLLAMA_API_KEY=ollama-local openclaw --profile multiap agent --local --agent coordinator \
-  -m "开始协商，请直接调用 run_fast_negotiation 控制总耗时" --json
-```
 
 ---
 
