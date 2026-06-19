@@ -9,6 +9,7 @@
 前置：openclaw 已装、ollama 运行、已执行过 `bash openclaw/setup.sh`。
 """
 import argparse
+import glob
 import json
 import os
 import shutil
@@ -69,6 +70,64 @@ def _print_tool(name, args, result, dur_ms):
     except Exception:
         line = f"{tool_prefix()} {tool_name(name)} → {status_fail('结果解析失败')}"
     print(line, flush=True)
+
+
+# ── coordinator 路径的实时对话流式输出（tail 会话 JSONL）──────────────────────
+# coordinator 子进程在 MCP 工具里写 JSONL；父进程 tail 这个文件，把广播/提案/投票/
+# 验证事件实时打到终端，使默认路径也能“边跑边看对话”（粒度=每个 AP 发言完成即显示）。
+_LOG_DIR = Path(__file__).parent / "logs"
+_ROLE_PHASE = {
+    "broadcast": "broadcast",
+    "proposer": "propose",
+    "counter_proposal_json_repair": "propose",
+    "voter": "vote",
+    "decision": "decide",
+}
+
+
+def _find_new_session_log(pre: set) -> str | None:
+    cur = set(glob.glob(str(_LOG_DIR / "session_*.jsonl")))
+    new = sorted(cur - pre, key=os.path.getmtime, reverse=True)
+    return new[0] if new else None
+
+
+def _stream_log_event(obj: dict) -> bool:
+    """打印一条会话事件；返回是否打印了内容（用于心跳节流）。"""
+    t = obj.get("event") or obj.get("type")
+    if t == "agent_speak":
+        who = (obj.get("agent") or "").upper()
+        phase = _ROLE_PHASE.get(obj.get("role"), obj.get("role") or "")
+        _print_event(phase, who, obj.get("response") or "")
+        return True
+    if t == "validation_result":
+        v = obj.get("result") or obj
+        flag = status_ok("通过") if v.get("approved") else status_fail("未通过")
+        print(f"\n{status_label('Validator')} {flag} — {v.get('summary', '')}", flush=True)
+        return True
+    return False
+
+
+def _drain_session_log(fh) -> bool:
+    """读出文件中新追加的完整行并打印。返回本次是否打印了内容。仅处理以换行结尾的完整行。"""
+    printed = False
+    while True:
+        pos = fh.tell()
+        line = fh.readline()
+        if not line:
+            break
+        if not line.endswith("\n"):
+            fh.seek(pos)  # 不完整行（写入中），回退等下次
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if _stream_log_event(obj):
+            printed = True
+    return printed
 
 
 def main():
@@ -242,7 +301,8 @@ def _run_via_coordinator(
         "最后必须附一个 json 代码块，原样包含工具返回结果，且保留 outcome、strategy、decision、"
         "validation、transcript_turns 字段。"
     )
-    print("[OpenClaw] 启动 coordinator，调用 run_fast_negotiation；AP 对话会在工具内部批量执行。", flush=True)
+    print("[OpenClaw] 启动 coordinator，调用 run_fast_negotiation；以下实时显示各 AP 发言（来自会话日志）。", flush=True)
+    pre_logs = set(glob.glob(str(_LOG_DIR / "session_*.jsonl")))
     proc = subprocess.Popen(
         [OPENCLAW_BIN, "--profile", OPENCLAW_PROFILE, "agent", "--local",
          "--agent", "coordinator", "--session-key", session_key,
@@ -250,17 +310,33 @@ def _run_via_coordinator(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
     started = time.time()
-    while proc.poll() is None:
-        elapsed = int(time.time() - started)
-        if elapsed and elapsed % 10 == 0:
-            print(f"[OpenClaw] coordinator 仍在运行，已用时 {elapsed}s。qwen80binstruct + 多 AP 工具调用可能需要等待。", flush=True)
-        if elapsed > 1800:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            print(stderr or stdout)
-            print("[错误] coordinator 超过 1800s 未结束。")
-            sys.exit(1)
-        time.sleep(1)
+    fh = None
+    last_activity = started
+    last_heartbeat = started
+    try:
+        while proc.poll() is None:
+            now = time.time()
+            if fh is None:
+                path = _find_new_session_log(pre_logs)
+                if path:
+                    fh = open(path, "r", encoding="utf-8")
+            if fh is not None and _drain_session_log(fh):
+                last_activity = now
+            # 仅在启动期或长间隔（等模型响应）才心跳，避免与对话交错刷屏
+            if now - last_activity > 20 and now - last_heartbeat > 20:
+                print(dim(f"[OpenClaw] 仍在运行 {int(now - started)}s（等待模型响应）…"), flush=True)
+                last_heartbeat = now
+            if now - started > 1800:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                print(stderr or stdout)
+                print("[错误] coordinator 超过 1800s 未结束。")
+                sys.exit(1)
+            time.sleep(0.5)
+    finally:
+        if fh is not None:
+            _drain_session_log(fh)   # 排空收尾事件
+            fh.close()
     stdout, stderr = proc.communicate()
     if proc.returncode != 0:
         print(stderr or stdout)

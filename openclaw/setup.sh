@@ -109,8 +109,10 @@ print(f"[setup] wrote {cfg}")
 PYEOF
 
 # 3) 注册 MCP 工具服务
+# MULTIAP_SESSION_LOG=1 写进注册 env：MCP server 只继承注册 env（不继承调用方进程 env），
+# 故在此开启会话 JSONL，coordinator 路径才会落日志，run_openclaw 方能 tail 出实时对话。
 "$OPENCLAW" --profile "$PROFILE" mcp set multiap-tools \
-  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"requestTimeoutMs\":600000,\"connectionTimeoutMs\":30000,\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\",\"OPENCLAW_BIN\":\"$OPENCLAW\",\"NO_PROXY\":\"localhost,127.0.0.1,::1\",\"no_proxy\":\"localhost,127.0.0.1,::1\"}}" >/dev/null
+  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"requestTimeoutMs\":600000,\"connectionTimeoutMs\":30000,\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\",\"OPENCLAW_BIN\":\"$OPENCLAW\",\"MULTIAP_SESSION_LOG\":\"1\",\"NO_PROXY\":\"localhost,127.0.0.1,::1\",\"no_proxy\":\"localhost,127.0.0.1,::1\"}}" >/dev/null
 
 # 4) 校验
 "$OPENCLAW" --profile "$PROFILE" config validate

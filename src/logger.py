@@ -29,7 +29,9 @@ from typing import Any
 
 from .console_style import status_label
 
-LOG_DIR = Path("logs")
+# 绝对路径（仓库根的 logs/），不受进程工作目录影响：coordinator 路径下 MCP server
+# 的 CWD 不一定是仓库根，相对 "logs" 会把日志写散；用绝对路径保证 run_openclaw 能 tail 到。
+LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 STATE_LOG_DIR = LOG_DIR / "state"
 
 # 控制台各事件的前缀标签（对齐输出）

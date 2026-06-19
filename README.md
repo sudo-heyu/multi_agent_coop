@@ -74,6 +74,7 @@ bash openclaw/serve.sh restart
 ```
 
 - gateway 端口取自 profile 配置 `gateway.port`（默认 18789，与 launchd 服务一致）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。
+- ⚠️ 改过 `setup.sh` / MCP 注册 / profile 配置后，常驻 gateway 仍缓存旧 MCP 连接（会出现 AP 调工具时 "tool isn't available"）；用 `bash openclaw/serve.sh restart` 重载 gateway 即可。
 - 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。coordinator 入口仍走 `--local`（避免 MCP 实例重入死锁）。
 - **提速预期**：主要省掉每回合的 runtime/provider/插件冷启动与 MCP 反复 spawn；**不会缩短 PPIO 推理本身**（每回合 ~13s 的模型时间不变），整体收益取决于冷启动占比。
 - `serve.sh` 起的是裸 state server，数据新鲜度由喂数器（mock：`run_openclaw.py` 的连续喂数器）或香蕉派 reporter（真实）维持。

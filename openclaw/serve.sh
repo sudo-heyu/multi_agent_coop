@@ -106,6 +106,19 @@ stop_gateway() {
     fi
 }
 
+restart_gateway() {
+    # 改了 setup.sh / mcp 注册 / 配置后用它重载 gateway（否则常驻 gateway 缓存旧 MCP 连接，
+    # 会出现 AP 调工具时 "tool isn't available"）。
+    if launchd_exists; then
+        echo "[serve] 重启 launchd gateway $LAUNCHD_LABEL（重载 MCP/配置）..."
+        launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null || true
+        for _ in $(seq 1 45); do if port_listening "$GW_PORT"; then break; fi; sleep 1; done
+        if port_listening "$GW_PORT"; then echo "[serve] gateway 已重启: :${GW_PORT}"; else echo "[serve] gateway 重启后未监听，见 Console.app"; fi
+    else
+        stop_gateway; sleep 1; start_gateway
+    fi
+}
+
 status() {
     if state_alive; then echo "[serve] state server : UP   $STATE_URL"
     else echo "[serve] state server : down ($STATE_URL)"; fi
@@ -121,6 +134,6 @@ case "${1:-}" in
     start)   start_state; start_gateway ;;
     stop)    stop_gateway; stop_state ;;
     status)  status ;;
-    restart) stop_gateway; stop_state; sleep 1; start_state; start_gateway ;;
+    restart) stop_state; sleep 1; start_state; restart_gateway ;;
     *) echo "用法: bash openclaw/serve.sh {start|stop|status|restart}"; exit 1 ;;
 esac
