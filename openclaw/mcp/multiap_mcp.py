@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,8 +44,10 @@ import orchestration as _orch
 
 STATE_SERVER = os.environ.get("MULTIAP_STATE_SERVER", "http://localhost:5001")
 PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
-OPENCLAW_BIN = os.environ.get(
-    "OPENCLAW_BIN", str(Path.home() / ".openclaw" / "bin" / "openclaw")
+OPENCLAW_BIN = (
+    os.environ.get("OPENCLAW_BIN")
+    or shutil.which("openclaw")
+    or str(Path.home() / ".openclaw" / "bin" / "openclaw")
 )
 
 mcp = FastMCP("multiap-tools")
@@ -61,6 +64,55 @@ def _full_state() -> dict:
 
 def _lower_power_map(powers: dict) -> dict:
     return {str(k).lower(): float(v) for k, v in (powers or {}).items()}
+
+
+def _current_proposal() -> dict:
+    raw = os.environ.get("MULTIAP_CURRENT_PROPOSAL", "")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _edca_from_proposal(proposal: dict | None) -> dict:
+    if not proposal:
+        return {}
+    out: dict = {}
+    for ap_id, params in proposal.items():
+        if isinstance(params, dict) and any(k in params for k in ("CWmin", "CWmax", "AIFSN")):
+            out[str(ap_id).lower()] = {
+                k: params[k]
+                for k in ("CWmin", "CWmax", "AIFSN")
+                if k in params
+            }
+    return out
+
+
+def _powers_from_proposal(proposal: dict | None) -> dict:
+    if not proposal:
+        return {}
+    return {
+        str(ap_id).lower(): params["tx_power_dbm"]
+        for ap_id, params in proposal.items()
+        if isinstance(params, dict) and "tx_power_dbm" in params
+    }
+
+
+def _concurrent_group_from_proposal(proposal: dict | None) -> list[str]:
+    if not isinstance(proposal, dict):
+        return []
+    meta = proposal.get("_sr") or proposal.get("sr") or {}
+    if isinstance(meta, dict):
+        group = meta.get("concurrent_group") or meta.get("concurrent_aps")
+        if isinstance(group, list):
+            return [str(ap).lower() for ap in group]
+    group = proposal.get("concurrent_group")
+    if isinstance(group, list):
+        return [str(ap).lower() for ap in group]
+    return []
 
 
 def _guard(fn):
@@ -105,14 +157,28 @@ def select_sr_concurrent_groups(min_group_size: int = 2) -> dict:
 
 
 @mcp.tool()
-def evaluate_sr_candidate(proposed_powers: dict, concurrent_group: list[str] | None = None) -> dict:
+def evaluate_sr_candidate(
+    proposed_powers: dict | None = None,
+    concurrent_group: list[str] | None = None,
+) -> dict:
     """评估候选 Co-SR 功率方案是否满足 CCA / SINR / STA RSSI 三重约束，并返回代价指标。
     proposed_powers 形如 {"ap1": 7.0, "ap2": 7.0, "ap3": 8.0}（dBm）。
     concurrent_group 可选，如 ["ap1","ap3"] 表示只验算这组的部分并发。"""
     def _run() -> dict:
         state = _full_state()
-        proposed = _lower_power_map(proposed_powers)
-        group = [str(a).lower() for a in concurrent_group] if concurrent_group else None
+        proposal = _current_proposal()
+        proposed = _lower_power_map(proposed_powers or _powers_from_proposal(proposal))
+        if not proposed:
+            return {
+                "error": (
+                    "需要 proposed_powers 参数；投票阶段也可由编排器通过 "
+                    "MULTIAP_CURRENT_PROPOSAL 注入当前提案。"
+                )
+            }
+        group = (
+            [str(a).lower() for a in concurrent_group]
+            if concurrent_group else _concurrent_group_from_proposal(proposal)
+        )
         return _sr.evaluate_candidate_for_group(state, proposed, group)
     return _guard(_run)
 
@@ -126,21 +192,22 @@ def rank_sr_candidates(candidates: dict, objective: str = "balanced") -> dict:
 
 
 @mcp.tool()
-def validate_edca_proposal(proposed_edca: dict) -> dict:
+def validate_edca_proposal(proposed_edca: dict | None = None) -> dict:
     """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin）
     + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
     并评估拥塞匹配度。traffic_priority 不是 AP 固定身份；同优先级时不要强行制造梯度。
     proposed_edca 形如 {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。"""
     def _run() -> dict:
-        if not proposed_edca:
+        proposed = proposed_edca or _edca_from_proposal(_current_proposal())
+        if not proposed:
             return {"error": "需要 proposed_edca 参数，例如 "
                              '{"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}'}
         state = _full_state()
         result: dict = {}
-        for ap_id, params in proposed_edca.items():
+        for ap_id, params in proposed.items():
             valid, errors = _edca.validate(params)
             result[str(ap_id).lower()] = {"valid": valid, "errors": errors, **params}
-        result["effectiveness"] = _edca.evaluate_edca_effectiveness(state, proposed_edca)
+        result["effectiveness"] = _edca.evaluate_edca_effectiveness(state, proposed)
         return result
     return _guard(_run)
 
@@ -150,15 +217,48 @@ def validate_edca_proposal(proposed_edca: dict) -> dict:
 # ──────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def run_fast_negotiation(max_validation_retries: int = 3, max_turns: int = 30) -> dict:
+def run_fast_negotiation(
+    max_validation_retries: int = 3,
+    max_turns: int = 30,
+    observation_wait_seconds: float = 0.0,
+    executor_endpoints: dict | None = None,
+) -> dict:
     """阶段级快速协商：coordinator 调用一次，工具内部批量驱动 AP agents 完成广播、提案、投票、决策和验收。
     用于控制耗时，避免 coordinator 在每个 AP 发言前后都重新选择发言人。"""
     def _run() -> dict:
+        ap_state = _full_state()
+        endpoints = executor_endpoints
+        if endpoints is None and os.environ.get("MULTIAP_EXECUTOR_ENDPOINTS"):
+            try:
+                endpoints = json.loads(os.environ["MULTIAP_EXECUTOR_ENDPOINTS"])
+            except json.JSONDecodeError:
+                endpoints = None
+        wait_seconds = float(
+            observation_wait_seconds
+            or os.environ.get("MULTIAP_OBSERVATION_WAIT", "0")
+        )
+        logger = None
+        if os.environ.get("MULTIAP_SESSION_LOG") == "1":
+            from src.logger import SessionLogger
+            logger = SessionLogger(verbose=False)
+            logger.session_start(
+                model=os.environ.get("MULTIAP_MODEL", "openclaw"),
+                scene=os.environ.get("MULTIAP_SCENE", "openclaw"),
+                ap_state=ap_state,
+            )
         result = _orch.structured_relay(
             max_validation_retries=int(max_validation_retries),
             max_turns=int(max_turns),
+            logger=logger,
+            observation_state_getter=_full_state,
+            observation_wait_seconds=wait_seconds,
+            executor_endpoints=endpoints,
+            initial_state=ap_state,
         )
         result["transcript"] = _orch.session().transcript
+        if logger is not None:
+            result["log_path"] = str(logger.log_path)
+            result["state_trace_path"] = str(logger.state_trace_path)
         return result
     return _guard(_run)
 

@@ -130,14 +130,15 @@
 - [ ] 验收：joint 场景跑通一次端到端协商，输出 Validator 通过的合法决策。
 
 ### Stage 4 —— 两种 mock 复现 + 配套产物
-- [ ] `run_openclaw.py` 薄启动器：准备场景（Mock A 直接 POST 预设场景到状态服务器；Mock B 启动 `mock_feeder`）→ 拉起状态服务器/Dashboard/曲线 → `openclaw agent --agent coordinator` 触发。
-- [ ] `log_event` MCP 工具或解析 `openclaw agent --json`，复现 JSONL 日志事件与 Dashboard 流式展示。
-- [ ] 协商成功后把决策注入喂数器（Mock B 曲线体现改善）+ 下发执行。
-- [ ] 验收：`sr/edca/joint` 三场景在两种 mock 下均产出符合 2.1 预期路径、Validator 通过的决策；与现 Python 实现对照「结构与约束等价」。
+- [x] `run_openclaw.py` 薄启动器：准备场景（Mock A 单帧/Mock B `mock_feeder`）→ 拉起状态服务器/Dashboard/曲线 → `openclaw agent --agent coordinator` 触发；同时保留 `--direct-relay` 调试入口。
+- [x] `run_fast_negotiation` 接入 `SessionLogger` JSONL、阶段/发言/投票/决策/验证事件；`--direct-relay` 可实时推送 Dashboard SSE。coordinator 子进程路径会写 JSONL，受进程隔离限制暂不提供 token 级 SSE。
+- [x] 协商成功后支持执行端点下发、EDCA 指数转换、观测周期二次 Validator；Mock B 继续通过 `MockTelemetryFeeder.apply_decision()` 展示曲线改善。
+- [x] 确定性迁移验收：新增 `tests/test_openclaw_migration.py`，在不依赖真实 LLM/OpenClaw 二进制的情况下模拟 AP 发言，覆盖 `noop/sr/edca/joint`、当前提案注入、MCP 提案回填和 Validator 通过。
+- [ ] 真实 OpenClaw 冒烟：OpenClaw CLI 已安装并完成 `multiap` profile/MCP 校验；`edca` 真实链路已确认 coordinator 调用 `multiap-tools__run_fast_negotiation`，AP 完成广播/提案/投票/最终 JSON。仍需完整跑完 `sr/edca/joint` 三场景收敛。
 
 ### Stage 5 —— PPIO 模型 / 鲁棒性 / 文档 / 测试
-- [ ] 增加 PPIO（`qwen:80b`）为 openai-compatible provider，可切换模型。
-- [ ] 协议遵从率加固（coordinator 重读进度、工具返回强制下一步提示、终止计数器）。
+- [x] PPIO（`qwen:80b` / `qwen80binstruct`）与 ollama fallback 已由 `openclaw/setup.sh` 写入隔离 profile；`run_openclaw.py` 默认不再强制 PPIO，必要时可用 `--require-qwen80b` 验证。
+- [x] 协议遵从率加固：`structured_relay` 补齐 NOOP、提案注入、Validator 预检/观测终检、最大轮次/最大重试终止；MCP 工具支持从 `MULTIAP_CURRENT_PROPOSAL` 回填投票提案。
 - [ ] 更新 `README.md` / `docs/` 描述纯 OpenClaw 架构；调整或重写 `tests/`（现有测试假设旧 Python 路径）。
 - [ ] 决定 `src/orchestrator.py`、`src/agent.py` 的去留（迁移验收通过后退役或标注为对照基线）。
 
@@ -185,7 +186,10 @@ python3 state_server/server.py --allow-mock &
 OLLAMA_API_KEY=ollama-local openclaw --profile multiap agent --local --agent ap1 --thinking off -m 'hi' --json
 
 # （Stage 4 后）一键跑某场景
-python3 run_openclaw.py --mock --scene joint
+python3 run_openclaw.py --scene joint --exit-after-run
+
+# 确定性短验收（不等待真实多 AP LLM 长链路）
+.venv/bin/python -m unittest discover -s tests
 ```
 
 相关源码：编排参照基线 `src/orchestrator.py`；工具实现 `src/tools/{sr,edca}.py`；验收器 `src/validator.py`；画像 `src/profile.py`；两种 mock `run.py`(MOCK_SCENE_*) 与 `state_server/mock_feeder.py`。

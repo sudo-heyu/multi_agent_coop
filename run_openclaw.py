@@ -11,6 +11,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -19,20 +20,55 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "openclaw" / "mcp"))
 
-import requests
-
-from run import MOCK_SCENES, start_mock_server
+from openclaw.scenes import (
+    DEFAULT_AP_CONFIG,
+    MOCK_SCENES,
+    _parse_executor_endpoints,
+    start_academic_plot,
+    start_dashboard,
+    start_mock_server,
+)
+from src.logger import SessionLogger
+from src.console_style import (
+    format_ap_name, strip_md, divider, section, status_label,
+    status_ok, status_fail, dim, tool_prefix, tool_name,
+)
+from openclaw.mcp.tool_console import _format_tool_console
 from state_server.mock_feeder import MockTelemetryFeeder
 import orchestration as orch
 
 
-OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", str(Path.home() / ".openclaw" / "bin" / "openclaw"))
+OPENCLAW_BIN = (
+    os.environ.get("OPENCLAW_BIN")
+    or shutil.which("openclaw")
+    or str(Path.home() / ".openclaw" / "bin" / "openclaw")
+)
 OPENCLAW_PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
+
+# 阶段 key → 中文标签（structured_relay 的 emit 只传 phase key）
+_PHASE_LABEL = {
+    "broadcast": "广播",
+    "propose": "提案",
+    "vote": "投票",
+    "decide": "最终决策",
+}
 
 
 def _print_event(phase, who, reply):
-    print(f"\n{'═'*70}\n[{phase}] {who.upper()}")
-    print(reply.strip())
+    print(divider())
+    print(f"{section(_PHASE_LABEL.get(phase, phase))} {status_label(who.upper())}")
+    print(f"\n{format_ap_name(who.upper())}:")
+    print(strip_md(reply).strip())
+
+
+def _print_tool(name, args, result, dur_ms):
+    """工具调用行回调：复用 orchestrator 的富摘要 formatter，失败则回退一行。"""
+    result_dict = result if isinstance(result, dict) else ({"_text": result} if result else {})
+    try:
+        line = _format_tool_console(name, args, result_dict, dur_ms)
+    except Exception:
+        line = f"{tool_prefix()} {tool_name(name)} → {status_fail('结果解析失败')}"
+    print(line, flush=True)
 
 
 def main():
@@ -43,62 +79,165 @@ def main():
     ap.add_argument("--no-feeder", action="store_true", help="不启动曲线喂数器")
     ap.add_argument("--direct-relay", action="store_true",
                     help="调试用：绕过 coordinator，直接运行阶段接力")
+    ap.add_argument("--observation-wait", type=float, default=0.0,
+                    help="最终 Validator 读取观测状态前等待秒数")
+    ap.add_argument("--ap-endpoints", default="",
+                    help="协商成功后推送决策的执行服务地址，格式 ap1=host:port,ap2=...")
+    ap.add_argument("--ap-config", default="",
+                    help="从 JSON 文件读取执行服务地址；默认自动读取 ap_endpoints.json")
+    ap.add_argument("--no-dashboard", action="store_true",
+                    help="不启动可视化 Dashboard")
+    ap.add_argument("--dashboard-port", type=int, default=5050)
+    ap.add_argument("--no-academic-plot", action="store_true",
+                    help="不弹出 Matplotlib 学术曲线窗口")
+    ap.add_argument("--plot-window", type=float, default=25.0)
+    ap.add_argument("--plot-interval", type=float, default=1.0)
+    ap.add_argument("--require-qwen80b", action="store_true",
+                    help="强制要求 multiap profile 默认模型为 qwen80binstruct")
+    ap.add_argument("--exit-after-run", action="store_true",
+                    help="协商结束后不保持 mock 曲线展示，直接退出")
     args = ap.parse_args()
+
+    os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
+    os.environ["no_proxy"] = os.environ["NO_PROXY"]
 
     scene = MOCK_SCENES[args.scene]
     print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
 
+    executor_endpoints = _load_executor_endpoints(args.ap_config, args.ap_endpoints)
+    if executor_endpoints:
+        print(f"执行推送端点：{executor_endpoints}")
+    else:
+        print("执行推送：未配置（协商结果仅输出到控制台）")
+
     feeder = None
+    plot_proc = None
+    logger = None
     ready, proc = start_mock_server(args.server)
     if not ready:
         print("[错误] 状态服务器未就绪。请先 `python3 state_server/server.py --allow-mock`。")
         sys.exit(1)
     if not args.no_feeder:
-        feeder = MockTelemetryFeeder(args.server, scene, interval=1.0)
+        feeder = MockTelemetryFeeder(args.server, scene, interval=args.plot_interval)
         feeder.start()
     else:
-        # 不喂曲线也要保证状态可读：单次写入场景
-        MockTelemetryFeeder(args.server, scene, interval=1.0).start()
+        # 不持续喂曲线时也推一帧，确保状态服务器可读。
+        single = MockTelemetryFeeder(args.server, scene, interval=args.plot_interval)
+        single.start()
+        time.sleep(0.2)
+        single.stop()
     time.sleep(2.0)  # 等首批遥测落库
+
+    push_live = None
+    if not args.no_academic_plot:
+        plot_proc = start_academic_plot(
+            state_server=args.server,
+            window_seconds=args.plot_window,
+            interval_seconds=args.plot_interval,
+        )
+    if not args.no_dashboard:
+        push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
 
     orch.STATE_SERVER = args.server
     t0 = time.time()
     if args.direct_relay:
-        result = orch.structured_relay(on_event=_print_event)
+        logger = SessionLogger(verbose=False, event_sink=push_live)
+        logger.session_start(model="openclaw-direct", scene=args.scene, ap_state=scene)
+        result = orch.structured_relay(
+            max_turns=args.max_steps,
+            on_event=_print_event,
+            on_tool=_print_tool,
+            logger=logger,
+            observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
+            observation_wait_seconds=args.observation_wait,
+            executor_endpoints=executor_endpoints,
+        )
     else:
-        _require_qwen80b_config()
-        result = _run_via_coordinator(args.max_steps)
+        _require_openclaw_config(require_qwen80b=args.require_qwen80b)
+        result = _run_via_coordinator(
+            args.max_steps,
+            scene=args.scene,
+            server=args.server,
+            observation_wait=args.observation_wait,
+            executor_endpoints=executor_endpoints,
+        )
     dur = time.time() - t0
 
-    print(f"\n{'━'*70}\n[结果] outcome={result['outcome']} turns={result['transcript_turns']} 用时 {dur:.0f}s")
-    print(f"[策略] {result['strategy']}")
-    print(f"[最终决策] {result['decision']}")
+    print(divider())
+    outcome = result['outcome']
+    outcome_txt = status_ok(outcome) if outcome == "success" else status_fail(outcome)
+    print(f"{section('结果')} outcome={outcome_txt} turns={result['transcript_turns']} 用时 {dur:.0f}s")
+    print(f"{section('策略')} {result['strategy']}")
+    print(f"{section('最终决策')} {result['decision']}")
+    if result.get("push_results"):
+        print(f"{section('Executor')} {result['push_results']}")
+    if result.get("log_path"):
+        print(f"{dim('[日志]')} {result['log_path']}")
     v = result["validation"]
     if v:
-        print(f"[Validator] {'✅ 通过' if v['approved'] else '❌ 未通过'} — {v['summary']}")
+        flag = status_ok("通过") if v["approved"] else status_fail("未通过")
+        print(f"{status_label('Validator')} {flag} — {v['summary']}")
     else:
-        print("[Validator] 无可验收决策（协商未收敛或未解析出决策 JSON）")
+        print(f"{status_label('Validator')} {dim('无可验收决策（协商未收敛或未解析出决策 JSON）')}")
 
     if feeder is not None and result["decision"]:
         feeder.apply_decision(result["decision"])
-        print("[Mock] 已将决策注入遥测，曲线将体现协商后改善。Ctrl-C 退出。")
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
+        if not args.exit_after_run:
+            print("[Mock] 已将决策注入遥测，曲线将体现协商后改善。Ctrl-C 退出。")
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                pass
     if feeder is not None:
         feeder.stop()
+    if plot_proc is not None:
+        plot_proc.terminate()
+    if proc is not None:
+        proc.terminate()
 
 
-def _run_via_coordinator(max_steps: int) -> dict:
+def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
+    config_path = Path(config_arg) if config_arg else DEFAULT_AP_CONFIG
+    if config_arg or (not endpoints_arg and config_path.exists()):
+        if not config_path.exists():
+            print(f"[错误] --ap-config 文件不存在: {config_path}")
+            sys.exit(1)
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    if endpoints_arg:
+        try:
+            return _parse_executor_endpoints(endpoints_arg)
+        except argparse.ArgumentTypeError as exc:
+            print(f"[错误] {exc}")
+            sys.exit(1)
+    return None
+
+
+def _run_via_coordinator(
+    max_steps: int,
+    *,
+    scene: str,
+    server: str,
+    observation_wait: float,
+    executor_endpoints: dict[str, str] | None,
+) -> dict:
     env = dict(os.environ)
     env.setdefault("OLLAMA_API_KEY", "ollama-local")
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
     env["no_proxy"] = env["NO_PROXY"]
+    env["MULTIAP_STATE_SERVER"] = server
+    env["MULTIAP_SESSION_LOG"] = "1"
+    env["MULTIAP_SCENE"] = scene
+    env["MULTIAP_MODEL"] = env.get("MULTIAP_MODEL", "openclaw")
+    env["MULTIAP_OBSERVATION_WAIT"] = str(observation_wait)
+    if executor_endpoints:
+        env["MULTIAP_EXECUTOR_ENDPOINTS"] = json.dumps(executor_endpoints, ensure_ascii=False)
+    session_key = f"agent:coordinator:multiap-{scene}-{int(time.time())}"
     message = (
-        "开始一次多 AP 协商。为控制时间，请直接调用 run_fast_negotiation，"
-        f"参数 max_validation_retries=3, max_turns={max_steps}。"
+        "开始一次多 AP 协商。为控制时间，只调用 MCP 工具 "
+        "multiap-tools__run_fast_negotiation；不要调用 exec/read，也不要检查环境。"
+        f"参数 max_validation_retries=3, max_turns={max_steps}, "
+        f"observation_wait_seconds={observation_wait:g}。"
         "工具返回后只汇总 outcome、strategy、validation、decision，不要逐句选择发言人。"
         "最后必须附一个 json 代码块，原样包含工具返回结果，且保留 outcome、strategy、decision、"
         "validation、transcript_turns 字段。"
@@ -106,7 +245,8 @@ def _run_via_coordinator(max_steps: int) -> dict:
     print("[OpenClaw] 启动 coordinator，调用 run_fast_negotiation；AP 对话会在工具内部批量执行。", flush=True)
     proc = subprocess.Popen(
         [OPENCLAW_BIN, "--profile", OPENCLAW_PROFILE, "agent", "--local",
-         "--agent", "coordinator", "--thinking", "off", "--message", message, "--json"],
+         "--agent", "coordinator", "--session-key", session_key,
+         "--thinking", "off", "--message", message, "--json"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
     started = time.time()
@@ -142,7 +282,11 @@ def _merge_no_proxy(current: str | None) -> str:
     return ",".join(values)
 
 
-def _require_qwen80b_config() -> None:
+def _require_openclaw_config(require_qwen80b: bool = False) -> None:
+    if not Path(OPENCLAW_BIN).exists():
+        print(f"[错误] 未找到 OpenClaw 可执行文件：{OPENCLAW_BIN}")
+        print("请先安装 OpenClaw，或通过 OPENCLAW_BIN 指定路径。")
+        sys.exit(1)
     cfg = Path.home() / f".openclaw-{OPENCLAW_PROFILE}" / "openclaw.json"
     try:
         data = json.loads(cfg.read_text(encoding="utf-8"))
@@ -150,6 +294,9 @@ def _require_qwen80b_config() -> None:
         print(f"[错误] 未找到 OpenClaw profile 配置：{cfg}")
         print("请先运行：bash openclaw/setup.sh")
         sys.exit(1)
+
+    if not require_qwen80b:
+        return
 
     defaults = data.get("agents", {}).get("defaults", {})
     primary = (defaults.get("model") or {}).get("primary")

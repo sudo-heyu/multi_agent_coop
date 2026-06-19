@@ -8,7 +8,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${MULTIAP_PROFILE:-multiap}"
-OPENCLAW="${OPENCLAW_BIN:-$HOME/.openclaw/bin/openclaw}"
+OPENCLAW="${OPENCLAW_BIN:-$(command -v openclaw || true)}"
+OPENCLAW="${OPENCLAW:-$HOME/.openclaw/bin/openclaw}"
 PY="${MULTIAP_PY:-$(command -v python3)}"
 STATE_SERVER="${MULTIAP_STATE_SERVER:-http://localhost:5001}"
 OLLAMA_MODEL="${MULTIAP_MODEL:-qwen3:14b}"
@@ -21,6 +22,11 @@ PPIO_MODEL_NAME="${MULTIAP_PPIO_MODEL_NAME:-qwen80binstruct}"
 AGENTS=(coordinator ap1 ap2 ap3)   # coordinator 只做阶段级触发，AP 负责自主协商内容
 
 echo "[setup] repo=$REPO profile=$PROFILE python=$PY model=ollama/$OLLAMA_MODEL"
+
+if ! "$PY" -c 'import mcp.server.fastmcp' >/dev/null 2>&1; then
+  echo "[setup] ERROR: Python 缺少 mcp 包。请先运行：$PY -m pip install -r $REPO/requirements.txt" >&2
+  exit 1
+fi
 
 # 1) 确保每个 agent 的 workspace 目录存在（内容由各 workspace 的 *.md 提供）
 for a in "${AGENTS[@]}"; do
@@ -67,6 +73,21 @@ if ppio_key:
         "alias": ppio_model_alias,
         "params": {"temperature": 0.2},
     }
+# 仅 coordinator 可调用的编排/验收/下发工具；AP agent 一律禁用，避免子 agent
+# 误触发整轮协商或越权下发（MCP 工具运行时名为 <server>__<tool>）。
+coordinator_only = [
+    "multiap-tools__run_fast_negotiation",
+    "multiap-tools__validate_decision",
+    "multiap-tools__push_decision",
+]
+
+def _agent_entry(a):
+    entry = {"id": a, "default": (a == "coordinator"),
+             "workspace": f"{repo}/openclaw/workspaces/{a}"}
+    if a != "coordinator":
+        entry["tools"] = {"deny": coordinator_only}
+    return entry
+
 conf = {
     "meta": {"lastTouchedVersion": "multiap-setup"},
     "gateway": {"mode": "local", "bind": "loopback",
@@ -77,8 +98,7 @@ conf = {
                      "skipBootstrap": True,
                      "models": default_models,
                      "model": {"primary": model_ref}},
-        "list": [{"id": a, "default": (a == "coordinator"),
-                  "workspace": f"{repo}/openclaw/workspaces/{a}"} for a in agents],
+        "list": [_agent_entry(a) for a in agents],
     },
 }
 open(cfg, "w", encoding="utf-8").write(json.dumps(conf, ensure_ascii=False, indent=2))
@@ -87,7 +107,7 @@ PYEOF
 
 # 3) 注册 MCP 工具服务
 "$OPENCLAW" --profile "$PROFILE" mcp set multiap-tools \
-  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\",\"NO_PROXY\":\"localhost,127.0.0.1,::1\",\"no_proxy\":\"localhost,127.0.0.1,::1\"}}" >/dev/null
+  "{\"command\":\"$PY\",\"args\":[\"$REPO/openclaw/mcp/multiap_mcp.py\"],\"requestTimeoutMs\":600000,\"connectionTimeoutMs\":30000,\"env\":{\"MULTIAP_STATE_SERVER\":\"$STATE_SERVER\",\"MULTIAP_PROFILE\":\"$PROFILE\",\"OPENCLAW_BIN\":\"$OPENCLAW\",\"NO_PROXY\":\"localhost,127.0.0.1,::1\",\"no_proxy\":\"localhost,127.0.0.1,::1\"}}" >/dev/null
 
 # 4) 校验
 "$OPENCLAW" --profile "$PROFILE" config validate

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime
 from typing import Any
 
@@ -110,7 +111,8 @@ def fetch_history(server: str, timeout: float = 2.0) -> dict[str, list[dict[str,
 
 
 def _require_matplotlib():
-    if not os.environ.get("DISPLAY") and os.name != "nt":
+    # 仅 Linux 依赖 X11 的 DISPLAY；macOS 用原生 macosx 后端，Windows 用 win32。
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
         raise SystemExit(
             "No desktop display is available: DISPLAY is not set. "
             "A MATLAB-style Matplotlib figure requires a GUI session. "
@@ -119,7 +121,7 @@ def _require_matplotlib():
 
     try:
         import matplotlib
-        if not os.environ.get("MPLBACKEND"):
+        if not os.environ.get("MPLBACKEND") and sys.platform.startswith("linux"):
             matplotlib.use("TkAgg")
         import matplotlib.pyplot as plt
         from matplotlib.widgets import RadioButtons

@@ -6,7 +6,7 @@
 
 收到“开始协商”“运行场景”“run negotiation”等请求后，直接调用：
 
-`run_fast_negotiation`
+`multiap-tools__run_fast_negotiation`
 
 该工具会在内部按阶段批量驱动 AP agents：
 
@@ -18,6 +18,8 @@
 这是一种**阶段级 coordinator**：coordinator 只触发一次快速协商并汇总结果，AP 的发言内容和参数判断仍由 AP agents 完成。
 
 ## 输出要求
+
+不要调用 `exec` / `read` / `process` 去检查环境或文件；该验收入口已经完成环境检查，收到请求后直接调用上述 MCP 工具。
 
 工具返回后，按以下结构简洁汇总：
 

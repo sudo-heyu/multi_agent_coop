@@ -16,20 +16,26 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from collections.abc import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.orchestrator import (
+from openclaw.mcp.proposal_utils import (
     _infer_strategy_from_proposal,
     _extract_proposal,
     _extract_json,
     _with_sr_concurrent_group,
 )
+from src.tools import sr as _sr
+from src.tools.edca import encode_params_edca
 from src.profile import agent_view, apply_profile
 from src.state_client import get_all_states
 from src.validator import validate_decision as _validate_decision
@@ -37,8 +43,16 @@ from src.validator import validate_decision as _validate_decision
 AP_IDS = ["ap1", "ap2", "ap3"]
 STATE_SERVER = os.environ.get("MULTIAP_STATE_SERVER", "http://localhost:5001")
 PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
-OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", str(Path.home() / ".openclaw" / "bin" / "openclaw"))
+OPENCLAW_BIN = (
+    os.environ.get("OPENCLAW_BIN")
+    or shutil.which("openclaw")
+    or str(Path.home() / ".openclaw" / "bin" / "openclaw")
+)
 DRIVE_RETRIES = int(os.environ.get("MULTIAP_DRIVE_RETRIES", "3"))
+
+# 工具调用展示回调（direct-relay 路径用）。structured_relay 进入时设置、退出时清理；
+# 其余路径（relay 总线、run_fast_negotiation）保持 None，drive_ap 自动跳过解析。
+_tool_callback: Callable | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -69,10 +83,10 @@ def session() -> Session:
     return _SESSION
 
 
-def reset_session() -> dict:
+def reset_session(ap_state: dict | None = None) -> dict:
     global _SESSION
     _SESSION = Session()
-    _SESSION.ap_state = apply_profile(get_all_states(STATE_SERVER))
+    _SESSION.ap_state = apply_profile(ap_state if ap_state is not None else get_all_states(STATE_SERVER))
     return {"ok": True, "ap_states": agent_view(_SESSION.ap_state),
             "ap_ids": AP_IDS, "next": "对 ap1→ap2→ap3 依次调用 broadcast"}
 
@@ -81,7 +95,12 @@ def reset_session() -> dict:
 # 驱动子 agent
 # ──────────────────────────────────────────────────────────────────────
 
-def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
+def drive_ap(
+    ap_id: str,
+    instruction: str,
+    thinking: str = "off",
+    extra_env: dict[str, str] | None = None,
+) -> str:
     """让某个 AP agent 跑一个回合，返回其发言文本。底层 openclaw agent --local。
 
     每次调用使用全新的随机 session-id：本架构每次发言都是无状态的（完整对话记录
@@ -97,12 +116,16 @@ def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
     env.setdefault("OLLAMA_API_KEY", "ollama-local")
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
     env["no_proxy"] = env["NO_PROXY"]
+    if extra_env:
+        env.update(extra_env)
 
     # 云端/本地模型偶发「incomplete terminal response」（payloads=0），多为瞬时；重试。
     last_err = ""
+    sid = None
     for attempt in range(DRIVE_RETRIES):
+        sid = f"{ap}-{uuid.uuid4().hex[:12]}"
         cmd = [OPENCLAW_BIN, "--profile", PROFILE, "agent", "--local",
-               "--agent", ap, "--session-id", f"{ap}-{uuid.uuid4().hex[:12]}",
+               "--agent", ap, "--session-id", sid,
                "--thinking", thinking, "--message", msg, "--json"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         if proc.returncode == 0:
@@ -111,6 +134,7 @@ def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
             except json.JSONDecodeError:
                 reply = proc.stdout.strip()
             if reply.strip():
+                _emit_tool_calls(ap, sid)
                 return reply
             last_err = "空回复(payloads=0)"
         else:
@@ -118,6 +142,30 @@ def drive_ap(ap_id: str, instruction: str, thinking: str = "off") -> str:
         if attempt < DRIVE_RETRIES - 1:
             __import__("time").sleep(2.0)
     raise RuntimeError(f"drive_ap({ap}) 连续 {DRIVE_RETRIES} 次失败: {last_err}")
+
+
+def _emit_tool_calls(ap_id: str, session_id: str) -> None:
+    """若设置了 _tool_callback，从本次 AP 会话的 trajectory 提取工具调用并逐条回调。
+
+    direct-relay 非流式：工具行无法穿插在发言中间，故由调用方在发言前成块打印。
+    任何解析/显示异常都被吞掉——工具展示永不打断协商。"""
+    if _tool_callback is None or not session_id:
+        return
+    try:
+        tpath = _trajectory_path_for(ap_id, session_id)
+        if not tpath or not tpath.exists():
+            return
+        tools = None
+        for _ in range(3):  # 防 trajectory flush 竞态
+            try:
+                tools = _parse_trajectory_tools(tpath)
+                break
+            except (json.JSONDecodeError, OSError):
+                time.sleep(0.3)
+        for rec in tools or []:
+            _tool_callback(rec["name"], rec["args"], rec["result"], rec["dur_ms"])
+    except Exception:
+        pass
 
 
 def _merge_no_proxy(current: str | None) -> str:
@@ -147,6 +195,122 @@ def _reply_text(data: dict) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# trajectory 工具调用提取（direct-relay 展示用）
+# ──────────────────────────────────────────────────────────────────────
+
+def _openclaw_agents_dir() -> Path:
+    """openclaw profile 的 agents 目录。
+
+    默认 $HOME/.openclaw-{PROFILE}/agents（与 openclaw/setup.sh 一致）；
+    若未来 openclaw 支持 OPENCLAW_HOME 环境变量，应在此优先读取。"""
+    home = os.environ.get("OPENCLAW_HOME") or str(Path.home())
+    return Path(home) / f".openclaw-{PROFILE}" / "agents"
+
+
+def _trajectory_path_for(ap_id: str, session_id: str) -> Path | None:
+    """根据 session-id 推导本次会话的 trajectory 文件路径。
+
+    优先读 <sid>.trajectory-path.json 指针的 runtimeFile（权威，能跨 openclaw
+    内部 session-id 重写）；缺失则回退构造路径 <sid>.trajectory.jsonl。"""
+    sessions = _openclaw_agents_dir() / ap_id.lower() / "sessions"
+    pointer = sessions / f"{session_id}.trajectory-path.json"
+    try:
+        if pointer.exists():
+            data = json.loads(pointer.read_text(encoding="utf-8"))
+            rt = data.get("runtimeFile")
+            if rt:
+                return Path(rt)
+    except Exception:
+        pass
+    return sessions / f"{session_id}.trajectory.jsonl"
+
+
+def _parse_trajectory_tools(path: Path) -> list[dict]:
+    """从 trajectory jsonl 提取本次会话的工具调用记录（按调用顺序）。
+
+    取最后一条 model.completed 的 messagesSnapshot（单回合会话即完整记录）。
+    toolCall/ toolResult 通过 toolCallId 关联。参数可能含 {truncated:true,...}
+    标记（trajectory-depth-limit），原样透传给 formatter 处理。"""
+    snapshot = None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "model.completed":
+                    snap = obj.get("data", {}).get("messagesSnapshot")
+                    if isinstance(snap, list):
+                        snapshot = snap
+    except OSError:
+        return []
+    if not snapshot:
+        return []
+
+    def _is_trunc(v: object) -> bool:
+        return isinstance(v, dict) and v.get("truncated") is True
+
+    def _any_trunc(obj) -> bool:
+        if _is_trunc(obj):
+            return True
+        if isinstance(obj, dict):
+            return any(_any_trunc(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(_any_trunc(v) for v in obj)
+        return False
+
+    calls: list[tuple] = []  # (id, name, arguments)
+    results: dict[str, tuple] = {}  # toolCallId -> (isError, text)
+    for msg in snapshot:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        role = msg.get("role") or msg.get("type")
+        if role == "assistant" or role == "toolCall":
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "toolCall":
+                    calls.append((c.get("id"), c.get("name"), c.get("arguments") or {}))
+        elif role == "toolResult":
+            tid = msg.get("toolCallId")
+            text = "".join(
+                cc.get("text", "") for cc in content
+                if isinstance(cc, dict) and isinstance(cc.get("text"), str)
+            )
+            results[tid] = (bool(msg.get("isError")), text)
+
+    records: list[dict] = []
+    for cid, name, args in calls:
+        is_error, text = results.get(cid, (False, ""))
+        result = None
+        if text:
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, (dict, list)):
+                    result = parsed
+                else:
+                    result = text
+            except json.JSONDecodeError:
+                result = text
+        stripped = (name or "").removeprefix("multiap-tools__")
+        records.append({
+            "name": stripped,
+            "raw_name": name,
+            "args": args if isinstance(args, dict) else {},
+            "args_truncated": _any_trunc(args),
+            "result": result,
+            "is_error": is_error,
+            "dur_ms": None,  # trajectory 无单工具耗时
+        })
+    return records
+
+
+# ──────────────────────────────────────────────────────────────────────
 # 表决解析
 # ──────────────────────────────────────────────────────────────────────
 
@@ -170,6 +334,25 @@ def resolve_strategy(proposal: dict | None) -> str | None:
     if not proposal:
         return None
     return _infer_strategy_from_proposal(proposal)
+
+
+def determine_strategy(ap_state: dict) -> str:
+    """与 Python orchestrator 的确定性触发判断保持一致。"""
+    sr_triggered = bool(_sr.analyze_interference(ap_state).get("co_sr_triggered"))
+    priorities = {
+        state.get("traffic_priority", "medium")
+        for state in ap_state.values()
+        if isinstance(state, dict)
+    }
+    edca_triggered = len(priorities) > 1
+
+    if sr_triggered and edca_triggered:
+        return "joint"
+    if sr_triggered:
+        return "co_sr"
+    if edca_triggered:
+        return "co_edca"
+    return "noop"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -261,6 +444,23 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
     )
 
 
+def repair_counter_instruction() -> str:
+    """反对者回复中未解析出反提案 JSON 时的「修复轮」指令（移植自
+    orchestrator._phase_counter_propose）。"""
+    return (
+        "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
+        "请回顾上方完整协商历史，综合所有 AP 此前提出的约束和顾虑，"
+        "给出一个能兼顾所有人需求的反提案。\n"
+        "你可以根据实时证据选择协商路径：Co-SR 使用 tx_power_dbm 字段，"
+        "Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，联合路径两类字段均出现；"
+        "证据不足时不要为了形成反提案强行改变无关参数。\n"
+        "如果选择 Co-SR 或联合路径，第一步必须真实调用 get_latest_ap_states、"
+        "analyze_sr_interference、select_sr_concurrent_groups，先判断可用并发组，"
+        "并在 JSON 中写入 _sr.concurrent_group。\n"
+        "请只输出一个 ```json 代码块，JSON 顶层键必须是 ap1、ap2、ap3。不要写解释。"
+    )
+
+
 def final_instruction(proposer_id: str, proposal: dict) -> str:
     proposal_json = json.dumps(proposal, ensure_ascii=False, indent=2)
     return (
@@ -301,8 +501,13 @@ def run_vote(voter_id: str) -> dict:
     s = _SESSION
     if s.proposal is None or s.proposer is None:
         return {"error": "当前无有效提案，请先 run_propose"}
+    context_env = {
+        "MULTIAP_CURRENT_PROPOSAL": json.dumps(s.proposal, ensure_ascii=False),
+        "MULTIAP_CURRENT_STRATEGY": s.strategy or "",
+    }
     reply = drive_ap(voter_id, vote_instruction(
-        voter_id, s.proposer, s.strategy or "co_edca", s.proposal, s.proposal_num))
+        voter_id, s.proposer, s.strategy or "co_edca", s.proposal, s.proposal_num),
+        extra_env=context_env)
     s.record(voter_id.upper(), reply)
     vote = read_vote(reply)
     counter = None
@@ -312,6 +517,17 @@ def run_vote(voter_id: str) -> dict:
             counter = _with_sr_concurrent_group(counter, s.ap_state)
     return {"voter": voter_id, "reply": reply, "vote": vote,
             "counter_proposal": counter}
+
+
+def run_repair_counter(voter_id: str) -> dict:
+    """修复轮：反对者未给出可解析反提案时，再驱动它一次只输出纯 JSON 反提案。
+    返回 {"reply", "counter_proposal"}；解析失败则 counter_proposal=None。"""
+    reply = drive_ap(voter_id, repair_counter_instruction())
+    _SESSION.record(voter_id.upper(), reply)
+    counter = _extract_proposal(reply)
+    if counter is not None:
+        counter = _with_sr_concurrent_group(counter, _SESSION.ap_state)
+    return {"voter": voter_id, "reply": reply, "counter_proposal": counter}
 
 
 def promote_counter(new_proposer: str, counter_proposal: dict) -> dict:
@@ -442,27 +658,181 @@ def relay(max_steps: int = 30, first: str = "ap1", on_turn=None) -> dict:
 import itertools as _it
 
 
+def _log_agent_reply(logger, ap_id: str, phase: int, role: str,
+                     instruction: str, reply: str) -> None:
+    if logger is None:
+        return
+    logger.agent_speak_start(ap_id, phase, role)
+    logger.push_chunk(ap_id, reply)
+    logger.agent_speak_chunk(ap_id, reply)
+    logger.agent_speak(
+        agent=ap_id,
+        phase=phase,
+        role=role,
+        instruction=instruction,
+        response=reply,
+        duration_ms=0.0,
+    )
+
+
+def _log_phase(logger, phase: int, label: str) -> None:
+    if logger is not None:
+        logger.phase_start(phase, label)
+
+
+def _push_decision(decision: dict, strategy: str,
+                   endpoints: dict[str, str] | None,
+                   session_id: str = "") -> dict[str, dict]:
+    if not endpoints:
+        return {}
+
+    def send(ap_id: str, url: str) -> tuple[str, bool, str, dict]:
+        params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
+        params = encode_params_edca(params)
+        payload = {
+            "session_id": session_id,
+            "strategy": strategy,
+            "ap_id": ap_id,
+            "params": params,
+        }
+        try:
+            import requests
+            resp = requests.post(f"{url.rstrip('/')}/apply", json=payload, timeout=8)
+            ok = resp.status_code == 200
+            try:
+                body = resp.json()
+                msg = body.get("details", body)
+            except Exception:
+                msg = resp.text
+            return ap_id, ok, str(msg), payload
+        except Exception as exc:  # noqa: BLE001
+            return ap_id, False, str(exc), payload
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(endpoints))) as pool:
+        futures = {
+            pool.submit(send, ap_id, url): (ap_id, url)
+            for ap_id, url in endpoints.items()
+        }
+        for future in as_completed(futures):
+            ap_id, url = futures[future]
+            got_ap, ok, msg, payload = future.result()
+            results[got_ap] = {
+                "ok": ok,
+                "url": url,
+                "payload": payload,
+                "response": msg,
+            }
+    return results
+
+
+def _collect_observed_state(
+    fallback_state: dict,
+    observation_state_getter: Callable[[], dict] | None,
+    observation_wait_seconds: float,
+    require_real_observation: bool = False,
+) -> tuple[dict, str | None, bool]:
+    if not require_real_observation or observation_state_getter is None:
+        return fallback_state, None, False
+
+    wait_seconds = max(0.0, observation_wait_seconds)
+    if wait_seconds:
+        time.sleep(wait_seconds)
+    try:
+        return apply_profile(observation_state_getter()), None, True
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"观测状态获取失败: {exc}", False
+
+
+def _finish(logger, outcome: str, rounds: int, started_at: float) -> None:
+    if logger is not None:
+        logger.session_end(
+            outcome,
+            rounds,
+            negotiation_duration_s=time.time() - started_at,
+        )
+
+
 def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
-                     on_event=None) -> dict:
+                     on_event=None,
+                     on_tool: Callable | None = None,
+                     logger=None,
+                     observation_state_getter: Callable[[], dict] | None = None,
+                     observation_wait_seconds: float = 0.0,
+                     executor_endpoints: dict[str, str] | None = None,
+                     initial_state: dict | None = None) -> dict:
+    """阶段级快速协商。on_tool：direct-relay 路径传入工具调用展示回调，
+    在 drive_ap 每次 AP 发言后从 trajectory 提取并回调；coordinator 路径
+    （run_fast_negotiation）不传，保持 None。"""
+    global _tool_callback
+    _tool_callback = on_tool
+    try:
+        return _structured_relay_impl(
+            max_validation_retries=max_validation_retries,
+            max_turns=max_turns,
+            on_event=on_event,
+            logger=logger,
+            observation_state_getter=observation_state_getter,
+            observation_wait_seconds=observation_wait_seconds,
+            executor_endpoints=executor_endpoints,
+            initial_state=initial_state,
+        )
+    finally:
+        _tool_callback = None
+
+
+def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
+                     on_event=None,
+                     logger=None,
+                     observation_state_getter: Callable[[], dict] | None = None,
+                     observation_wait_seconds: float = 0.0,
+                     executor_endpoints: dict[str, str] | None = None,
+                     initial_state: dict | None = None) -> dict:
     def emit(phase, who, reply):
         if on_event:
             on_event(phase, who, reply)
 
-    reset_session()
+    started_at = time.time()
+    reset_session(initial_state)
     s = _SESSION
 
     # 阶段一：广播（固定顺序 ap1→ap2→ap3）
+    _log_phase(logger, 1, "广播自身状态")
     for ap in AP_IDS:
-        emit("broadcast", ap, run_broadcast(ap)["reply"])
+        instruction = broadcast_instruction(ap)
+        result = run_broadcast(ap)
+        emit("broadcast", ap, result["reply"])
+        _log_agent_reply(logger, ap, 1, "broadcast", instruction, result["reply"])
+
+    strategy_hint = determine_strategy(s.ap_state)
+    if strategy_hint == "noop":
+        _log_phase(logger, 2, "NOOP：无需协商")
+        _finish(logger, "noop", 0, started_at)
+        return {
+            "outcome": "noop",
+            "decision": None,
+            "strategy": "noop",
+            "validation": None,
+            "push_results": {},
+            "observed_is_real": False,
+            "transcript_turns": len(s.transcript),
+        }
+
+    _log_phase(logger, 2, "协商触发，等待 AP1 自主选路")
 
     # 外层：Validator 未通过则从 ap1 重新提案
     for retry in range(max_validation_retries):
         proposer = "ap1"
+        _log_phase(logger, 3, f"{proposer.upper()} 发起提案（自主选路）")
+        propose_inst = propose_instruction(proposer)
         p = run_propose(proposer)
         emit("propose", proposer, p["reply"])
+        _log_agent_reply(logger, proposer, 3, "proposer", propose_inst, p["reply"])
         if not p["parsed"]:
+            _finish(logger, "proposal_parse_error", s.proposal_num, started_at)
             return {"outcome": "proposal_parse_error", "decision": None,
-                    "strategy": None, "validation": None, "transcript_turns": len(s.transcript)}
+                    "strategy": None, "validation": None, "push_results": {},
+                    "observed_is_real": False, "transcript_turns": len(s.transcript)}
 
         agree: set[str] = set()
         cycle = _it.cycle(AP_IDS)
@@ -473,22 +843,101 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
             voter = next(cycle)
             if voter == s.proposer:
                 continue
+            _log_phase(
+                logger,
+                4,
+                f"{voter.upper()} 投票（提案#{s.proposal_num}，提案方 {s.proposer.upper()}）",
+            )
+            vote_inst = vote_instruction(
+                voter, s.proposer, s.strategy or "co_edca", s.proposal, s.proposal_num)
             rv = run_vote(voter)
             emit("vote", voter, rv["reply"])
+            _log_agent_reply(logger, voter, 4, "voter", vote_inst, rv["reply"])
+            if logger is not None:
+                logger.vote(voter, s.proposal_num, rv["vote"], rv["reply"])
 
             if rv["vote"] in ("agree", "abstain"):
                 agree.add(voter)
                 non_proposers = {a for a in AP_IDS if a != s.proposer}
                 if agree >= non_proposers:
+                    if logger is not None:
+                        logger.round_result(
+                            s.proposal_num, True, len(agree), len(non_proposers)
+                        )
+                    _log_phase(logger, 5, "输出最终决策")
+                    final_inst = final_instruction(s.proposer, s.proposal)
                     fr = run_final()
                     emit("decide", s.proposer, fr["reply"])
+                    _log_agent_reply(
+                        logger, s.proposer, 5, "decision", final_inst, fr["reply"])
                     decision, strategy = fr["decision"], s.strategy
-                    val = (_validate_decision(s.ap_state, decision, strategy,
-                                              observed_state=s.ap_state, observed_is_real=False)
-                           if decision and strategy else None)
+                    if logger is not None:
+                        logger.final_decision(decision, fr["reply"])
+                        logger.record_decision_parameters(decision, strategy=strategy)
+
+                    precheck = (_validate_decision(
+                        s.ap_state, decision, strategy,
+                        observed_state=s.ap_state, observed_is_real=False)
+                        if decision and strategy else None)
+                    if logger is not None and precheck is not None:
+                        logger.validation_result(precheck)
+
+                    if precheck and precheck["approved"]:
+                        session_id = logger.session_id if logger is not None else ""
+                        push_results = _push_decision(
+                            decision, strategy or "", executor_endpoints, session_id)
+                        require_observation = bool(push_results) and all(
+                            item.get("ok") for item in push_results.values()
+                        )
+                        if logger is not None:
+                            for ap_id, item in push_results.items():
+                                logger.record_executor_apply(
+                                    ap_id,
+                                    ok=item["ok"],
+                                    url=item["url"],
+                                    payload=item["payload"],
+                                    response=item["response"],
+                                )
+                        observed, obs_error, obs_real = _collect_observed_state(
+                            s.ap_state,
+                            observation_state_getter,
+                            observation_wait_seconds,
+                            require_real_observation=require_observation,
+                        )
+                        val = _validate_decision(
+                            s.ap_state, decision, strategy,
+                            observed_state=observed, observed_is_real=obs_real)
+                        if obs_error:
+                            val["approved"] = False
+                            val["global_errors"].insert(0, obs_error)
+                            val["summary"] = f"验证失败（策略={strategy}）：{obs_error}"
+                        if logger is not None:
+                            logger.record_state_snapshot(
+                                "final_observed" if obs_real else "final_fallback",
+                                observed if observed else s.ap_state,
+                                source=(
+                                    "validator_observation"
+                                    if obs_real else "validator_fallback"
+                                ),
+                            )
+                            logger.validation_result(val)
+                        if val["approved"]:
+                            _finish(logger, "success", s.proposal_num, started_at)
+                            s.decision = decision
+                            return {"outcome": "success", "decision": decision,
+                                    "strategy": strategy, "validation": val,
+                                    "push_results": push_results,
+                                    "observed_is_real": obs_real,
+                                    "transcript_turns": len(s.transcript)}
+                    else:
+                        val = precheck
+
                     if val and val["approved"]:
+                        _finish(logger, "success", s.proposal_num, started_at)
                         return {"outcome": "success", "decision": decision,
                                 "strategy": strategy, "validation": val,
+                                "push_results": {},
+                                "observed_is_real": False,
                                 "transcript_turns": len(s.transcript)}
                     # 验收未过：写入对话记录，外层从 ap1 重提案
                     errs = "；".join((val or {}).get("global_errors") or []) if val else "无法解析决策"
@@ -496,15 +945,28 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
                     break
             else:  # reject
                 counter = rv["counter_proposal"]
+                if counter is None:
+                    # 修复轮：反对者未给出可解析反提案，再驱动一次让其补纯 JSON
+                    repair_inst = repair_counter_instruction()
+                    rep = run_repair_counter(voter)
+                    emit("propose", voter, rep["reply"])
+                    _log_agent_reply(
+                        logger, voter, 3, "counter_proposal_json_repair",
+                        repair_inst, rep["reply"])
+                    counter = rep["counter_proposal"]
                 if counter is not None:
                     promote_counter(voter, counter)
                     agree = set()  # 新提案方接管，重新计票（cycle 自然推进到 voter 之后）
-                # counter 解析失败则跳过本轮，继续轮转
+                # 修复后仍解析失败则跳过本轮，继续轮转
         else:
+            _finish(logger, "max_turns_exceeded", s.proposal_num, started_at)
             return {"outcome": "max_turns_exceeded", "decision": None,
-                    "strategy": s.strategy, "validation": None,
+                    "strategy": s.strategy, "validation": None, "push_results": {},
+                    "observed_is_real": False,
                     "transcript_turns": len(s.transcript)}
 
+    _finish(logger, "max_retries_exceeded", s.proposal_num, started_at)
     return {"outcome": "max_retries_exceeded", "decision": None,
-            "strategy": s.strategy, "validation": None,
+            "strategy": s.strategy, "validation": None, "push_results": {},
+            "observed_is_real": False,
             "transcript_turns": len(s.transcript)}
