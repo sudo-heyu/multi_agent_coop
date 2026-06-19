@@ -204,5 +204,5 @@ python state_server/server.py --allow-mock
 python state_server/reporter.py --mock --all
 
 # 终端 3：触发协商（从服务器拉取状态）
-python run.py
+python run_openclaw.py
 ```

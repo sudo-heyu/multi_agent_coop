@@ -197,7 +197,7 @@ python state_server/executor.py --ap-id ap2 --mock --port 5003 &
 python state_server/executor.py --ap-id ap3 --mock --port 5004 &
 
 # 终端 4
-python run.py --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
+python run_openclaw.py --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
 ```
 
 执行后查询结果：

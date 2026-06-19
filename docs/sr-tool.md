@@ -7,7 +7,7 @@
 ## 作用
 
 根据 AP 间 RSSI 感知干扰强度，连续求解满足三重约束的最优 TX Power，
-供 orchestrator 在第二阶段（提案）提供给 LLM。
+经 MCP 工具供 AP 在提案阶段调用。
 
 ---
 
@@ -252,7 +252,7 @@ result = rank_candidates(ap_states, candidates, objective="balanced")
 
 ### `compute_validation(ap_states, proposed_powers) → dict`
 
-验算指定功率组合下各 AP 的三重约束，返回结构化 per-AP 详情，供 orchestrator 在投票阶段注入给投票方（避免 LLM 自行计算 delta 出错）。
+验算指定功率组合下各 AP 的三重约束，返回结构化 per-AP 详情，供投票方在投票阶段调用核对（避免 LLM 自行计算 delta 出错）。
 
 ```python
 from src.tools.sr import compute_validation
@@ -274,20 +274,25 @@ details = compute_validation(ap_states, {"ap1": 6.0, "ap2": 6.0, "ap3": 6.0})
 
 ---
 
-## orchestrator 中的调用位置
+## 调用位置（OpenClaw）
 
-`src/orchestrator.py` 的 `_phase_propose()` 会向提案方开放分解后的 Co-SR 工具：
-先获取最新状态，再分析干扰、计算可行区间、比较多个候选，并验证最终候选。
+这些 Co-SR 工具经 MCP 工具服务 `multiap-tools` 暴露。提案阶段，AP 在
+`openclaw/mcp/orchestration.py` 的 `propose_instruction` 引导下自主调用：
+先 `get_latest_ap_states`，再 `analyze_sr_interference`、`select_sr_concurrent_groups`、
+`compute_sr_feasible_ranges`，并用 `evaluate_sr_candidate` 验证最终候选。
 
 ---
 
-## 策略路由（orchestrator 中的触发逻辑）
+## 策略路由（由提案 AP 基于实时证据自主选择）
 
-| 条件 | 策略 |
+路径不按 AP 编号或固定阈值预设，而由提案 AP 依据实时状态与工具验算判断；
+`determine_strategy` 仅用于触发/NOOP 判断的提示。典型证据：
+
+| 证据 | 倾向策略 |
 |---|---|
-| 任一 AP 的 neighbor_rssi ≥ -30 dBm | Co-SR |
-| 任一 AP 的 Data_rate_to_bandwidth_ratio ≥ 0.60 或 tx_retries_ratio ≥ 0.15 | Co-EDCA |
-| 两类条件同时满足 | Joint（同时调整 TX Power + EDCA） |
+| 邻居 RSSI 偏强 / `analyze_sr_interference` 触发 | Co-SR |
+| 优先级、QoS 或 EDCA 参数显示需差异化竞争 | Co-EDCA |
+| 两类问题同时成立 | 联合，或先处理主导问题 |
 
 ---
 

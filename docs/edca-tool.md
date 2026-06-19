@@ -9,8 +9,7 @@
 根据各 AP 的实测信道指标（信道占用率 + 重传率）判断拥塞等级，
 映射到推荐的 EDCA 参数组合（CWmin / CWmax / AIFSN），并验证参数合法性。
 
-orchestrator 在第二阶段（提案）自动调用此工具，将结果注入提案方的指令，
-作为 LLM 生成参数的物理基准。
+提案阶段，AP 经 MCP 工具调用此工具自检候选 EDCA 参数，作为生成参数的物理基准。
 
 ---
 
@@ -129,8 +128,8 @@ result = evaluate_edca_effectiveness(ap_states, proposed_edca)
 
 ---
 
-## orchestrator 中的调用位置
+## 调用位置（OpenClaw）
 
-`src/orchestrator.py` 的 `_phase_propose()` 会让提案方先获取最新状态，再自行提出 EDCA 候选，并调用 `validate_edca_proposal` 验证最终候选。
-
-validator-agent（第三步）也可调用此工具对提案进行独立核算，不依赖 LLM 自评。
+经 MCP 工具服务 `multiap-tools` 暴露为 `validate_edca_proposal`。提案阶段，AP 在
+`openclaw/mcp/orchestration.py` 的 `propose_instruction` 引导下先获取最新状态，
+再自行提出 EDCA 候选并调用 `validate_edca_proposal` 验证；投票方在投票阶段也调用它独立核算针对自己的参数，不依赖 LLM 自评。
