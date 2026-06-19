@@ -46,18 +46,9 @@ OPENCLAW_BIN = (
 )
 OPENCLAW_PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
 
-# 阶段 key → 中文标签（structured_relay 的 emit 只传 phase key）
-_PHASE_LABEL = {
-    "broadcast": "广播",
-    "propose": "提案",
-    "vote": "投票",
-    "decide": "最终决策",
-}
-
-
 def _print_event(phase, who, reply):
+    # 只保留 agent 名称作为发言头部，不打阶段标签（广播/提案/投票…）
     print(divider())
-    print(f"{section(_PHASE_LABEL.get(phase, phase))} {status_label(who.upper())}")
     print(f"\n{format_ap_name(who.upper())}:")
     print(strip_md(reply).strip())
 
