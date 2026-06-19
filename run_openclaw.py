@@ -13,6 +13,7 @@ import glob
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -74,6 +75,15 @@ _ROLE_PHASE = {
     "voter": "vote",
     "decision": "decide",
 }
+
+
+def _port_open(port: int) -> bool:
+    """本机端口是否在监听（用于复用 serve.sh 常驻的 Dashboard，不再每轮自起）。"""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def _find_new_session_log(pre: set) -> str | None:
@@ -186,7 +196,10 @@ def main():
             interval_seconds=args.plot_interval,
         )
     if not args.no_dashboard:
-        push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
+        if _port_open(args.dashboard_port):
+            print(f"[Dashboard] 复用已在线服务 http://localhost:{args.dashboard_port}/（serve.sh 常驻）")
+        else:
+            push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
 
     orch.STATE_SERVER = args.server
     t0 = time.time()

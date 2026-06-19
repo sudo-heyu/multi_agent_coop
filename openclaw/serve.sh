@@ -36,12 +36,16 @@ except Exception:
 PYEOF
 )"
 GW_PORT="${MULTIAP_GATEWAY_PORT:-${CFG_PORT:-18789}}"
+DASH_PORT="${MULTIAP_DASHBOARD_PORT:-5050}"
+DASH_PID="$RUN_DIR/dashboard.pid"
+DASH_LOG="$RUN_DIR/dashboard.log"
 
 mkdir -p "$RUN_DIR"
 
 port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 # --noproxy '*'：本机若设了 http_proxy，localhost 探活会被代理拦截，必须绕过
 state_alive()    { curl -sf -m 2 --noproxy '*' "$STATE_URL/health" >/dev/null 2>&1; }
+dash_alive()     { curl -sf -m 2 --noproxy '*' "http://localhost:${DASH_PORT}/" >/dev/null 2>&1; }
 launchd_exists() { launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; }
 
 start_state() {
@@ -80,6 +84,23 @@ start_gateway() {
     fi
 }
 
+start_dashboard_svc() {
+    if dash_alive; then echo "[serve] dashboard 已在线: http://localhost:${DASH_PORT}/"; return 0; fi
+    if port_listening "$DASH_PORT"; then
+        echo "[serve] 端口 $DASH_PORT 被占用但不可达，跳过 dashboard"; return 0
+    fi
+    echo "[serve] 启动 Dashboard :$DASH_PORT ..."
+    NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
+        nohup "$PY" "$REPO/dashboard/app.py" --port "$DASH_PORT" --state-server "$STATE_URL" >"$DASH_LOG" 2>&1 &
+    echo $! > "$DASH_PID"
+    for _ in $(seq 1 15); do if dash_alive; then break; fi; sleep 1; done
+    if dash_alive; then
+        echo "[serve] dashboard UP: http://localhost:${DASH_PORT}/ (pid $(cat "$DASH_PID"))"
+    else
+        echo "[serve] dashboard 启动失败，见 $DASH_LOG"; return 1
+    fi
+}
+
 stop_state() {
     if [ -f "$STATE_PID" ]; then
         local pid; pid="$(cat "$STATE_PID" 2>/dev/null || true)"
@@ -106,6 +127,16 @@ stop_gateway() {
     fi
 }
 
+stop_dashboard_svc() {
+    if [ -f "$DASH_PID" ]; then
+        local pid; pid="$(cat "$DASH_PID" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true; echo "[serve] 已停止 dashboard (pid $pid)"
+        else echo "[serve] dashboard 进程已不在"; fi
+        rm -f "$DASH_PID"
+    else echo "[serve] dashboard 无 PID 文件（非 serve.sh 启动，不强杀 :$DASH_PORT）"; fi
+}
+
 restart_gateway() {
     # 改了 setup.sh / mcp 注册 / 配置后用它重载 gateway（否则常驻 gateway 缓存旧 MCP 连接，
     # 会出现 AP 调工具时 "tool isn't available"）。
@@ -128,12 +159,14 @@ status() {
     else
         echo "[serve] gateway      : down (:$GW_PORT)"
     fi
+    if dash_alive; then echo "[serve] dashboard    : UP   http://localhost:${DASH_PORT}/"
+    else echo "[serve] dashboard    : down (:$DASH_PORT)"; fi
 }
 
 case "${1:-}" in
-    start)   start_state; start_gateway ;;
-    stop)    stop_gateway; stop_state ;;
+    start)   start_state; start_gateway; start_dashboard_svc ;;
+    stop)    stop_dashboard_svc; stop_gateway; stop_state ;;
     status)  status ;;
-    restart) stop_state; sleep 1; start_state; restart_gateway ;;
+    restart) stop_dashboard_svc; stop_state; sleep 1; start_state; restart_gateway; start_dashboard_svc ;;
     *) echo "用法: bash openclaw/serve.sh {start|stop|status|restart}"; exit 1 ;;
 esac

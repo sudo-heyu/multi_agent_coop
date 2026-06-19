@@ -67,9 +67,9 @@ OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server
 绑成一条命令：
 
 ```bash
-bash openclaw/serve.sh start     # 起 state server(5001) + 确保 multiap gateway(18789) 在线
-bash openclaw/serve.sh status    # 查看两者状态
-bash openclaw/serve.sh stop      # 停 state server；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
+bash openclaw/serve.sh start     # 起 state server(5001) + Dashboard(5050) + 确保 multiap gateway(18789) 在线
+bash openclaw/serve.sh status    # 查看三者状态
+bash openclaw/serve.sh stop      # 停 state server + Dashboard；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
 bash openclaw/serve.sh restart
 ```
 
@@ -77,6 +77,7 @@ bash openclaw/serve.sh restart
 - ⚠️ 改过 `setup.sh` / MCP 注册 / profile 配置后，常驻 gateway 仍缓存旧 MCP 连接（会出现 AP 调工具时 "tool isn't available"）；用 `bash openclaw/serve.sh restart` 重载 gateway 即可。
 - 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。coordinator 入口仍走 `--local`（避免 MCP 实例重入死锁）。
 - **提速预期**：主要省掉每回合的 runtime/provider/插件冷启动与 MCP 反复 spawn；**不会缩短 PPIO 推理本身**（每回合 ~13s 的模型时间不变），整体收益取决于冷启动占比。
+- **Dashboard（5050）也由 `serve.sh` 常驻**：起了之后 `run_openclaw.py` 会检测到并**复用**它，不再每轮自起 Flask（终端不再有 `Serving Flask app` 噪声）。临时不想要可视化仍可 `--no-dashboard`。
 - `serve.sh` 起的是裸 state server，数据新鲜度由喂数器（mock：`run_openclaw.py` 的连续喂数器）或香蕉派 reporter（真实）维持。
 
 ---

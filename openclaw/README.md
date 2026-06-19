@@ -39,10 +39,11 @@ openclaw --profile multiap agent --local --agent coordinator \
 OpenClaw 已为 multiap 注册 launchd 网关服务 `ai.openclaw.multiap`（端口 18789，RunAtLoad+KeepAlive，
 本身即长期服务）。serve.sh 把它与 state server 绑成一条命令：
 ```bash
-bash openclaw/serve.sh start    # 起 state server(5001) + 确保 multiap gateway(18789) 在线
-bash openclaw/serve.sh status   # 两者状态
-bash openclaw/serve.sh stop     # 停 state server；launchd 托管的 gateway 不强停
+bash openclaw/serve.sh start    # 起 state server(5001) + Dashboard(5050) + 确保 gateway(18789) 在线
+bash openclaw/serve.sh status   # 三者状态
+bash openclaw/serve.sh stop     # 停 state server + Dashboard；launchd 托管的 gateway 不强停
 ```
+- Dashboard 也常驻：run_openclaw 检测到 5050 在线即复用，不再每轮自起 Flask。
 - 端口取自 `gateway.port`（默认 18789，与 launchd 服务一致）；serve.sh 优先复用 launchd，缺失才 nohup 兜底。
 - 起了 gateway 后，`drive_ap` 探测到在线即自动让 AP 回合走热 gateway（省每回合 runtime/MCP 冷启动），
   离线回退 `--local`；coordinator 入口仍 `--local`（避免 MCP 实例重入死锁）。
