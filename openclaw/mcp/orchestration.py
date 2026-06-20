@@ -398,6 +398,19 @@ def determine_strategy(ap_state: dict) -> str:
     return "noop"
 
 
+_NOOP_MARKERS = (
+    "暂不调整", "无需调整", "无须调整", "无需变更", "无需更改", "保持现状",
+    "维持现状", "维持当前", "保持当前", "不做调整", "不作调整", "无需协商",
+    "no adjustment", "no change",
+)
+
+
+def _proposer_declares_noop(reply: str) -> bool:
+    """提案方未给出 ap1/ap2/ap3 JSON，但明确表态"无需调整"时返回 True。
+    用于把"基于证据决定不改"与"格式/解析错误"区分开，避免误报 proposal_parse_error。"""
+    return any(m in reply for m in _NOOP_MARKERS)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 阶段指令（忠实移植自 orchestrator.py）
 # ──────────────────────────────────────────────────────────────────────
@@ -441,7 +454,10 @@ def propose_instruction(proposer_id: str) -> str:
         '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。\n\n'
         "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
         "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
-        "同优先级或未知优先级时不要强行制造梯度。用 validate_edca_proposal（传 proposed_edca）自检。\n\n"
+        "同优先级或未知优先级时不要强行制造梯度。用 validate_edca_proposal（传 proposed_edca）自检。\n"
+        "【重要】若各 AP 优先级确实不同（如 high/medium/low）但当前 EDCA 参数相同（未差异化），"
+        "这本身就是需要 Co-EDCA 的证据：应让高优先级获得更小的 CWmin/CWmax/AIFSN、低优先级更大，"
+        "切勿以『统一参数已平凡满足单调性』为由判定无需调整——未体现优先级差异即未达成本场景目标。\n\n"
         "【联合调整】只有当强干扰与 EDCA 竞争问题同时有证据支持时使用，"
         "同时调用 Co-SR 和 Co-EDCA 的相关验算工具，提案 JSON 可同时包含两类字段。\n\n"
         "提案须简洁说明：选哪条路径及原因、每个 AP 的最终参数与依据、预期改善与权衡。\n"
@@ -597,98 +613,6 @@ def run_final() -> dict:
                 decision[meta_key] = s.proposal[meta_key]
     s.decision = decision
     return {"decision": decision, "strategy": s.strategy, "reply": reply}
-
-
-# ══════════════════════════════════════════════════════════════════════
-# 架构 C：无协调者 —— AP 自驱动 + 接力总线
-#
-# relay 是一根「极薄的接力总线」，不做任何协议决策：
-#   - 维护共享 transcript，把它注入每个 AP 的轮次消息；
-#   - 调用「当前发言者」，读取该 AP 自己声明的 control 块（next/done）来传棒；
-#   - 仅保留两条安全网：硬性步数上限 + AP 漏报 next 时的默认轮转；
-#   - AP 全部声明 done 后，对最终决策做一次确定性 Validator 验收（验证而非决策）。
-# 协议的全部判断（阶段、谁提案、计票、是否反对、何时结束）都在各 AP 的 AGENTS.md 里。
-# ══════════════════════════════════════════════════════════════════════
-
-import re as _re
-
-CTRL_PREFIX = "@@CTRL"
-
-
-def turn_instruction(speaker: str) -> str:
-    return (
-        f"现在轮到你（{speaker.upper()}）发言。\n"
-        "请阅读上方完整对话记录，自行判断当前处于协议的哪个阶段（广播 / 提案 / 投票 / 最终决策），"
-        "严格按你 AGENTS.md 中的协议规则完成你这一步：\n"
-        "  · 广播阶段：先调用 get_latest_ap_states，只播报你自己的实测数据与本机扫描到的邻居 RSSI。\n"
-        "  · 提案阶段：按路径规则调用计算/验算工具，给出含 ap1/ap2/ap3 的参数 JSON 提案。\n"
-        "  · 投票阶段：调用验算工具核对针对你的参数，表态 同意/弃权/反对（反对须附反提案）。\n"
-        "  · 最终决策：若你是提案方且其余 AP 都已同意，先调用 validate_decision 自检，"
-        "再输出最终决策 JSON（顶层键 ap1/ap2/ap3）。\n\n"
-        "【接力规则】在你回复的最后一行，必须输出一行控制标记声明下一位发言者：\n"
-        f"  {CTRL_PREFIX} {{\"phase\": \"broadcast|propose|vote|decide\", \"next\": \"ap2\", \"done\": false}}\n"
-        "当且仅当你已输出最终决策 JSON 且协商结束时，写 "
-        f"{CTRL_PREFIX} {{\"phase\": \"decide\", \"next\": null, \"done\": true}}。\n"
-        "next 必须是 ap1/ap2/ap3 之一或 null。不要在控制标记之外解释它。"
-    )
-
-
-def parse_ctrl(text: str) -> dict:
-    """从 AP 回复中解析最后一行 @@CTRL 控制块。解析失败返回 {}。"""
-    last = {}
-    for m in _re.finditer(rf"{_re.escape(CTRL_PREFIX)}\s*(\{{.*?\}})", text, _re.DOTALL):
-        try:
-            obj = json.loads(m.group(1))
-            if isinstance(obj, dict):
-                last = obj
-        except json.JSONDecodeError:
-            continue
-    return last
-
-
-def _default_next(speaker: str) -> str:
-    i = AP_IDS.index(speaker) if speaker in AP_IDS else -1
-    return AP_IDS[(i + 1) % len(AP_IDS)]
-
-
-def drive_turn(speaker: str) -> str:
-    reply = drive_ap(speaker, turn_instruction(speaker))
-    _SESSION.record(speaker.upper(), reply)
-    return reply
-
-
-def relay(max_steps: int = 30, first: str = "ap1", on_turn=None) -> dict:
-    """运行无协调者协商。on_turn(step, speaker, reply, ctrl) 可选回调（日志/可视化）。"""
-    reset_session()
-    speaker = first
-    last_reply = ""
-    done = False
-    steps = 0
-    for step in range(max_steps):
-        steps = step + 1
-        last_reply = drive_turn(speaker)
-        ctrl = parse_ctrl(last_reply)
-        if on_turn:
-            on_turn(step, speaker, last_reply, ctrl)
-        if ctrl.get("done"):
-            done = True
-            break
-        nxt = (ctrl.get("next") or "").lower()
-        speaker = nxt if nxt in AP_IDS else _default_next(speaker)
-
-    # 收尾：对最终决策做确定性 Validator 验收（安全网，验证而非决策）
-    decision = _extract_proposal(last_reply) or _extract_json(last_reply)
-    strategy = resolve_strategy(decision)
-    validation = None
-    if decision is not None and strategy:
-        validation = _validate_decision(
-            _SESSION.ap_state, decision, strategy,
-            observed_state=_SESSION.ap_state, observed_is_real=False)
-    return {
-        "done": done, "steps": steps, "decision": decision,
-        "strategy": strategy, "validation": validation,
-        "transcript_turns": len(_SESSION.transcript),
-    }
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -872,6 +796,13 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
         emit("propose", proposer, p["reply"])
         _log_agent_reply(logger, proposer, 3, "proposer", propose_inst, p["reply"])
         if not p["parsed"]:
+            # 提案方基于证据判定"无需调整"是合理结果，不当作解析错误。
+            if _proposer_declares_noop(p["reply"]):
+                _log_phase(logger, 5, "提案方判定无需调整")
+                _finish(logger, "noop", s.proposal_num, started_at)
+                return {"outcome": "noop", "decision": None, "strategy": "noop",
+                        "validation": None, "push_results": {},
+                        "observed_is_real": False, "transcript_turns": len(s.transcript)}
             _finish(logger, "proposal_parse_error", s.proposal_num, started_at)
             return {"outcome": "proposal_parse_error", "decision": None,
                     "strategy": None, "validation": None, "push_results": {},
