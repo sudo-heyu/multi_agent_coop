@@ -534,12 +534,6 @@ def final_instruction(proposer_id: str, proposal: dict) -> str:
 # 阶段执行
 # ──────────────────────────────────────────────────────────────────────
 
-def run_broadcast(ap_id: str) -> dict:
-    reply = drive_ap(ap_id, broadcast_instruction(ap_id))
-    _SESSION.record(ap_id.upper(), reply)
-    return {"ap_id": ap_id, "reply": reply}
-
-
 def run_propose(proposer_id: str) -> dict:
     reply = drive_ap(proposer_id, propose_instruction(proposer_id))
     _SESSION.record(proposer_id.upper(), reply)
@@ -763,13 +757,19 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
     reset_session(initial_state)
     s = _SESSION
 
-    # 阶段一：广播（固定顺序 ap1→ap2→ap3）
+    # 阶段一：广播。各 AP 仅自报状态（数据已在 prompt 内、明确要求不引用他人），
+    # 互不依赖，故并发驱动以省每回合 ~6s 的 CLI 冷启动；回复仍按固定顺序 ap1→ap2→ap3
+    # 记录/展示/落库，transcript 与下游提案阶段的输入保持确定、不变。
     _log_phase(logger, 1, "广播自身状态")
+    bcast_inst = {ap: broadcast_instruction(ap) for ap in AP_IDS}
+    with ThreadPoolExecutor(max_workers=len(AP_IDS)) as ex:
+        futures = {ap: ex.submit(drive_ap, ap, bcast_inst[ap]) for ap in AP_IDS}
+        replies = {ap: futures[ap].result() for ap in AP_IDS}
     for ap in AP_IDS:
-        instruction = broadcast_instruction(ap)
-        result = run_broadcast(ap)
-        emit("broadcast", ap, result["reply"])
-        _log_agent_reply(logger, ap, 1, "broadcast", instruction, result["reply"])
+        reply = replies[ap]
+        s.record(ap.upper(), reply)
+        emit("broadcast", ap, reply)
+        _log_agent_reply(logger, ap, 1, "broadcast", bcast_inst[ap], reply)
 
     strategy_hint = determine_strategy(s.ap_state)
     if strategy_hint == "noop":
