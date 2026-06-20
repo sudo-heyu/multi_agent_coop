@@ -35,8 +35,17 @@ MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash 
 ```
 > ⚠️ **不要加 `--no-feeder`** —— 它只推一帧，长协商时状态会过期（`StateStaleError`）导致失败；需连续喂数器保持状态新鲜。
 
-**3. 直接触发 coordinator**（不经薄启动器，需先有状态服务器在喂数）
+> 🚦 **coordinator 已默认停用（2026-06）**：`run_openclaw.py` 现在默认**进程内直接跑阶段接力**（即原 `--direct-relay`），
+> 不再启动 coordinator LLM agent。原因：coordinator 对协商**零功能贡献**——发言顺序（广播 ap1→ap2→ap3、
+> ap1 提案、ap2/ap3 投票、ap1 收口决策、反对即接管）全部固定在 `orchestration.py` 的 `structured_relay` 里，
+> coordinator 只是用 `--local` 冷启动一个 LLM 去调一次 `run_fast_negotiation` 并回显结果，平白多出
+> **~60s（冷启动 ~13s + 2 次 LLM 调用）**。需要回到旧路径做对比时加 `--use-coordinator`（见下方 §3）。
+
+**3. （旧路径，已停用）直接触发 coordinator**（仅做对比/调试用；默认路径无需此步）
 ```bash
+# 经薄启动器回退到 coordinator 路径：
+.venv/bin/python run_openclaw.py --scene edca --use-coordinator
+# 或不经启动器手动触发 coordinator：
 OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
   openclaw --profile multiap agent --local --agent coordinator \
   -m "开始协商，请直接调用 run_fast_negotiation 控制总耗时" --json
@@ -48,7 +57,7 @@ OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
 .venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001    # ② 各香蕉派上报（ap1/ap2/ap3）
 .venv/bin/python run_openclaw.py --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
-#  或 --ap-config ap_endpoints.json（默认自动读取仓库根）
+#  或 --ap-config ap_endpoints.json（须显式指定；不再自动读取，避免 mock 演示误推到不可达 AP 而 8s 超时）
 ```
 
 **测试**
@@ -56,7 +65,7 @@ OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
 .venv/bin/python -m unittest discover -s tests          # 确定性套件 16/16
 ```
 
-常用开关：`--scene {sr,edca,joint}` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--direct-relay`（绕过 coordinator，仍用 OpenClaw AP agent） · `--require-qwen80b` · `--observation-wait <秒>`。
+常用开关：`--scene {sr,edca,joint}` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。`--direct-relay` 保留兼容但已是默认，无需再加。
 `run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
 
 ### 后台常驻服务（加速冷启动）
@@ -75,7 +84,7 @@ bash openclaw/serve.sh restart
 
 - gateway 端口取自 profile 配置 `gateway.port`（默认 18789，与 launchd 服务一致）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。
 - ⚠️ 改过 `setup.sh` / MCP 注册 / profile 配置后，常驻 gateway 仍缓存旧 MCP 连接（会出现 AP 调工具时 "tool isn't available"）；用 `bash openclaw/serve.sh restart` 重载 gateway 即可。
-- 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。coordinator 入口仍走 `--local`（避免 MCP 实例重入死锁）。
+- 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。默认路径不经 coordinator，入口在 `run_openclaw.py` 进程内；仅 `--use-coordinator` 时 coordinator 入口走 `--local`（避免 MCP 实例重入死锁）。
 - **提速预期**：主要省掉每回合的 runtime/provider/插件冷启动与 MCP 反复 spawn；**不会缩短 PPIO 推理本身**（每回合 ~13s 的模型时间不变），整体收益取决于冷启动占比。
 - **Dashboard（5050）也由 `serve.sh` 常驻**：起了之后 `run_openclaw.py` 会检测到并**复用**它，不再每轮自起 Flask（终端不再有 `Serving Flask app` 噪声）。临时不想要可视化仍可 `--no-dashboard`。
 - `serve.sh` 起的是裸 state server，数据新鲜度由喂数器（mock：`run_openclaw.py` 的连续喂数器）或香蕉派 reporter（真实）维持。
@@ -88,12 +97,13 @@ bash openclaw/serve.sh restart
 ┌──────────────────────────────────────────────────────────────┐
 │ OpenClaw（隔离 profile: multiap，~/.openclaw-multiap/）        │
 │                                                              │
-│  托管层 agents：coordinator / ap1 / ap2 / ap3                 │
+│  托管层 agents：ap1 / ap2 / ap3（coordinator 默认停用）       │
 │    模型：PPIO qwen80binstruct（默认）/ ollama qwen3:14b（回退）│
 │                                                              │
-│  coordinator（LLM，阶段级入口）                               │
-│    └─ 调用 MCP 工具 run_fast_negotiation 一次性推进协议        │
-│       （不逐句选发言人，控制时延）                            │
+│  入口（默认）：run_openclaw.py 进程内直接调 structured_relay  │
+│    └─ 固定顺序驱动 ap1/ap2/ap3，免 coordinator 冷启动开销      │
+│  coordinator（LLM，已停用，--use-coordinator 回退）           │
+│    └─ 旧路径：调 MCP run_fast_negotiation 一次性推进协议       │
 │                                                              │
 │  MCP 工具服务 multiap-tools（openclaw/mcp/multiap_mcp.py）：   │
 │    get_latest_ap_states / analyze_sr_interference /          │
@@ -166,7 +176,7 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 ```
 .
-├── run_openclaw.py               # 薄启动器：准备场景 → 拉起服务器/Dashboard/曲线 → 触发 coordinator
+├── run_openclaw.py               # 薄启动器：准备场景 → 拉起服务器/Dashboard/曲线 → 进程内直跑 structured_relay（coordinator 默认停用，--use-coordinator 回退）
 ├── openclaw/
 │   ├── setup.sh                  # 配置隔离 profile multiap（providers + 4 agent + 工具限制 + MCP 注册）
 │   ├── scenes.py                 # 三套 mock 场景 + 状态服务器/Dashboard/学术曲线启动器

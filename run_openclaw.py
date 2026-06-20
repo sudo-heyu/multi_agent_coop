@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "openclaw" / "mcp"))
 
 from openclaw.scenes import (
-    DEFAULT_AP_CONFIG,
     MOCK_SCENES,
     _parse_executor_endpoints,
     start_academic_plot,
@@ -132,13 +131,16 @@ def _drain_session_log(fh) -> bool:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="多 AP 协商（纯 OpenClaw / coordinator 阶段级触发）")
+    ap = argparse.ArgumentParser(description="多 AP 协商（纯 OpenClaw / 进程内阶段接力）")
     ap.add_argument("--scene", choices=["sr", "edca", "joint"], default="joint")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
     ap.add_argument("--no-feeder", action="store_true", help="不启动曲线喂数器")
+    ap.add_argument("--use-coordinator", action="store_true",
+                    help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
+                         "会多 ~60s 冷启动+2 次 LLM 调用）")
     ap.add_argument("--direct-relay", action="store_true",
-                    help="调试用：绕过 coordinator，直接运行阶段接力")
+                    help="（已默认启用，保留兼容）进程内直接运行阶段接力")
     ap.add_argument("--observation-wait", type=float, default=0.0,
                     help="最终 Validator 读取观测状态前等待秒数")
     ap.add_argument("--ap-endpoints", default="",
@@ -203,7 +205,9 @@ def main():
 
     orch.STATE_SERVER = args.server
     t0 = time.time()
-    if args.direct_relay:
+    if not args.use_coordinator:
+        # 默认：进程内直接跑阶段接力，绕过 coordinator（省 ~60s 冷启动+2 次 LLM 调用）。
+        # coordinator 对协商逻辑无贡献，发言顺序固定在 structured_relay 内，详见 README。
         logger = SessionLogger(verbose=False, event_sink=push_live)
         logger.session_start(model="openclaw-direct", scene=args.scene, ap_state=scene)
         result = orch.structured_relay(
@@ -261,8 +265,10 @@ def main():
 
 
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
-    config_path = Path(config_arg) if config_arg else DEFAULT_AP_CONFIG
-    if config_arg or (not endpoints_arg and config_path.exists()):
+    # 必须显式给端点才推送：mock/演示默认无端点→跳过下发，避免对不可达的真实 AP
+    # 反复 8s 超时。真实 AP 模式用 --ap-endpoints 或 --ap-config ap_endpoints.json。
+    if config_arg:
+        config_path = Path(config_arg)
         if not config_path.exists():
             print(f"[错误] --ap-config 文件不存在: {config_path}")
             sys.exit(1)
