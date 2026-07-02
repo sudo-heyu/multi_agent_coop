@@ -79,6 +79,29 @@ class OutcomeEvaluatorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_windows(" , ")
 
+    def test_schedule_prefers_raw_initial_snapshot_over_filtered_baseline(self):
+        # agent 白名单会滤掉 iperf 吞吐/延迟/丢包；评估基线必须用 initial 快照全量遥测。
+        self._completed_run("run-snap")
+        self.store.record_snapshot(
+            "run-snap", label="initial", source="session_start",
+            state=copy.deepcopy(self.baseline),
+        )
+        filtered = {
+            ap: {"traffic_priority": row["traffic_priority"],
+                 "throughput_mbps_user": row["throughput_mbps_user"]}
+            for ap, row in self.baseline.items()
+        }
+        schedule_outcome_evaluations(self.store, "run-snap", filtered, (10.0,), now=self.t0)
+        baseline = self.store.list_evaluations("run-snap")[0]["baseline"]
+        self.assertIn("latency_ms", baseline["ap1"])
+        self.assertIn("packet_loss_pct", baseline["ap1"])
+        collected = collect_due_evaluations(
+            self.store,
+            lambda: _shift(self.baseline, throughput=1.3, latency=0.6, loss=0.4),
+            now=self.t0 + timedelta(seconds=11),
+        )
+        self.assertEqual(collected[0]["verdict"], "improved")
+
     def test_schedule_is_idempotent_per_run_and_window(self):
         self._completed_run("run-a")
         schedule_outcome_evaluations(self.store, "run-a", self.baseline, (10.0, 30.0), now=self.t0)

@@ -91,11 +91,11 @@ def main() -> None:
         elif args.command == "episodes":
             result = store.list_episodes(scene=args.scene, limit=args.limit)
         elif args.command == "evaluate":
-            from src.profile import apply_profile
             from src.state_client import get_all_states
+            # 全量原始遥测，不套 agent 字段白名单（评估需要 iperf/延迟/丢包）。
             result = collect_due_evaluations(
                 store,
-                lambda: apply_profile(get_all_states(args.server)),
+                lambda: get_all_states(args.server),
                 run_id=args.run,
             )
         elif args.command == "evaluations":

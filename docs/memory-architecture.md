@@ -98,7 +98,9 @@ run 结束时，`src/memory/episodic.py` 从事件和快照自动物化一个案
 
 决策通过 Validator 并生效后，`src/memory/outcome.py` 在事件存储中登记多个评估窗口
 （`--eval-windows`，默认 mock=`10,30`s、real=`60,300,900`s，`off` 关闭；coordinator
-路径经 `MULTIAP_EVAL_WINDOWS` 环境变量透传）。每个窗口到期时与协商前基线比较：
+路径经 `MULTIAP_EVAL_WINDOWS` 环境变量透传）。评估读写全量原始遥测，**不套 agent
+字段白名单**（白名单会滤掉 iperf 吞吐/延迟/丢包，导致覆盖率不足误判 inconclusive）：
+基线优先取 run 的 initial 快照，收割时也直接读原始上报。每个窗口到期时与协商前基线比较：
 
 - 指标：吞吐（iperf/user，相对变化）、延迟（相对变化，方向取反）、丢包（绝对
   百分点 / 5.0 归一），单指标得分截断在 [-1, 1]；

@@ -311,6 +311,11 @@ def _drain_session_log(fh) -> bool:
 
 
 def main():
+    # 重定向/管道运行时保持行缓冲，避免结果和 [Outcome] 行长时间压在块缓冲里。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
     ap.add_argument("--mode", choices=["mock", "real"], default="mock",
                     help="mock 使用预设场景持续喂数；real 只接受三台真实 AP reporter 上报")
@@ -474,7 +479,17 @@ def main():
                 "projection_version": 1,
             })
         else:
-            logger.session_start(model="openclaw-direct", scene=args.scene, ap_state=scene)
+            # initial 快照/episodic 特征/评估基线都取自这里：real 模式必须用
+            # 真实上报（ready_state 的 data 载荷），不能用 mock 场景定义。
+            if args.mode == "real":
+                initial_ap_state = {
+                    ap: ready_state[ap]["data"] for ap in ("ap1", "ap2", "ap3")
+                }
+            else:
+                initial_ap_state = scene
+            logger.session_start(
+                model="openclaw-direct", scene=args.scene, ap_state=initial_ap_state
+            )
         resume_projection = None
         if resume_checkpoint:
             resume_projection = {
@@ -575,9 +590,10 @@ def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dic
     from src.memory import collect_due_evaluations
     store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
     try:
+        # 评估比较用全量原始遥测（含 iperf 吞吐/延迟/丢包），不套 agent 字段白名单。
         collected = collect_due_evaluations(
             store,
-            lambda: orch.apply_profile(orch.get_all_states(server)),
+            lambda: orch.get_all_states(server),
             run_id=run_id,
         )
     except Exception as exc:  # noqa: BLE001

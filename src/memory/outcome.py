@@ -71,8 +71,20 @@ def schedule_outcome_evaluations(
     *,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """为一次已生效的决策登记多窗口评估，按 (run, window) 幂等。"""
+    """为一次已生效的决策登记多窗口评估，按 (run, window) 幂等。
+
+    基线优先取 run 的 initial 快照：它是未经 agent 字段白名单过滤的全量遥测
+    （含 iperf 吞吐/延迟/丢包），传入的 baseline_state 只作缺失时的兜底。
+    """
     now = now or datetime.now(timezone.utc)
+    initial = next(
+        (
+            snap["state"] for snap in store.iter_snapshots(run_id)
+            if snap["label"] == "initial"
+        ),
+        None,
+    )
+    baseline_state = initial or baseline_state
     scheduled = []
     for seconds in sorted(windows):
         due_at = (now + timedelta(seconds=seconds)).isoformat(timespec="milliseconds")
