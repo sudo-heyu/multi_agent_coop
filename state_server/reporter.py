@@ -34,9 +34,15 @@ DEFAULT_INTERVAL = 10  # 秒
 # low   = 后台下载/批量传输 → 协商时调高 EDCA
 # ------------------------------------------------------------------
 AP_TRAFFIC_PRIORITY = {
-    "ap1": "high",
-    "ap2": "medium",
+    "ap1": "low",
+    "ap2": "high",
     "ap3": "low",
+}
+
+AP_BUSINESS_TYPE = {
+    "ap1": "后台下载",
+    "ap2": "直播",
+    "ap3": "后台下载",
 }
 
 # ------------------------------------------------------------------
@@ -47,32 +53,38 @@ AP_TRAFFIC_PRIORITY = {
 # ------------------------------------------------------------------
 MOCK_STATE = {
     "ap1": {
+        "service_name": "background_download",
+        "business_type": AP_BUSINESS_TYPE["ap1"],
         "tx_power_dbm": 16.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": AP_TRAFFIC_PRIORITY["ap1"],
-        "Data_rate_to_bandwidth_ratio": 0.55,
-        "tx_retries_ratio": 0.12,
+        "Data_rate_to_bandwidth_ratio": 0.42,
+        "tx_retries_ratio": 0.06,
         "neighbor_rssi_dbm": {"ap2": -68.0, "ap3": -75.0},
         "sta_rssi_dbm": -55.0,
         "noise_floor_dbm": -92.0,
+        "throughput_mbps_iperf": 30.2,
+        "latency_ms": 130.0,
+        "packet_loss_pct": 0.2,
+    },
+    "ap2": {
+        "service_name": "live_streaming",
+        "business_type": AP_BUSINESS_TYPE["ap2"],
+        "tx_power_dbm": 16.0,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
+        "traffic_priority": AP_TRAFFIC_PRIORITY["ap2"],
+        "Data_rate_to_bandwidth_ratio": 0.72,
+        "tx_retries_ratio": 0.18,
+        "neighbor_rssi_dbm": {"ap1": -68.0, "ap3": -71.0},
+        "sta_rssi_dbm": -61.0,
+        "noise_floor_dbm": -91.0,
         "throughput_mbps_iperf": 18.4,
         "latency_ms": 312.0,
         "packet_loss_pct": 1.2,
     },
-    "ap2": {
-        "tx_power_dbm": 16.0,
-        "cwmin": 3, "cwmax": 4, "aifsn": 2,
-        "traffic_priority": AP_TRAFFIC_PRIORITY["ap2"],
-        "Data_rate_to_bandwidth_ratio": 0.50,
-        "tx_retries_ratio": 0.10,
-        "neighbor_rssi_dbm": {"ap1": -68.0, "ap3": -71.0},
-        "sta_rssi_dbm": -61.0,
-        "noise_floor_dbm": -91.0,
-        "throughput_mbps_iperf": 28.7,
-        "latency_ms": 185.0,
-        "packet_loss_pct": 0.4,
-    },
     "ap3": {
+        "service_name": "background_download",
+        "business_type": AP_BUSINESS_TYPE["ap3"],
         "tx_power_dbm": 16.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": AP_TRAFFIC_PRIORITY["ap3"],
@@ -93,6 +105,7 @@ _USER_AC_BY_PRIORITY = {"high": "VO", "medium": "BE", "low": "BK"}
 
 # 为 mock 数据补齐新增的只读观测字段（iperf/user 双路吞吐 + AC 类型）
 for _ap_id, _state in MOCK_STATE.items():
+    _state.setdefault("business_type", AP_BUSINESS_TYPE.get(_ap_id, "未声明业务类型"))
     _state.setdefault("throughput_mbps_user", round(_state["throughput_mbps_iperf"] * 0.6, 1))
     _state.setdefault("ac_iperf", "BK")  # iperf 测试流走后台队列
     _state.setdefault(
@@ -165,6 +178,8 @@ def read_real_state(ap_id: str, iface: str = "wlan0") -> dict:  # noqa: ARG001
 # 上报逻辑
 # ------------------------------------------------------------------
 def post_state(ap_id: str, data: dict, server: str, source: str = "ap") -> bool:
+    data = dict(data)
+    data.setdefault("business_type", AP_BUSINESS_TYPE.get(ap_id, "未声明业务类型"))
     payload = {
         "ap_id": ap_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),

@@ -32,6 +32,9 @@
 |---|---|---|---|
 | `ap_id` | string | — | `"ap1"` / `"ap2"` / `"ap3"` |
 | `timestamp` | string | ISO 8601 | 采集时刻，建议带时区（UTC）|
+| `service_name` | string | — | 机器可读业务名；建议明确上报 |
+| `business_type` | string | — | 面向展示/协商的业务类型；缺省为“未声明业务类型” |
+| `traffic_priority` | string | — | `high` / `medium` / `low`；profile 对非法值回退为 `medium` |
 | `tx_power_dbm` | float | dBm | 当前发射功率 |
 | `cwmin` | int | — | 竞争窗口下限 |
 | `cwmax` | int | — | 竞争窗口上限 |
@@ -57,6 +60,9 @@ curl -X POST http://<SPARK_IP>:5001/state \
   -d '{
     "ap_id": "ap1",
     "timestamp": "2026-05-19T07:15:00.000000+00:00",
+    "service_name": "background_download",
+    "business_type": "后台下载",
+    "traffic_priority": "low",
     "tx_power_dbm": 16.0,
     "cwmin": 3,
     "cwmax": 7,
@@ -179,7 +185,7 @@ curl http://<SPARK_IP>:5001/health
 2. **上报周期建议 10 秒**，超过 60 秒未上报服务器会将该 AP 标记为 `stale`
 3. **`neighbor_rssi_dbm`** 填写本机扫描到的邻居 BSS 信号强度，key 使用对方的 `ap_id`
 4. **时间戳建议使用 UTC**，格式 `2026-05-19T07:15:00.000000+00:00`
-5. 除 `source` 外所有字段均为必填，缺少任一字段服务器返回 400
+5. 硬性必填字段以服务端 `REQUIRED_FIELDS` 为准；真实部署还应明确提供三个业务语义字段
 6. 真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`，禁止把生成数据作为真实 QoS 观测上报
 
 ---
@@ -194,15 +200,17 @@ python state_server/server.py
 # 默认真实上报模式，拒收生成数据源
 ```
 
+上面的独立启动方式适用于接口开发。运行完整协商时，默认入口还要求 OpenClaw gateway 和 Dashboard，统一使用 `bash openclaw/serve.sh start`。
+
 ## 本地 mock 测试（无香蕉派时）
 
 ```bash
-# 终端 1：启动服务器；只有本地 mock 测试才允许 --allow-mock
-python state_server/server.py --allow-mock
+# 终端 1：启动完整常驻服务（其中 state server 带 --allow-mock）
+bash openclaw/serve.sh start
 
 # 终端 2：模拟三台香蕉派上报
 python state_server/reporter.py --mock --all
 
 # 终端 3：触发协商（从服务器拉取状态）
-python run_openclaw.py
+.venv/bin/python run_openclaw.py
 ```

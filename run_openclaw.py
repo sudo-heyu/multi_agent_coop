@@ -1,10 +1,10 @@
 """
-纯 OpenClaw 架构入口 —— coordinator 触发阶段级快速协商。
+OpenClaw AP agent + 确定性阶段编排入口。
 
 用法：
   python run_openclaw.py --scene joint            # mock A：预设场景
   python run_openclaw.py --scene sr --max-steps 20
-  python run_openclaw.py --scene edca --no-feeder  # 不喂曲线，仅跑协商
+  python run_openclaw.py --mode real --ap-endpoints ap1=...
 
 前置：openclaw 已装、ollama 运行、已执行过 `bash openclaw/setup.sh`。
 """
@@ -16,20 +16,17 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "openclaw" / "mcp"))
 
-from openclaw.scenes import (
-    MOCK_SCENES,
-    _parse_executor_endpoints,
-    start_academic_plot,
-    start_dashboard,
-    start_mock_server,
-)
+from openclaw.scenes import MOCK_SCENES, _parse_executor_endpoints
 from src.logger import SessionLogger
+from src.logger import DEFAULT_EVENT_DB
+from src.persistence import EventStore, build_checkpoint
 from src.console_style import (
     format_ap_name, strip_md, divider, section, status_label,
     status_ok, status_fail, dim, tool_prefix, tool_name,
@@ -45,12 +42,34 @@ OPENCLAW_BIN = (
     or str(Path.home() / ".openclaw" / "bin" / "openclaw")
 )
 OPENCLAW_PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
+_STREAM_AT_LINE_START = True
+
+
+def _stream_write(text: str) -> None:
+    global _STREAM_AT_LINE_START
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    _STREAM_AT_LINE_START = text.endswith("\n")
+
 
 def _print_event(phase, who, reply):
     # 只保留 agent 名称作为发言头部，不打阶段标签（广播/提案/投票…）
-    print(divider())
-    print(f"\n{format_ap_name(who.upper())}:")
+    print(f"\n\n{format_ap_name(who.upper())}:")
     print(strip_md(reply).strip())
+
+
+_STREAM_PRINT_LOCK = threading.Lock()
+
+
+def _print_event_stream_start(phase, who):
+    with _STREAM_PRINT_LOCK:
+        prefix = "\n\n" if not _STREAM_AT_LINE_START else "\n"
+        _stream_write(f"{prefix}{format_ap_name(str(who).upper())}:\n")
+
+
+def _print_event_stream_chunk(phase, who, text):
+    with _STREAM_PRINT_LOCK:
+        _stream_write(strip_md(text))
 
 
 def _print_tool(name, args, result, dur_ms):
@@ -60,7 +79,9 @@ def _print_tool(name, args, result, dur_ms):
         line = _format_tool_console(name, args, result_dict, dur_ms)
     except Exception:
         line = f"{tool_prefix()} {tool_name(name)} → {status_fail('结果解析失败')}"
-    print(line, flush=True)
+    with _STREAM_PRINT_LOCK:
+        prefix = "" if _STREAM_AT_LINE_START else "\n"
+        _stream_write(prefix + line + "\n")
 
 
 # ── coordinator 路径的实时对话流式输出（tail 会话 JSONL）──────────────────────
@@ -81,6 +102,165 @@ def _port_open(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
             return True
+    except OSError:
+        return False
+
+
+def _require_state_server(url: str, mode: str) -> dict:
+    """强制复用常驻 state server，并校验数据源策略与运行模式一致。
+    不在线则报错提示先 `bash openclaw/serve.sh start`，不再临时起。"""
+    import requests
+    try:
+        r = requests.get(f"{url}/health", timeout=2)
+        if r.status_code == 200:
+            health = r.json()
+            if mode == "real" and health.get("allow_mock_source"):
+                print("[错误] real 模式要求 state server 拒收 mock/generated 数据。")
+                print("请执行：MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart")
+                sys.exit(1)
+            print(f"[State] 复用常驻 state server {url}")
+            return health
+    except Exception:
+        pass
+    print(f"[错误] state server 未在线：{url}")
+    print("请先启动常驻服务：bash openclaw/serve.sh start")
+    sys.exit(1)
+
+
+def _require_gateway(use_coordinator: bool) -> None:
+    """默认 structured_relay 路径强制常驻 gateway 在线（AP 回合免每回合 CLI 冷启动）。
+    coordinator 路径走 --local，不依赖 gateway，跳过检测。"""
+    if use_coordinator:
+        return
+    port = orch._gateway_port()
+    if not orch._gateway_up(port):
+        print(f"[错误] openclaw gateway 未在线：ws://127.0.0.1:{port or 18789}")
+        print("请先启动常驻服务：bash openclaw/serve.sh start")
+        sys.exit(1)
+    print(f"[Gateway] 复用常驻 gateway :{port}（AP 回合免冷启动）")
+
+
+def _http_event_sink(url: str):
+    """事件 dict → POST 常驻 dashboard /push 的回调（用作 SessionLogger.event_sink）。
+    让独立常驻的 dashboard 进程也能收到实时对话流；推送失败静默，不阻断协商。"""
+    import requests
+    sess = requests.Session()
+    sess.trust_env = False
+
+    def _sink(d: dict) -> None:
+        try:
+            sess.post(url, json=d, timeout=1.5)
+        except Exception:
+            pass
+
+    return _sink
+
+
+def _wait_state_ready(
+    server: str,
+    timeout_s: float = 1.0,
+    *,
+    required_source: str | None = None,
+) -> dict:
+    """等待三台 AP 数据齐全、新鲜，real 模式还要求 source=ap。"""
+    import requests
+
+    deadline = time.time() + max(0.0, timeout_s)
+    sess = requests.Session()
+    sess.trust_env = False
+    while True:
+        try:
+            data = sess.get(f"{server.rstrip('/')}/state", timeout=0.3).json()
+            if all(
+                isinstance(data.get(ap), dict)
+                and data[ap].get("data") is not None
+                and not data[ap].get("stale")
+                and (
+                    required_source is None
+                    or str(data[ap]["data"].get("source", "ap")).lower() == required_source
+                )
+                for ap in ("ap1", "ap2", "ap3")
+            ):
+                return data
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            source_hint = f" 且 source={required_source}" if required_source else ""
+            raise RuntimeError(
+                f"等待 AP 状态超时（{timeout_s:g}s）：要求 ap1/ap2/ap3 数据齐全、未过期{source_hint}"
+            )
+        time.sleep(0.05)
+
+
+def _resume_state_compatible(stored: dict, latest_response: dict) -> tuple[bool, str]:
+    """Reject resume when topology, policy identity, or applied parameters changed."""
+    latest_raw = {
+        ap: (latest_response.get(ap) or {}).get("data") or {}
+        for ap in ("ap1", "ap2", "ap3")
+    }
+    latest = orch.apply_profile(latest_raw)
+    fields = ("tx_power_dbm", "cwmin", "cwmax", "aifsn", "traffic_priority")
+    for ap in ("ap1", "ap2", "ap3"):
+        if ap not in stored or ap not in latest:
+            return False, f"{ap} 状态缺失"
+        for field in fields:
+            if stored[ap].get(field) != latest[ap].get(field):
+                return False, (
+                    f"{ap}.{field} 已变化: checkpoint={stored[ap].get(field)!r}, "
+                    f"latest={latest[ap].get(field)!r}"
+                )
+        old_neighbors = set((stored[ap].get("neighbor_rssi_dbm") or {}).keys())
+        new_neighbors = set((latest[ap].get("neighbor_rssi_dbm") or {}).keys())
+        if old_neighbors != new_neighbors:
+            return False, f"{ap} 邻居拓扑已变化"
+    return True, "compatible"
+
+
+def _plot_pid_file() -> Path:
+    return Path.home() / f".openclaw-{OPENCLAW_PROFILE}" / "run" / "plot.pid"
+
+
+def _validate_real_endpoints(endpoints: dict[str, str] | None) -> None:
+    """真实模式必须为三台 AP 全量配置执行端点。"""
+    expected = {"ap1", "ap2", "ap3"}
+    actual = {str(ap).lower() for ap in (endpoints or {})}
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        details = []
+        if missing:
+            details.append(f"缺少 {','.join(missing)}")
+        if extra:
+            details.append(f"未知 {','.join(extra)}")
+        raise ValueError("real 模式执行端点必须恰好覆盖 ap1/ap2/ap3" + (f"（{'；'.join(details)}）" if details else ""))
+
+
+def _start_telemetry(mode: str, no_feeder: bool, server: str, scene: dict, interval: float):
+    """按模式启动遥测；real 路径绝不实例化 MockTelemetryFeeder。"""
+    if mode == "real":
+        return None
+    if not no_feeder:
+        feeder = MockTelemetryFeeder(server, scene, interval=interval)
+        feeder.start()
+        return feeder
+    single = MockTelemetryFeeder(server, scene, interval=interval)
+    single.start()
+    single.stop()
+    return None
+
+
+def _plot_daemon_alive() -> bool:
+    """serve.sh 常驻的 academic plot 进程是否存活（matplotlib 窗口在）。"""
+    pf = _plot_pid_file()
+    if not pf.exists():
+        return False
+    try:
+        pid = int(pf.read_text().strip())
+    except (ValueError, OSError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
     except OSError:
         return False
 
@@ -131,34 +311,67 @@ def _drain_session_log(fh) -> bool:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="多 AP 协商（纯 OpenClaw / 进程内阶段接力）")
+    ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
+    ap.add_argument("--mode", choices=["mock", "real"], default="mock",
+                    help="mock 使用预设场景持续喂数；real 只接受三台真实 AP reporter 上报")
     ap.add_argument("--scene", choices=["sr", "edca", "joint"], default="joint")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
-    ap.add_argument("--no-feeder", action="store_true", help="不启动曲线喂数器")
+    ap.add_argument("--no-feeder", action="store_true",
+                    help="mock 模式只推一帧后停止（兼容选项）；real 模式始终不创建 feeder")
+    ap.add_argument("--state-wait", type=float, default=None,
+                    help="等待三台 AP 新鲜状态的最长秒数（默认 mock=5，real=90）")
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
-    ap.add_argument("--direct-relay", action="store_true",
-                    help="（已默认启用，保留兼容）进程内直接运行阶段接力")
     ap.add_argument("--observation-wait", type=float, default=0.0,
                     help="最终 Validator 读取观测状态前等待秒数")
     ap.add_argument("--ap-endpoints", default="",
                     help="协商成功后推送决策的执行服务地址，格式 ap1=host:port,ap2=...")
     ap.add_argument("--ap-config", default="",
-                    help="从 JSON 文件读取执行服务地址；默认自动读取 ap_endpoints.json")
+                    help="从显式指定的 JSON 文件读取执行服务地址；默认不自动读取")
     ap.add_argument("--no-dashboard", action="store_true",
-                    help="不启动可视化 Dashboard")
+                    help="不要求或推送到常驻 Dashboard")
     ap.add_argument("--dashboard-port", type=int, default=5050)
     ap.add_argument("--no-academic-plot", action="store_true",
-                    help="不弹出 Matplotlib 学术曲线窗口")
+                    help="不检查或复用常驻 Matplotlib 学术曲线窗口")
     ap.add_argument("--plot-window", type=float, default=25.0)
     ap.add_argument("--plot-interval", type=float, default=1.0)
     ap.add_argument("--require-qwen80b", action="store_true",
                     help="强制要求 multiap profile 默认模型为 qwen80binstruct")
     ap.add_argument("--exit-after-run", action="store_true",
                     help="协商结束后不保持 mock 曲线展示，直接退出")
+    ap.add_argument("--resume-run", default="",
+                    help="从 SQLite 中指定 run_id 的安全 negotiation checkpoint 恢复")
+    ap.add_argument("--context-budget-chars", type=int, default=14000,
+                    help="每个 AP 回合可注入的会话上下文字符预算（最小 2000）")
+    ap.add_argument("--context-recent-turns", type=int, default=6,
+                    help="上下文中优先保留原文的最近发言数（最小 2）")
     args = ap.parse_args()
+    if args.context_budget_chars < 2000:
+        ap.error("--context-budget-chars 不能小于 2000")
+    if args.context_recent_turns < 2:
+        ap.error("--context-recent-turns 不能小于 2")
+    os.environ["MULTIAP_CONTEXT_BUDGET_CHARS"] = str(args.context_budget_chars)
+    os.environ["MULTIAP_CONTEXT_RECENT_TURNS"] = str(args.context_recent_turns)
+
+    resume_checkpoint = None
+    if args.resume_run:
+        if args.use_coordinator:
+            ap.error("--resume-run 当前只支持默认 structured_relay 路径")
+        store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+        try:
+            resume_checkpoint = build_checkpoint(store, args.resume_run)
+        finally:
+            store.close()
+        if resume_checkpoint is None:
+            ap.error(f"未找到 run_id: {args.resume_run}")
+        if not resume_checkpoint.can_resume:
+            ap.error(f"run 不可安全恢复: {resume_checkpoint.resume_reason}")
+        if resume_checkpoint.run.mode:
+            args.mode = resume_checkpoint.run.mode
+        if resume_checkpoint.run.scene:
+            args.scene = resume_checkpoint.run.scene
 
     os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
@@ -167,62 +380,112 @@ def main():
     print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
 
     executor_endpoints = _load_executor_endpoints(args.ap_config, args.ap_endpoints)
+    if args.mode == "real":
+        try:
+            _validate_real_endpoints(executor_endpoints)
+        except ValueError as exc:
+            ap.error(str(exc))
     if executor_endpoints:
         print(f"执行推送端点：{executor_endpoints}")
     else:
         print("执行推送：未配置（协商结果仅输出到控制台）")
 
     feeder = None
-    plot_proc = None
     logger = None
-    ready, proc = start_mock_server(args.server)
-    if not ready:
-        print("[错误] 状态服务器未就绪。请先 `python3 state_server/server.py --allow-mock`。")
-        sys.exit(1)
-    if not args.no_feeder:
-        feeder = MockTelemetryFeeder(args.server, scene, interval=args.plot_interval)
-        feeder.start()
-    else:
-        # 不持续喂曲线时也推一帧，确保状态服务器可读。
-        single = MockTelemetryFeeder(args.server, scene, interval=args.plot_interval)
-        single.start()
-        time.sleep(0.2)
-        single.stop()
-    time.sleep(2.0)  # 等首批遥测落库
+    # 强制常驻：核心服务由 serve.sh 起好；不在线则报错提示先 `serve.sh start`，不再临时起。
+    _require_state_server(args.server, args.mode)
+    _require_gateway(args.use_coordinator)
 
-    push_live = None
-    if not args.no_academic_plot:
-        plot_proc = start_academic_plot(
-            state_server=args.server,
-            window_seconds=args.plot_window,
-            interval_seconds=args.plot_interval,
+    if args.mode == "real":
+        print("[State] real 模式：不创建 MockTelemetryFeeder，等待三台 AP reporter 真值")
+    feeder = _start_telemetry(
+        args.mode,
+        args.no_feeder,
+        args.server,
+        scene,
+        args.plot_interval,
+    )
+    wait_s = args.state_wait if args.state_wait is not None else (90.0 if args.mode == "real" else 5.0)
+    try:
+        ready_state = _wait_state_ready(
+            args.server,
+            wait_s,
+            required_source="ap" if args.mode == "real" else None,
         )
+    except RuntimeError as exc:
+        print(f"[错误] {exc}")
+        if args.mode == "real":
+            print("请确认三台香蕉派 reporter 均在持续上报，且 source=ap。")
+        sys.exit(1)
+    if resume_checkpoint:
+        compatible, reason = _resume_state_compatible(
+            (resume_checkpoint.projection or {}).get("ap_state") or {},
+            ready_state,
+        )
+        if not compatible:
+            print(f"[错误] checkpoint 与当前网络状态不兼容：{reason}")
+            print("请启动新协商，不要恢复旧 run。")
+            sys.exit(1)
+
+    # Dashboard：强制复用常驻服务（serve.sh），事件经 HTTP /push 推给它。
+    push_live = None
     if not args.no_dashboard:
-        if _port_open(args.dashboard_port):
-            print(f"[Dashboard] 复用已在线服务 http://localhost:{args.dashboard_port}/（serve.sh 常驻）")
+        if not _port_open(args.dashboard_port):
+            print(f"[错误] Dashboard 未在线：http://localhost:{args.dashboard_port}/")
+            print("请先启动常驻服务：bash openclaw/serve.sh start")
+            sys.exit(1)
+        print(f"[Dashboard] 复用常驻服务 http://localhost:{args.dashboard_port}/")
+        push_live = _http_event_sink(f"http://localhost:{args.dashboard_port}/push")
+
+    # Academic plot：复用 serve.sh 常驻窗口；未在线则跳过（可选可视化，不阻塞）。
+    if not args.no_academic_plot:
+        if _plot_daemon_alive():
+            print("[Academic Plot] 复用常驻曲线窗口（serve.sh）")
         else:
-            push_live = start_dashboard(port=args.dashboard_port, state_server=args.server)
+            print("[Academic Plot] 常驻窗口未在线（如需曲线：bash openclaw/serve.sh start 已含 plot）")
 
     orch.STATE_SERVER = args.server
     t0 = time.time()
     if not args.use_coordinator:
         # 默认：进程内直接跑阶段接力，绕过 coordinator（省 ~60s 冷启动+2 次 LLM 调用）。
         # coordinator 对协商逻辑无贡献，发言顺序固定在 structured_relay 内，详见 README。
-        logger = SessionLogger(verbose=False, event_sink=push_live)
-        logger.session_start(model="openclaw-direct", scene=args.scene, ap_state=scene)
+        logger = SessionLogger(
+            session_id=args.resume_run or None,
+            verbose=False,
+            event_sink=push_live,
+            mode=args.mode,
+            resume=bool(resume_checkpoint),
+        )
+        if resume_checkpoint:
+            logger.session_resume({
+                "boundary": resume_checkpoint.boundary,
+                "projection_version": 1,
+            })
+        else:
+            logger.session_start(model="openclaw-direct", scene=args.scene, ap_state=scene)
+        resume_projection = None
+        if resume_checkpoint:
+            resume_projection = {
+                **(resume_checkpoint.projection or {}),
+                "boundary": resume_checkpoint.boundary,
+            }
         result = orch.structured_relay(
             max_turns=args.max_steps,
-            on_event=_print_event,
+            on_event=None,
+            on_event_start=_print_event_stream_start,
+            on_event_chunk=_print_event_stream_chunk,
             on_tool=_print_tool,
             logger=logger,
             observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
             observation_wait_seconds=args.observation_wait,
             executor_endpoints=executor_endpoints,
+            resume_projection=resume_projection,
         )
     else:
         _require_openclaw_config(require_qwen80b=args.require_qwen80b)
         result = _run_via_coordinator(
             args.max_steps,
+            mode=args.mode,
             scene=args.scene,
             server=args.server,
             observation_wait=args.observation_wait,
@@ -258,10 +521,7 @@ def main():
                 pass
     if feeder is not None:
         feeder.stop()
-    if plot_proc is not None:
-        plot_proc.terminate()
-    if proc is not None:
-        proc.terminate()
+    # state server / dashboard / plot 均为 serve.sh 常驻服务，不由本进程管理，退出不动它们。
 
 
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
@@ -285,6 +545,7 @@ def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, s
 def _run_via_coordinator(
     max_steps: int,
     *,
+    mode: str,
     scene: str,
     server: str,
     observation_wait: float,
@@ -297,6 +558,7 @@ def _run_via_coordinator(
     env["MULTIAP_STATE_SERVER"] = server
     env["MULTIAP_SESSION_LOG"] = "1"
     env["MULTIAP_SCENE"] = scene
+    env["MULTIAP_MODE"] = mode
     env["MULTIAP_MODEL"] = env.get("MULTIAP_MODEL", "openclaw")
     env["MULTIAP_OBSERVATION_WAIT"] = str(observation_wait)
     if executor_endpoints:

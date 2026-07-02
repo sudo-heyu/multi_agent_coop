@@ -1,5 +1,18 @@
 # 工具清单
 
+底层函数由 `openclaw/mcp/multiap_mcp.py` 包装为 MCP 工具供 AP 调用。默认阶段编排直接运行 Python `structured_relay`；`run_fast_negotiation` 仅供兼容 coordinator 路径使用。
+
+| MCP 工具 | 底层能力 |
+|---|---|
+| `get_latest_ap_states` | 状态服务器读取 + profile 过滤 |
+| `analyze_sr_interference` | `analyze_interference` |
+| `compute_sr_feasible_ranges` | `compute_feasible_ranges` |
+| `select_sr_concurrent_groups` | 部分并发组选择 |
+| `evaluate_sr_candidate` | `evaluate_candidate` / 并发组评估 |
+| `rank_sr_candidates` | `rank_candidates` |
+| `validate_edca_proposal` | EDCA 合法性、有效性和优先级检查 |
+| `run_fast_negotiation` | coordinator 兼容入口 |
+
 ## Co-SR 工具（`src/tools/sr.py`）
 
 | 函数 | 签名 | 返回 | 用途 |

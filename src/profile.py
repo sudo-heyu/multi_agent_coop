@@ -18,11 +18,13 @@ from .tools.edca import decode_state_edca
 
 VALID_TRAFFIC_PRIORITIES: tuple[str, ...] = ("high", "medium", "low")
 DEFAULT_SERVICE_NAME = "未声明业务"
+DEFAULT_BUSINESS_TYPE = "未声明业务类型"
 DEFAULT_TRAFFIC_PRIORITY = "medium"
 
 # ── 协商对 agent 可见的字段 ────────────────────────────────────────────────
 AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
     "service_name",          # 上报/场景声明的业务类型；缺省为未声明业务
+    "business_type",         # 面向业务语义的类型标签；缺省为未声明业务类型
     "traffic_priority",      # 上报/场景声明的业务优先级；缺省为 medium
     "tx_power_dbm",          # 发射功率（Co-SR 可调）
     "cwmin",                 # EDCA 竞争窗口下限（实际 CW 值，由上报指数解码而来）
@@ -61,6 +63,8 @@ def apply_profile(ap_states: dict) -> dict:
         filtered = decode_state_edca(filtered)  # cwmin/cwmax: 上报指数 → 实际 CW
         service_name = filtered.get("service_name") or DEFAULT_SERVICE_NAME
         filtered["service_name"] = str(service_name)
+        business_type = filtered.get("business_type") or DEFAULT_BUSINESS_TYPE
+        filtered["business_type"] = str(business_type)
         priority = str(filtered.get("traffic_priority") or DEFAULT_TRAFFIC_PRIORITY).lower()
         if priority not in VALID_TRAFFIC_PRIORITIES:
             priority = DEFAULT_TRAFFIC_PRIORITY

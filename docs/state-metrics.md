@@ -2,6 +2,14 @@
 
 各字段由香蕉派 AP 定期采集后 POST 到状态服务器，以下说明每个字段的含义、来源和在协商中的作用。
 
+## 业务语义
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `service_name` | string | 机器可读业务名；缺省为“未声明业务” |
+| `business_type` | string | 面向展示与协商的业务标签；缺省为“未声明业务类型” |
+| `traffic_priority` | string | `high` / `medium` / `low`；用于 EDCA 优先级单调性验算 |
+
 ## 可调参数（由协商决策修改）
 
 | 字段 | 类型 | 单位 | 含义 | 协商作用 |
@@ -26,6 +34,8 @@
 | 字段 | 类型 | 单位 | 含义 | 协商作用 |
 |---|---|---|---|---|
 | `throughput_mbps_iperf` | float | Mbps | STA 实际接收速率 | 协商效果最直接的体现；协商后应上升 |
+| `throughput_mbps_user` | float | Mbps | 用户业务流吞吐量 | 与 iperf 流分开观察业务收益 |
+| `ac_iperf` / `ac_user` | string | — | 两类流量使用的 EDCA AC | 展示流量分类与参数效果 |
 | `latency_ms` | float | ms | 端到端往返时延 | 协商触发判据之一；协商后应下降 |
 | `packet_loss_pct` | float | % | 数据包丢失比例 | 反映信道质量恶化程度；协商后应下降 |
 
@@ -38,7 +48,7 @@
 | `latency_ms` | >= 200 ms | 延迟超出可接受范围 |
 | `packet_loss_pct` | >= 1.0 % | 丢包率异常 |
 
-满足任意一项即可触发协商，实际触发逻辑由第八步实现。
+这些是参考阈值。现行触发逻辑由 `openclaw/mcp/proposal_utils.py` 的 `determine_strategy` 实现，并结合邻居 RSSI、业务优先级和 EDCA 状态选择 `co_sr`、`co_edca`、`joint` 或 `noop`。
 
 ## 字段采集命令参考（香蕉派）
 

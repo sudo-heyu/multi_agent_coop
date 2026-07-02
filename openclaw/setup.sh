@@ -80,8 +80,6 @@ if ppio_key:
 # 误触发整轮协商或越权下发（MCP 工具运行时名为 <server>__<tool>）。
 coordinator_only = [
     "multiap-tools__run_fast_negotiation",
-    "multiap-tools__validate_decision",
-    "multiap-tools__push_decision",
 ]
 
 def _agent_entry(a):

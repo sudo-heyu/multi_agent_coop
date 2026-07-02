@@ -653,6 +653,21 @@ def metrics():
         return jsonify({}), 503
 
 
+@app.route("/push", methods=["POST"])
+def push():
+    """接收外部进程（run_openclaw）推来的事件 JSON，转发给实时订阅者。
+
+    让常驻 dashboard（由 serve.sh 起的独立进程）也能收到 run_openclaw 的
+    SessionLogger 事件流——run_openclaw 不再在本进程内起 dashboard 线程，
+    而是把 event_sink 指向此端点，事件经 HTTP 进来再由 push_event 广播。
+    """
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return jsonify({"ok": False, "error": "body must be a JSON object"}), 400
+    push_event(d)
+    return jsonify({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

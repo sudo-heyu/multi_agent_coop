@@ -2,7 +2,7 @@
 工具调用的富文本控制台摘要 formatter。
 
 从原 src/orchestrator.py 模块级 helper 原样迁移而来（逻辑零改写），
-供 run_openclaw.py 的 --direct-relay 路径把 AP 的 MCP 工具调用渲染成单行/多行摘要。
+供 run_openclaw.py 的进程内阶段接力（structured_relay）把 AP 的 MCP 工具调用渲染成单行/多行摘要。
 复用保留为基础设施的 src/console_style.py。
 """
 from __future__ import annotations
@@ -96,9 +96,10 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             neighbors = state.get("neighbor_rssi_dbm") or {}
             nbr_text  = " ".join(f"{ap}:{int(rssi)}" for ap, rssi in neighbors.items()) or "—"
             svc = state.get("service_name", "—")
+            biz = state.get("business_type", "—")
             prio = state.get("traffic_priority", "—")
             lines.append(
-                f"{ap_label(ap_id)} {dim(svc + '/' + prio)}"
+                f"{ap_label(ap_id)} {dim(svc + '/' + biz + '/' + prio)}"
                 f" TX={_fmt_num(state.get('tx_power_dbm'), 'dBm')}"
                 f" STA={_fmt_num(state.get('sta_rssi_dbm'), 'dBm')}"
                 f" tput={_fmt_num(state.get('throughput_mbps_user'), 'Mbps')}"

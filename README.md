@@ -1,8 +1,8 @@
-# Multi-AP 协商系统（纯 OpenClaw 架构）
+# Multi-AP 协商系统（OpenClaw Agent + 确定性 Python 编排）
 
 多台 Wi-Fi AP 通过 LLM Agent 自主协商，协调发射功率（Co-SR）和 MAC 退避参数（Co-EDCA），提升整体网络性能。
 
-**架构**：托管层与编排入口均由 **OpenClaw** 运行——`coordinator / ap1 / ap2 / ap3` 是各自独立 workspace/session 的 OpenClaw agent；确定性计算/验算/状态/下发逻辑以 **MCP 工具**暴露给 agent 调用。
+**架构**：`ap1 / ap2 / ap3` 是由 OpenClaw 托管的独立 agent；默认入口是 Python 启动器 `run_openclaw.py`，它在进程内调用 `structured_relay` 完成确定性的阶段轮转。Co-SR/Co-EDCA 计算工具经 MCP 暴露给 AP，最终 Validator、状态读取和执行下发仍是确定性 Python。`coordinator` agent 仅保留为 `--use-coordinator` 兼容路径，不参与默认运行。
 
 **拓扑**：DGX Spark（运行 OpenClaw + 模型 provider + 状态服务器）+ 3 台香蕉派 AP。
 
@@ -26,8 +26,11 @@ MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash 
 ```
 
 **2. Mock 模式运行**（无需真实 AP，`--scene` 可选 `sr` / `edca` / `joint`）
+
+> 先 `bash openclaw/serve.sh start` 拉起常驻服务（state server + gateway + Dashboard + 曲线窗），再跑 `run_openclaw.py`——默认路径强制复用它们，不在线会报错提示先 `serve.sh start`。详见下方「后台常驻服务」。
+
 ```bash
-# 演示：弹出学术曲线 + Dashboard，协商后曲线体现改善
+# 演示：复用常驻曲线窗 + Dashboard，协商后曲线体现改善
 .venv/bin/python run_openclaw.py --scene joint
 
 # 无头快速验证（本次三场景实测即此）
@@ -35,7 +38,7 @@ MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash 
 ```
 > ⚠️ **不要加 `--no-feeder`** —— 它只推一帧，长协商时状态会过期（`StateStaleError`）导致失败；需连续喂数器保持状态新鲜。
 
-> 🚦 **coordinator 已默认停用（2026-06）**：`run_openclaw.py` 现在默认**进程内直接跑阶段接力**（即原 `--direct-relay`），
+> 🚦 **coordinator 已默认停用（2026-06）**：`run_openclaw.py` 现在默认**进程内直接跑阶段接力**（`structured_relay`），
 > 不再启动 coordinator LLM agent。原因：coordinator 对协商**零功能贡献**——发言顺序（广播 ap1→ap2→ap3、
 > ap1 提案、ap2/ap3 投票、ap1 收口决策、反对即接管）全部固定在 `orchestration.py` 的 `structured_relay` 里，
 > coordinator 只是用 `--local` 冷启动一个 LLM 去调一次 `run_fast_negotiation` 并回显结果，平白多出
@@ -53,74 +56,67 @@ OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
 
 **4. 真实 AP 模式**
 ```bash
-.venv/bin/python state_server/server.py                                               # ① 状态服务器（启动一次）
-.venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001    # ② 各香蕉派上报（ap1/ap2/ap3）
-.venv/bin/python run_openclaw.py --server http://localhost:5001 \
+# DGX：以真实数据策略启动常驻服务（state server 拒收 mock/generated）
+MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
+
+# 各香蕉派：启动 reporter 和 executor（ap-id/地址按机器修改）
+.venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001
+.venv/bin/python state_server/executor.py --ap-id ap1 --port 5002
+
+# DGX：触发协商并明确配置执行端点
+.venv/bin/python run_openclaw.py --mode real --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
 #  或 --ap-config ap_endpoints.json（须显式指定；不再自动读取，避免 mock 演示误推到不可达 AP 而 8s 超时）
 ```
 
+`--mode real` 不创建 `MockTelemetryFeeder`，会等待 ap1/ap2/ap3 均有未过期的 `source=ap` 状态，并强制要求三个 executor 端点。若 state server 允许 mock，启动器会拒绝继续并提示按真实模式重启服务。
+
 **测试**
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 确定性套件 16/16
+.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 48/48
 ```
 
-常用开关：`--scene {sr,edca,joint}` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。`--direct-relay` 保留兼容但已是默认，无需再加。
+常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
 `run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
 
-### 后台常驻服务（加速冷启动）
+### 后台常驻服务（一条命令全开，协商零临时启动）
 
-OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server。让协商时的 AP 回合改走**常驻 gateway**
-即可省掉这部分开销。OpenClaw 已为 `multiap` profile 注册了 launchd 网关服务 `ai.openclaw.multiap`
-（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。`serve.sh` 把它与 state server
-绑成一条命令：
+OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server；state server / Dashboard / 曲线窗若每次临时起也有启动开销。`serve.sh` 把**所有可常驻的服务绑成一条命令**，`run_openclaw.py` 强制复用它们——协商时零临时服务启动。OpenClaw 已为 `multiap` profile 注册 launchd 网关服务 `ai.openclaw.multiap`（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。
 
 ```bash
-bash openclaw/serve.sh start     # 起 state server(5001) + Dashboard(5050) + 确保 multiap gateway(18789) 在线
-bash openclaw/serve.sh status    # 查看三者状态
-bash openclaw/serve.sh stop      # 停 state server + Dashboard；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
-bash openclaw/serve.sh restart
+MULTIAP_STATE_MODE=mock bash openclaw/serve.sh start   # mock，state 接受生成数据（默认）
+MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart # real，state 拒收生成数据
+bash openclaw/serve.sh status    # 查看四者状态
+bash openclaw/serve.sh stop      # 停曲线/State/Dashboard；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
+bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 gateway（否则缓存旧 MCP 连接，AP 调工具报 "tool isn't available"）
 ```
 
-- gateway 端口取自 profile 配置 `gateway.port`（默认 18789，与 launchd 服务一致）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。
-- ⚠️ 改过 `setup.sh` / MCP 注册 / profile 配置后，常驻 gateway 仍缓存旧 MCP 连接（会出现 AP 调工具时 "tool isn't available"）；用 `bash openclaw/serve.sh restart` 重载 gateway 即可。
-- 起了 gateway 后，直接照常 `run_openclaw.py` 跑场景即可：`orchestration.drive_ap` 探测到 gateway 在线就**自动**走它（AP 回合免冷启动），离线则回退 `--local`，无需额外参数。默认路径不经 coordinator，入口在 `run_openclaw.py` 进程内；仅 `--use-coordinator` 时 coordinator 入口走 `--local`（避免 MCP 实例重入死锁）。
-- **提速预期**：主要省掉每回合的 runtime/provider/插件冷启动与 MCP 反复 spawn；**不会缩短 PPIO 推理本身**（每回合 ~13s 的模型时间不变），整体收益取决于冷启动占比。
-- **Dashboard（5050）也由 `serve.sh` 常驻**：起了之后 `run_openclaw.py` 会检测到并**复用**它，不再每轮自起 Flask（终端不再有 `Serving Flask app` 噪声）。临时不想要可视化仍可 `--no-dashboard`。
-- `serve.sh` 起的是裸 state server，数据新鲜度由喂数器（mock：`run_openclaw.py` 的连续喂数器）或香蕉派 reporter（真实）维持。
+- **先 `serve.sh start` 再跑 `run_openclaw.py`**：默认路径（`structured_relay`）启动时强制检测 state server / gateway / Dashboard 在线，任一不在线即报错提示先 `serve.sh start`，不再临时起兜底——保证协商走热 gateway、Dashboard 实时可见。`--no-dashboard` 可主动跳过 Dashboard；`--use-coordinator` 路径走 `--local`，不检测 gateway。
+- gateway 端口取自 profile 配置 `gateway.port`（默认 18789）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。`drive_ap` 运行时若 gateway 连接失败会回退 `--local`（保底）。
+- **学术曲线窗（matplotlib）也常驻**：`serve.sh start` 起一个常驻窗口，`run_openclaw.py` 检测到即复用（省每次 matplotlib 冷启动 ~2-3s），未在线则跳过提示。无桌面/SSH 环境自动跳过；`--no-academic-plot` 可主动关。
+- **Dashboard 实时对话流**：常驻 Dashboard 是独立进程，`run_openclaw.py` 把会话事件经 HTTP `POST /push` 推给它，再由 SSE 广播到浏览器——不再依赖进程内 `push_event`，常驻 Dashboard 也能看到实时对话/投票/决策（终端不再有 `Serving Flask app` 噪声）。
+- `MULTIAP_STATE_MODE=mock` 时 state server 带 `--allow-mock`；`real` 时不带。数据新鲜度分别由 feeder 或香蕉派 reporter 维持。
+- **提速预期**：省掉每回合 runtime/provider/MCP 冷启动 + 各服务临时启动；**不缩短模型推理本身**（每回合 ~13s 不变），整体收益取决于冷启动占比。
 
 ---
 
 ## 架构总览
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ OpenClaw（隔离 profile: multiap，~/.openclaw-multiap/）        │
-│                                                              │
-│  托管层 agents：ap1 / ap2 / ap3（coordinator 默认停用）       │
-│    模型：PPIO qwen80binstruct（默认）/ ollama qwen3:14b（回退）│
-│                                                              │
-│  入口（默认）：run_openclaw.py 进程内直接调 structured_relay  │
-│    └─ 固定顺序驱动 ap1/ap2/ap3，免 coordinator 冷启动开销      │
-│  coordinator（LLM，已停用，--use-coordinator 回退）           │
-│    └─ 旧路径：调 MCP run_fast_negotiation 一次性推进协议       │
-│                                                              │
-│  MCP 工具服务 multiap-tools（openclaw/mcp/multiap_mcp.py）：   │
-│    get_latest_ap_states / analyze_sr_interference /          │
-│    compute_sr_feasible_ranges / select_sr_concurrent_groups /│
-│    evaluate_sr_candidate / rank_sr_candidates /              │
-│    validate_edca_proposal（AP 可调用）                        │
-│    run_fast_negotiation / validate_decision / push_decision  │
-│      （仅 coordinator，AP 经 per-agent tools.deny 禁用）       │
-└──────────────────────────────────────────────────────────────┘
-        │ MCP stdio                       │ openclaw agent --local
-        ▼                                 ▼
-  src/tools{sr,edca} · validator ·   state_server（Flask）
-  profile · state_client            ← reporter / mock 喂数器 / 预设场景
+```text
+run_openclaw.py（默认入口）
+  └─ structured_relay（Python 确定性阶段机制）
+       ├─ OpenClaw gateway → ap1 / ap2 / ap3
+       │                         └─ multiap-tools MCP → src/tools + state server
+       ├─ src/validator.py
+       ├─ SessionLogger → JSONL / Dashboard
+       └─ 可选 executor /apply
+
+--use-coordinator 兼容入口
+  └─ coordinator agent → run_fast_negotiation MCP → 同一个 structured_relay
 ```
 
 编排「机制层」（阶段指令、驱动 AP、计票、反提案接管、Validator 重试与终止）实现在
-`openclaw/mcp/orchestration.py` 的 `structured_relay`，由 `run_fast_negotiation` 工具内部调用。
+`openclaw/mcp/orchestration.py` 的 `structured_relay`。默认由 `run_openclaw.py` 直接调用；仅兼容 coordinator 路径通过 MCP 工具 `run_fast_negotiation` 间接调用。
 
 ---
 
@@ -140,7 +136,7 @@ bash openclaw/serve.sh restart
 ## 协商流程（四阶段，由 `structured_relay` 编排）
 
 ```
-阶段 1 广播   ap1→ap2→ap3 依次播报自身实测数据（只报己方数据 + 本机扫描的邻居 RSSI）
+阶段 1 广播   ap1/ap2/ap3 并发生成回复，再按 ap1→ap2→ap3 顺序记录和展示
     ↓
 阶段 2 提案   首轮固定由 ap1 发起、自主选路；提案前必须 get_latest_ap_states，
               Co-SR 先 analyze_sr_interference→select_sr_concurrent_groups，提交前自检
@@ -150,7 +146,7 @@ bash openclaw/serve.sh restart
     ↓
 （如未通过）  Validator 未过则写回原因，从 ap1 重提案，最多 3 轮
     ↓
-阶段 4 决策   提案方输出最终 JSON → 确定性 Validator 验算 → 通过则下发执行
+阶段 4 决策   系统直接采用已获通过的提案 JSON（不再调用 LLM）→ Validator 验算 → 通过则下发
 ```
 
 终止保证：重投上限 `MAX_VOTE_ROUNDS=3`、验证重试 3、单轮最大发言 30，不收敛时干净退出。
@@ -167,7 +163,7 @@ bash openclaw/serve.sh restart
 | `rank_sr_candidates` | Co-SR 提案 | 对多个候选功率方案按目标排序 |
 | `validate_edca_proposal` | 提案 / 投票 | 验算 EDCA 参数合法性、优先级单调性与拥塞匹配度 |
 
-coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotiation`、`validate_decision`、`push_decision`。
+coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotiation`。
 工具实现见 `openclaw/mcp/multiap_mcp.py`，复用 `src/tools/`、`src/validator.py` 等保留的确定性 Python。
 
 ---
@@ -176,7 +172,7 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 ```
 .
-├── run_openclaw.py               # 薄启动器：准备场景 → 拉起服务器/Dashboard/曲线 → 进程内直跑 structured_relay（coordinator 默认停用，--use-coordinator 回退）
+├── run_openclaw.py               # 薄启动器：准备场景 → 复用 serve.sh 常驻服务（state/gateway/Dashboard/曲线）→ 进程内直跑 structured_relay（coordinator 默认停用，--use-coordinator 回退）
 ├── openclaw/
 │   ├── setup.sh                  # 配置隔离 profile multiap（providers + 4 agent + 工具限制 + MCP 注册）
 │   ├── scenes.py                 # 三套 mock 场景 + 状态服务器/Dashboard/学术曲线启动器
@@ -184,7 +180,7 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 │   │   ├── multiap_mcp.py        # stdio MCP 工具服务（暴露计算/验算/状态/编排/下发工具）
 │   │   ├── orchestration.py      # 编排机制层：四阶段 structured_relay、驱动 AP、计票、反提案
 │   │   ├── proposal_utils.py     # 提案/JSON/策略推断纯函数
-│   │   └── tool_console.py       # 工具调用富文本 formatter（--direct-relay 展示）
+│   │   └── tool_console.py       # 工具调用富文本 formatter（阶段接力工具展示）
 │   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS.md
 ├── state_server/
 │   ├── server.py                 # Flask 状态服务器（AP 上报 / MCP 工具读取）
@@ -200,7 +196,8 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 │   ├── logger.py                 # 结构化 JSONL 日志
 │   └── console_style.py          # 彩色终端输出
 ├── dashboard/                    # Flask + SSE 实时协商对话 Dashboard
-├── logs/                         # 每次运行生成一个 session_*.jsonl
+├── memory_admin.py               # 本地 SQLite 事件/恢复 checkpoint 查询
+├── logs/                         # JSONL + agent_memory.sqlite3 持久事件存储
 └── docs/                         # 设计文档（docs/openclaw/ 为 OpenClaw 自身参考文档）
 ```
 
@@ -211,6 +208,16 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 每次运行在 `logs/` 生成一个 JSONL 文件，每行一个事件
 （`session_start` / `phase_start` / `agent_speak` / `tool_call` / `vote` / `round_result` /
 `final_decision` / `validation_result` / `executor_apply` / `session_end`），供 Dashboard 可视化或离线分析。
+
+同一事件还会双写到 `logs/agent_memory.sqlite3`，按 run 保存有序事件和状态快照。可用
+`.venv/bin/python memory_admin.py incomplete` 查看异常中断运行，或用
+`.venv/bin/python memory_admin.py show <run_id>` 回放。executor 下发已使用持久化 action journal 和幂等 key：成功动作不会重复发送，明确失败最多尝试两次，网络不确定结果会阻塞恢复，必须核对 AP `/status` 后执行 `memory_admin.py resolve-action`。详见 `docs/memory-architecture.md`。
+
+异常退出且 checkpoint 安全时，可执行 `.venv/bin/python run_openclaw.py --resume-run <run_id>`。恢复会跳过已完成的广播、提案和投票，只继续未完成边界；若 AP 参数、业务优先级或邻居拓扑已变化，启动器拒绝恢复并要求创建新协商。
+
+长会话使用持久化 Session Memory：早期 transcript 被确定性压缩为带 speaker/kind/turn 的摘要，最近发言保留原文，每个 AP 回合默认限制为 14000 字符。可通过 `--context-budget-chars` 和 `--context-recent-turns` 调整；原始事件和完整 transcript 仍保存在 SQLite/JSONL，不因上下文压缩丢失。
+
+每次 run 结束会自动生成 Episodic Memory，保存初始环境、领域特征、决策、Validator、执行结果和观测指标。下一次同拓扑协商会检索最多 3 个高质量相似案例注入提案提示，但历史参数不能绕过最新状态读取和工具验算。可用 `memory_admin.py episodes` 和 `memory_admin.py similar <run_id>` 查询。
 
 ---
 

@@ -36,8 +36,6 @@ from mcp.server.fastmcp import FastMCP
 
 from src.tools import sr as _sr
 from src.tools import edca as _edca
-from src.tools.edca import encode_params_edca
-from src.validator import validate_decision as _validate_decision
 from src.profile import apply_profile, agent_view
 from src.state_client import get_all_states, StateStaleError
 import orchestration as _orch
@@ -240,7 +238,10 @@ def run_fast_negotiation(
         logger = None
         if os.environ.get("MULTIAP_SESSION_LOG") == "1":
             from src.logger import SessionLogger
-            logger = SessionLogger(verbose=False)
+            logger = SessionLogger(
+                verbose=False,
+                mode=os.environ.get("MULTIAP_MODE"),
+            )
             logger.session_start(
                 model=os.environ.get("MULTIAP_MODEL", "openclaw"),
                 scene=os.environ.get("MULTIAP_SCENE", "openclaw"),
@@ -260,38 +261,6 @@ def run_fast_negotiation(
             result["log_path"] = str(logger.log_path)
             result["state_trace_path"] = str(logger.state_trace_path)
         return result
-    return _guard(_run)
-
-
-@mcp.tool()
-def validate_decision(decision: dict, strategy: str) -> dict:
-    """确定性 Validator：对最终决策 JSON 做下发验收（参数范围 + 整数功率约束）。
-    strategy 取值 co_sr / co_edca / joint。返回 approved 与逐 AP 校验明细。"""
-    def _run() -> dict:
-        state = _full_state()
-        return _validate_decision(state, decision, strategy,
-                                  observed_state=state, observed_is_real=False)
-    return _guard(_run)
-
-
-@mcp.tool()
-def push_decision(decision: dict, strategy: str, endpoints: dict) -> dict:
-    """把最终决策并发推送到各香蕉派执行服务。
-    endpoints 形如 {"ap1":"http://192.168.1.1:5002", ...}；EDCA 发送前转为指数 n。"""
-    def _run() -> dict:
-        import requests
-        out: dict = {}
-        for ap_id, url in (endpoints or {}).items():
-            params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
-            params = encode_params_edca(params)
-            payload = {"strategy": strategy, "ap_id": ap_id, "params": params}
-            try:
-                r = requests.post(f"{url.rstrip('/')}/apply", json=payload, timeout=8)
-                out[ap_id] = {"ok": r.status_code == 200,
-                              "response": (r.text or "")[:300]}
-            except Exception as exc:  # noqa: BLE001
-                out[ap_id] = {"ok": False, "response": str(exc)}
-        return {"results": out}
     return _guard(_run)
 
 

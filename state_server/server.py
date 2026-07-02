@@ -19,6 +19,7 @@ STALE_THRESHOLD_SECONDS = 60
 HISTORY_MAXLEN = 120  # 保留最近 120 条，约 20 分钟（10s/条）
 GENERATED_SOURCES = {"mock", "generated", "synthetic", "simulated", "simulation", "random"}
 ALLOW_MOCK_SOURCE = False
+DEFAULT_BUSINESS_TYPE = "未声明业务类型"
 
 # 内存存储：{ap_id: {"data": {...}, "timestamp": datetime}}
 _store: dict = {}
@@ -117,7 +118,7 @@ _INDEX_HTML = """
   <table>
     <tr>
       <th>AP</th><th>状态</th><th>数据age(s)</th>
-      <th>业务优先级</th>
+      <th>业务类型</th><th>业务优先级</th>
       <th>TX Power(dBm)</th><th>CWmin</th><th>CWmax</th><th>AIFSN</th>
       <th>信道利用率</th><th>重传率</th><th>STA RSSI(dBm)</th><th>噪声底(dBm)</th>
       <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>丢包(%)</th>
@@ -130,6 +131,7 @@ _INDEX_HTML = """
       {% if e.data %}
       <td class="{{ 'stale' if e.stale else 'ok' }}">{{ 'STALE' if e.stale else 'OK' }}</td>
       <td>{{ e.age_seconds }}</td>
+      <td>{{ e.data.get('business_type', '未声明业务类型') }}</td>
       {% set prio = e.data.get('traffic_priority', '') %}
       {% if prio == 'high' %}
         <td style="color:#e74c3c;font-weight:bold">high ▲</td>
@@ -155,7 +157,7 @@ _INDEX_HTML = """
       <td style="font-size:11px">{{ e.timestamp[:19] if e.timestamp else '—' }}</td>
       {% else %}
       <td class="stale">NO DATA</td>
-      <td class="na" colspan="17">尚未收到上报</td>
+      <td class="na" colspan="18">尚未收到上报</td>
       {% endif %}
     </tr>
     {% endfor %}
@@ -400,11 +402,13 @@ def post_state():
         return jsonify({"error": "timestamp must be ISO 8601"}), 400
 
     data = {k: v for k, v in body.items() if k not in ("ap_id", "timestamp")}
+    data.setdefault("business_type", DEFAULT_BUSINESS_TYPE)
 
     with _lock:
         _store[ap_id] = {"data": data, "timestamp": ts}
         _history[ap_id].append({
             "t": ts.isoformat(),
+            "business_type": data.get("business_type"),
             "throughput_mbps_iperf": data.get("throughput_mbps_iperf"),
             "throughput_mbps_user":  data.get("throughput_mbps_user"),
             "throughput_mbps_total": _throughput_total(data),

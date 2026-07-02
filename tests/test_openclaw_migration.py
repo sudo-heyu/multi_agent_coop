@@ -1,6 +1,9 @@
 import copy
 import json
 import os
+import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -9,8 +12,8 @@ from openclaw.mcp import orchestration as orch
 
 
 EDCA_DECISION = {
-    "ap1": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
-    "ap2": {"CWmin": 7, "CWmax": 31, "AIFSN": 3},
+    "ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 6},
+    "ap2": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
     "ap3": {"CWmin": 15, "CWmax": 63, "AIFSN": 6},
 }
 
@@ -54,6 +57,34 @@ class FakeOpenClawAP:
 
 
 class OpenClawMigrationTests(unittest.TestCase):
+    def test_business_type_defaults_and_mock_scene_values(self):
+        profiled = orch.apply_profile({"apx": {}})
+
+        self.assertEqual(profiled["apx"]["business_type"], "未声明业务类型")
+        for scene in MOCK_SCENES.values():
+            self.assertEqual(scene["ap1"]["business_type"], "后台下载")
+            self.assertEqual(scene["ap2"]["business_type"], "直播")
+            self.assertEqual(scene["ap3"]["business_type"], "后台下载")
+
+    def test_edca_scene_prioritizes_ap2_live_stream(self):
+        scene = MOCK_SCENES["edca"]
+
+        self.assertEqual(scene["ap1"]["traffic_priority"], "low")
+        self.assertEqual(scene["ap2"]["traffic_priority"], "high")
+        self.assertEqual(scene["ap3"]["traffic_priority"], "low")
+        self.assertEqual(
+            {(s["cwmin"], s["cwmax"], s["aifsn"]) for s in scene.values()},
+            {(3, 4, 2)},
+        )
+        self.assertLess(
+            EDCA_DECISION["ap2"]["CWmin"],
+            EDCA_DECISION["ap1"]["CWmin"],
+        )
+        self.assertLess(
+            EDCA_DECISION["ap2"]["AIFSN"],
+            EDCA_DECISION["ap3"]["AIFSN"],
+        )
+
     def test_noop_state_stops_after_broadcast(self):
         state = copy.deepcopy(MOCK_SCENES["edca"])
         for ap_state in state.values():
@@ -70,6 +101,310 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "noop")
         self.assertEqual(result["strategy"], "noop")
         self.assertEqual(len(fake.calls), 3)
+
+    def test_structured_relay_streams_agent_chunks(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        for ap_state in state.values():
+            ap_state["traffic_priority"] = "medium"
+            ap_state["neighbor_rssi_dbm"] = {
+                ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
+            }
+        events = []
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            text = f"{ap_id.upper()} 流式广播。"
+            if on_text_delta is not None:
+                on_text_delta(text)
+            return text
+
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake_drive):
+            result = orch.structured_relay(
+                on_event_start=lambda role, ap: events.append(("start", role, ap)),
+                on_event_chunk=lambda role, ap, text: events.append(("chunk", role, ap, text)),
+            )
+
+        self.assertEqual(result["outcome"], "noop")
+        self.assertEqual(len([e for e in events if e[0] == "start"]), 3)
+        self.assertEqual(len([e for e in events if e[0] == "chunk"]), 3)
+        self.assertTrue(all(e[3].endswith("流式广播。") for e in events if e[0] == "chunk"))
+        self.assertEqual(
+            [e[2] for e in events if e[0] == "start"],
+            ["ap1", "ap2", "ap3"],
+        )
+
+    def test_structured_relay_streaming_broadcast_runs_in_order(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        for ap_state in state.values():
+            ap_state["traffic_priority"] = "medium"
+            ap_state["neighbor_rssi_dbm"] = {
+                ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
+            }
+        calls = []
+        events = []
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            calls.append(ap_id)
+            if on_text_delta is not None:
+                on_text_delta(f"{ap_id.upper()} 广播")
+            return f"{ap_id.upper()} 广播"
+
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake_drive):
+            result = orch.structured_relay(
+                on_event_start=lambda role, ap: events.append(("start", ap)),
+                on_event_chunk=lambda role, ap, text: events.append(("chunk", ap, text)),
+        )
+
+        self.assertEqual(result["outcome"], "noop")
+        self.assertCountEqual(calls, ["ap1", "ap2", "ap3"])
+        self.assertEqual([e[1] for e in events if e[0] == "start"], ["ap1", "ap2", "ap3"])
+
+    def test_raw_stream_tail_emits_text_delta_without_session_duplicate(self):
+        class FakeProc:
+            def __init__(self):
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return None if self.polls < 4 else 0
+
+        sid = "ap1-rawstream-test"
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {"OPENCLAW_HOME": td}):
+            profile_dir = os.path.join(td, f".openclaw-{orch.PROFILE}")
+            raw_path = os.path.join(profile_dir, "logs", "raw-stream.jsonl")
+            session_dir = os.path.join(profile_dir, "agents", "ap1", "sessions")
+            session_path = os.path.join(session_dir, f"{sid}.jsonl")
+            trajectory_path = os.path.join(session_dir, f"{sid}.trajectory.jsonl")
+            os.makedirs(os.path.dirname(raw_path), exist_ok=True)
+            os.makedirs(session_dir, exist_ok=True)
+
+            def writer():
+                time.sleep(0.05)
+                with open(trajectory_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "type": "session.started",
+                        "sessionId": sid,
+                        "runId": "run-1",
+                    }, ensure_ascii=False) + "\n")
+                with open(raw_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "event": "assistant_text_stream",
+                        "runId": "other-run",
+                        "evtType": "text_delta",
+                        "delta": "忽略",
+                    }, ensure_ascii=False) + "\n")
+                    fh.write(json.dumps({
+                        "event": "assistant_text_stream",
+                        "runId": "run-1",
+                        "evtType": "text_delta",
+                        "delta": "流",
+                    }, ensure_ascii=False) + "\n")
+                    fh.write(json.dumps({
+                        "event": "assistant_text_stream",
+                        "runId": "run-1",
+                        "evtType": "text_delta",
+                        "delta": "式",
+                    }, ensure_ascii=False) + "\n")
+                time.sleep(0.05)
+                with open(session_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "timestamp": 1000,
+                            "content": [{"type": "text", "text": "完整文本不应重复"}],
+                        },
+                    }, ensure_ascii=False) + "\n")
+
+            chunks = []
+            t = threading.Thread(target=writer)
+            t.start()
+            try:
+                orch._stream_agent_session(
+                    "ap1",
+                    sid,
+                    FakeProc(),
+                    chunks.append,
+                    {"OPENCLAW_RAW_STREAM_PATH": raw_path},
+                )
+            finally:
+                t.join(timeout=2)
+
+        self.assertEqual(chunks, ["流", "式"])
+
+    def test_raw_stream_tail_does_not_replay_after_session_text(self):
+        class FakeProc:
+            def __init__(self):
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return None if self.polls < 5 else 0
+
+        sid = "ap1-session-first-test"
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {"OPENCLAW_HOME": td}):
+            profile_dir = os.path.join(td, f".openclaw-{orch.PROFILE}")
+            raw_path = os.path.join(profile_dir, "logs", "raw-stream.jsonl")
+            session_dir = os.path.join(profile_dir, "agents", "ap1", "sessions")
+            session_path = os.path.join(session_dir, f"{sid}.jsonl")
+            trajectory_path = os.path.join(session_dir, f"{sid}.trajectory.jsonl")
+            os.makedirs(os.path.dirname(raw_path), exist_ok=True)
+            os.makedirs(session_dir, exist_ok=True)
+
+            def writer():
+                time.sleep(0.05)
+                with open(session_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "type": "message",
+                        "message": {
+                            "role": "assistant",
+                            "timestamp": 1000,
+                            "content": [{"type": "text", "text": "完整"}],
+                        },
+                    }, ensure_ascii=False) + "\n")
+                time.sleep(0.05)
+                with open(trajectory_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "type": "session.started",
+                        "sessionId": sid,
+                        "runId": "run-2",
+                    }, ensure_ascii=False) + "\n")
+                with open(raw_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "event": "assistant_text_stream",
+                        "runId": "run-2",
+                        "evtType": "text_delta",
+                        "delta": "完整",
+                    }, ensure_ascii=False) + "\n")
+
+            chunks = []
+            t = threading.Thread(target=writer)
+            t.start()
+            try:
+                orch._stream_agent_session(
+                    "ap1",
+                    sid,
+                    FakeProc(),
+                    chunks.append,
+                    {"OPENCLAW_RAW_STREAM_PATH": raw_path},
+                )
+            finally:
+                t.join(timeout=2)
+
+        self.assertEqual(chunks, ["完整"])
+
+    def test_non_broadcast_stream_start_is_emitted_before_drive_ap(self):
+        state = copy.deepcopy(MOCK_SCENES["sr"])
+        events = []
+        decision = decision_for("sr")
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            if "所有 AP 已同意" in instruction:
+                role = "decision"
+                response = "```json\n" + json.dumps(decision, ensure_ascii=False) + "\n```\n协商结束"
+            elif "当前提案" in instruction or "最新提案参数" in instruction:
+                role = "voter"
+                response = '同意。\n```json\n{"agreed": true, "reason": "验算通过"}\n```'
+            elif "提案方" in instruction:
+                role = "proposer"
+                response = "建议采用当前可行方案。\n```json\n" + json.dumps(decision, ensure_ascii=False) + "\n```"
+            else:
+                role = "broadcast"
+                response = f"{ap_id.upper()} 广播"
+            events.append(("drive", role, ap_id))
+            return response
+
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake_drive):
+            result = orch.structured_relay(
+                on_event_start=lambda role, ap: events.append(("start", role, ap)),
+                on_event_chunk=lambda role, ap, text: events.append(("chunk", ap, text)),
+            )
+
+        self.assertEqual(result["outcome"], "success")
+        proposer_start = events.index(("start", "proposer", "ap1"))
+        proposer_drive = events.index(("drive", "proposer", "ap1"))
+        self.assertLess(proposer_start, proposer_drive)
+
+    def test_final_decision_skips_llm_turn(self):
+        state = copy.deepcopy(MOCK_SCENES["sr"])
+        decision = decision_for("sr")
+        calls = []
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            calls.append(instruction)
+            if "所有 AP 已同意" in instruction:
+                self.fail("final decision should be emitted deterministically")
+            if "当前提案" in instruction or "最新提案参数" in instruction:
+                return '同意。\n```json\n{"agreed": true, "reason": "验算通过"}\n```'
+            if "提案方" in instruction:
+                return "建议采用当前可行方案。\n```json\n" + json.dumps(decision, ensure_ascii=False) + "\n```"
+            return f"{ap_id.upper()} 广播"
+
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake_drive):
+            result = orch.structured_relay(max_turns=8)
+
+        self.assertEqual(result["outcome"], "success")
+        self.assertEqual(result["decision"], decision)
+        self.assertFalse(any("所有 AP 已同意" in c for c in calls))
+
+    def test_resume_projection_skips_completed_broadcast_proposal_and_vote(self):
+        state = orch.apply_profile(copy.deepcopy(MOCK_SCENES["edca"]))
+        decision = copy.deepcopy(EDCA_DECISION)
+        calls = []
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            calls.append(ap_id)
+            return '同意。\n```json\n{"agreed": true, "reason": "恢复后验算通过"}\n```'
+
+        projection = {
+            "boundary": "vote_progress",
+            "ap_state": state,
+            "transcript": [
+                {"speaker": "AP1", "content": "广播"},
+                {"speaker": "AP2", "content": "广播"},
+                {"speaker": "AP3", "content": "广播"},
+                {"speaker": "AP1", "content": "已提出持久化提案"},
+                {"speaker": "AP2", "content": "同意"},
+            ],
+            "proposer": "ap1",
+            "proposal": decision,
+            "strategy": "co_edca",
+            "proposal_num": 1,
+            "retry": 0,
+            "agree": ["ap2"],
+            "vote_cursor": 2,
+        }
+
+        with patch.object(orch, "drive_ap", fake_drive):
+            result = orch.structured_relay(resume_projection=projection)
+
+        self.assertEqual(result["outcome"], "success")
+        self.assertEqual(result["decision"], decision)
+        self.assertEqual(calls, ["ap3"])
+
+    def test_proposal_instruction_injects_bounded_episode_references(self):
+        episodes = [
+            {
+                "episode_id": f"ep-{index}",
+                "similarity": 0.9 - index * 0.1,
+                "quality_score": 0.95,
+                "strategy": "co_edca",
+                "outcome": "success",
+                "decision": {"ap1": {"CWmin": 7 + index}},
+                "metrics": {"available": index == 0},
+            }
+            for index in range(5)
+        ]
+
+        text = orch.propose_instruction("ap1", "co_edca", episodes)
+
+        self.assertIn("历史案例", text)
+        self.assertIn("必须按当前最新状态重新调用工具验算", text)
+        self.assertIn("CWmin", text)
+        self.assertEqual(text.count("相似度="), 3)
 
     def test_structured_relay_accepts_sr_edca_joint(self):
         for scene_name, expected_strategy in (

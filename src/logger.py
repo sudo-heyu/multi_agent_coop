@@ -22,17 +22,20 @@
 """
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .console_style import status_label
+from .persistence import ActionRecord, EventStore
 
 # 绝对路径（仓库根的 logs/），不受进程工作目录影响：coordinator 路径下 MCP server
 # 的 CWD 不一定是仓库根，相对 "logs" 会把日志写散；用绝对路径保证 run_openclaw 能 tail 到。
 LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 STATE_LOG_DIR = LOG_DIR / "state"
+DEFAULT_EVENT_DB = LOG_DIR / "agent_memory.sqlite3"
 
 # 控制台各事件的前缀标签（对齐输出）
 _LABELS: dict[str, str] = {
@@ -107,6 +110,9 @@ class SessionLogger:
         session_id: str | None = None,
         verbose: bool = True,
         event_sink=None,
+        mode: str | None = None,
+        event_store: EventStore | None = None,
+        resume: bool = False,
     ):
         """
         Args:
@@ -118,27 +124,29 @@ class SessionLogger:
         self.session_id: str = session_id or uuid.uuid4().hex[:8]
         self.verbose: bool = verbose
         self._event_sink = event_sink
+        self.mode = mode
         self._start_ms: float = _ts_ms()
 
         LOG_DIR.mkdir(exist_ok=True)
         STATE_LOG_DIR.mkdir(exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        self.log_path: Path = LOG_DIR / f"session_{ts}_{self.session_id}.jsonl"
-        self.state_trace_path: Path = STATE_LOG_DIR / f"state_trace_{ts}_{self.session_id}.jsonl"
+        suffix = "_resume" if resume else ""
+        self.log_path: Path = LOG_DIR / f"session_{ts}_{self.session_id}{suffix}.jsonl"
+        self.state_trace_path: Path = STATE_LOG_DIR / f"state_trace_{ts}_{self.session_id}{suffix}.jsonl"
         self._fh = open(self.log_path, "w", encoding="utf-8")
         self._state_fh = open(self.state_trace_path, "w", encoding="utf-8")
+        store_enabled = os.environ.get("MULTIAP_EVENT_STORE", "1").lower() not in {
+            "0", "false", "no", "off"
+        }
+        db_path = Path(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+        self._event_store = event_store or (EventStore(db_path) if store_enabled else None)
 
     # ──────────────────────────────────────────────────────────────────────
     # 内部工具
     # ──────────────────────────────────────────────────────────────────────
 
     def _write(self, event: str, **kw) -> None:
-        row = {
-            "ts":         _now(),
-            "session_id": self.session_id,
-            "event":      event,
-            **kw,
-        }
+        row = self._event_row(event, kw)
         self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._fh.flush()
         if self._event_sink is not None:
@@ -147,14 +155,30 @@ class SessionLogger:
             except Exception:
                 pass
 
-    def _write_file_only(self, event: str, **kw) -> None:
-        """写入 JSONL 文件，不通知 event_sink（避免与高频推送重复）。"""
-        row = {
-            "ts":         _now(),
+    def _event_row(self, event: str, payload: dict[str, Any]) -> dict[str, Any]:
+        ts = _now()
+        event_id = uuid.uuid4().hex
+        sequence = None
+        if self._event_store is not None:
+            event_id, sequence = self._event_store.append_event(
+                self.session_id,
+                event,
+                payload,
+                event_id=event_id,
+                occurred_at=ts,
+            )
+        return {
+            "ts":         ts,
             "session_id": self.session_id,
             "event":      event,
-            **kw,
+            "event_id":   event_id,
+            "sequence":   sequence,
+            **payload,
         }
+
+    def _write_file_only(self, event: str, **kw) -> None:
+        """写入 JSONL 文件，不通知 event_sink（避免与高频推送重复）。"""
+        row = self._event_row(event, kw)
         self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._fh.flush()  # sink 错误不中断会话
 
@@ -180,6 +204,17 @@ class SessionLogger:
 
     def session_start(self, model: str, scene: str, ap_state: dict) -> None:
         """运行开始，记录完整初始状态（dashboard 用于渲染对比表）。"""
+        if self._event_store is not None:
+            self._event_store.start_run(
+                self.session_id,
+                mode=self.mode,
+                scene=scene,
+                model=model,
+                metadata={
+                    "log_path": str(self.log_path),
+                    "state_trace_path": str(self.state_trace_path),
+                },
+            )
         self._write("session_start", model=model, scene=scene, ap_state=ap_state)
         self.record_state_snapshot(
             "initial",
@@ -191,6 +226,89 @@ class SessionLogger:
         self._console("session_start",
                       f"id={self.session_id} model={model} scene={scene} "
                       f"log={self.log_path} state_trace={self.state_trace_path}")
+
+    def session_resume(self, checkpoint: dict[str, Any]) -> None:
+        """Attach a new logger process to an existing durable run."""
+        if self._event_store is None or self._event_store.get_run(self.session_id) is None:
+            raise ValueError(f"cannot resume unknown run: {self.session_id}")
+        self._write(
+            "session_resumed",
+            boundary=checkpoint.get("boundary"),
+            projection_version=checkpoint.get("projection_version"),
+        )
+
+    def save_negotiation_checkpoint(
+        self,
+        boundary: str,
+        state: dict[str, Any],
+        *,
+        safe_to_resume: bool = True,
+    ) -> None:
+        if self._event_store is None:
+            return
+        self._event_store.save_projection(
+            self.session_id,
+            boundary=boundary,
+            state=state,
+            safe_to_resume=safe_to_resume,
+        )
+        self._write(
+            "negotiation_checkpoint",
+            boundary=boundary,
+            safe_to_resume=safe_to_resume,
+        )
+
+    def save_session_memory(
+        self,
+        memory: dict[str, Any],
+        summary_text: str,
+        budget_chars: int,
+    ) -> None:
+        if self._event_store is None:
+            return
+        self._event_store.save_session_memory(
+            self.session_id,
+            memory=memory,
+            summary_text=summary_text,
+            budget_chars=budget_chars,
+        )
+        self._write(
+            "session_memory_updated",
+            summarized_turns=memory.get("summarized_turns", 0),
+            entry_count=len(memory.get("entries") or []),
+            budget_chars=budget_chars,
+        )
+
+    def recall_episodes(
+        self,
+        state: dict[str, Any],
+        *,
+        limit: int = 3,
+        min_quality: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        if self._event_store is None:
+            return []
+        from .memory import find_similar_episodes
+        episodes = find_similar_episodes(
+            self._event_store,
+            state,
+            limit=limit,
+            min_quality=min_quality,
+            exclude_run_id=self.session_id,
+        )
+        self._write(
+            "episodic_memory_recalled",
+            matches=[
+                {
+                    "episode_id": item["episode_id"],
+                    "run_id": item["run_id"],
+                    "similarity": item["similarity"],
+                    "quality_score": item["quality_score"],
+                }
+                for item in episodes
+            ],
+        )
+        return episodes
 
     def record_state_snapshot(
         self,
@@ -211,6 +329,13 @@ class SessionLogger:
         """
         if ap_state is None:
             return
+        if self._event_store is not None:
+            self._event_store.record_snapshot(
+                self.session_id,
+                label=label,
+                source=source,
+                state=ap_state,
+            )
         self._write_state_trace(
             "state_snapshot",
             label=label,
@@ -267,6 +392,113 @@ class SessionLogger:
             payload=payload,
             response=response,
         )
+
+    def start_step(
+        self,
+        name: str,
+        *,
+        retry_budget: int = 0,
+        input_data: dict[str, Any] | None = None,
+    ) -> str | None:
+        if self._event_store is None:
+            return None
+        step_id = self._event_store.start_step(
+            self.session_id,
+            name,
+            retry_budget=retry_budget,
+            input_data=input_data,
+        )
+        self._write("step_started", step_id=step_id, name=name)
+        return step_id
+
+    def finish_step(
+        self,
+        step_id: str | None,
+        *,
+        status: str,
+        result: Any = None,
+        error: str | None = None,
+    ) -> None:
+        if self._event_store is None or step_id is None:
+            return
+        self._event_store.finish_step(
+            step_id,
+            status=status,
+            result=result,
+            error=error,
+        )
+        self._write(
+            "step_finished", step_id=step_id, status=status, result=result, error=error
+        )
+
+    def prepare_action(
+        self,
+        *,
+        idempotency_key: str,
+        action_type: str,
+        target: str,
+        request: dict[str, Any],
+        step_id: str | None = None,
+    ) -> tuple[ActionRecord | None, bool]:
+        if self._event_store is None:
+            return None, True
+        action, created = self._event_store.prepare_action(
+            self.session_id,
+            idempotency_key=idempotency_key,
+            action_type=action_type,
+            target=target,
+            request=request,
+            step_id=step_id,
+        )
+        if created:
+            self._write(
+                "action_prepared",
+                action_id=action.action_id,
+                step_id=step_id,
+                idempotency_key=idempotency_key,
+                action_type=action_type,
+                target=target,
+                request=request,
+            )
+        return action, created
+
+    def mark_action_running(self, action_id: str) -> ActionRecord | None:
+        if self._event_store is None:
+            return None
+        action = self._event_store.mark_action_running(action_id)
+        self._write(
+            "action_started",
+            action_id=action.action_id,
+            idempotency_key=action.idempotency_key,
+            attempts=action.attempts,
+        )
+        return action
+
+    def finish_action(
+        self,
+        action_id: str,
+        *,
+        status: str,
+        response: Any = None,
+        error: str | None = None,
+    ) -> ActionRecord | None:
+        if self._event_store is None:
+            return None
+        action = self._event_store.finish_action(
+            action_id,
+            status=status,
+            response=response,
+            error=error,
+        )
+        self._write(
+            "action_finished",
+            action_id=action.action_id,
+            idempotency_key=action.idempotency_key,
+            status=status,
+            response=response,
+            error=error,
+        )
+        return action
 
     def phase_start(self, phase: int, label: str) -> None:
         """协商阶段开始。phase: 1=广播, 2=提案, 3=投票, 4=最终决策"""
@@ -465,14 +697,33 @@ class SessionLogger:
                       f"outcome={outcome} rounds={total_rounds} "
                       f"{duration_label}duration={duration_s}s log={self.log_path} "
                       f"state_trace={self.state_trace_path}")
+        if self._event_store is not None:
+            try:
+                from .memory import materialize_episode
+                episode = materialize_episode(self._event_store, self.session_id)
+                if episode is not None:
+                    self._write(
+                        "episodic_memory_created",
+                        episode_id=episode["episode_id"],
+                        quality_score=episode["quality_score"],
+                    )
+            except Exception as exc:
+                self._write("episodic_memory_failed", error=str(exc))
+            self._event_store.complete_run(self.session_id, outcome)
         self._fh.close()
         self._state_fh.close()
+        if self._event_store is not None:
+            self._event_store.close()
+            self._event_store = None
 
     def close(self) -> None:
         if not self._fh.closed:
             self._fh.close()
         if not self._state_fh.closed:
             self._state_fh.close()
+        if self._event_store is not None:
+            self._event_store.close()
+            self._event_store = None
 
     # ──────────────────────────────────────────────────────────────────────
     # 工具方法（供 orchestrator 使用）

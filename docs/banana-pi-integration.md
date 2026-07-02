@@ -14,6 +14,9 @@
 {
   "ap_id": "ap1",
   "timestamp": "2026-05-21T07:00:00.000000+00:00",
+  "service_name": "background_download",
+  "business_type": "后台下载",
+  "traffic_priority": "low",
   "tx_power_dbm": 16.0,
   "cwmin": 3,
   "cwmax": 7,
@@ -30,7 +33,7 @@
 }
 ```
 
-除 `source` 外所有字段必填，缺少任一返回 400。`ap_id` 固定为本机编号，不能乱填。真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`，严禁把生成数据作为真实 QoS 观测上报。
+服务器硬性必填字段以 `state_server/server.py` 的 `REQUIRED_FIELDS` 为准；业务字段缺省时由 profile 使用默认值，但真实部署应明确上报 `service_name`、`business_type` 和 `traffic_priority`。`ap_id` 固定为本机编号。真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`。
 
 **响应**：
 
@@ -182,11 +185,28 @@ hostapd_cli -i wlan0 get_edca_params 0
 
 ---
 
-## 四、本地联调（无真实硬件）
+## 四、DGX 侧启动与真实协商
+
+默认入口要求常驻 state server、OpenClaw gateway 和 Dashboard 在线：
 
 ```bash
-# 终端 1（本地 mock 联调才允许 --allow-mock）
-python state_server/server.py --allow-mock
+MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
+bash openclaw/serve.sh status
+
+.venv/bin/python run_openclaw.py \
+  --mode real \
+  --scene joint \
+  --server http://localhost:5001 \
+  --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002
+```
+
+执行端点不会自动从 `ap_endpoints.json` 读取，必须显式传入 `--ap-endpoints` 或 `--ap-config`。`--mode real` 保证不创建 mock feeder，检查 state server 已拒收生成源，等待三台 AP 的 `source=ap` 新鲜数据，并要求端点恰好覆盖 ap1/ap2/ap3。
+
+## 五、本地联调（无真实硬件）
+
+```bash
+# 终端 1：常驻服务（state server 已带 --allow-mock）
+bash openclaw/serve.sh start
 
 # 终端 2
 python state_server/reporter.py --mock --all --server http://localhost:5001
@@ -196,8 +216,9 @@ python state_server/executor.py --ap-id ap1 --mock --port 5002 &
 python state_server/executor.py --ap-id ap2 --mock --port 5003 &
 python state_server/executor.py --ap-id ap3 --mock --port 5004 &
 
-# 终端 4
-python run_openclaw.py --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
+# 终端 4（使用内置 feeder 时可省略终端 2）
+.venv/bin/python run_openclaw.py --scene joint \
+  --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
 ```
 
 执行后查询结果：

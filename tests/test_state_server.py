@@ -58,16 +58,32 @@ class StateServerSourcePolicyTest(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(server._store["ap1"]["data"]["source"], "ap")
+        self.assertEqual(
+            server._store["ap1"]["data"]["business_type"],
+            server.DEFAULT_BUSINESS_TYPE,
+        )
+
+    def test_state_accepts_explicit_business_type(self):
+        payload = copy.deepcopy(BASE_PAYLOAD)
+        payload["source"] = "ap"
+        payload["business_type"] = "直播"
+
+        resp = self.client.post("/state", json=payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(server._store["ap1"]["data"]["business_type"], "直播")
 
     def test_history_includes_mac_parameters(self):
         payload = copy.deepcopy(BASE_PAYLOAD)
         payload["source"] = "ap"
+        payload["business_type"] = "直播"
 
         resp = self.client.post("/state", json=payload)
         history = self.client.get("/history").get_json()
 
         self.assertEqual(resp.status_code, 200)
         row = history["ap1"][0]
+        self.assertEqual(row["business_type"], "直播")
         self.assertEqual(row["tx_power_dbm"], 15.0)
         self.assertEqual(row["cwmin"], 4)
         self.assertEqual(row["cwmax"], 10)

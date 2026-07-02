@@ -77,12 +77,25 @@ class MockTelemetryFeeder:
                             self._state[ap][key] = value
                         except (TypeError, ValueError):
                             pass
-                # 协商后预期：吞吐 +12%、延迟 -25%、丢包 -40%
+                # 协商后预期：高优先级/直播业务收益最大；低优先级后台下载让出信道机会。
                 t = self._perf_target[ap]
-                t["throughput_mbps_iperf"] *= 1.12
-                t["throughput_mbps_user"] *= 1.12
-                t["latency_ms"] *= 0.75
-                t["packet_loss_pct"] *= 0.60
+                priority = str(self._state[ap].get("traffic_priority", "medium")).lower()
+                business = str(self._state[ap].get("business_type", ""))
+                if priority == "high" or business == "直播":
+                    t["throughput_mbps_iperf"] *= 1.22
+                    t["throughput_mbps_user"] *= 1.22
+                    t["latency_ms"] *= 0.60
+                    t["packet_loss_pct"] *= 0.45
+                elif priority == "low":
+                    t["throughput_mbps_iperf"] *= 0.94
+                    t["throughput_mbps_user"] *= 0.94
+                    t["latency_ms"] *= 1.12
+                    t["packet_loss_pct"] *= 1.10
+                else:
+                    t["throughput_mbps_iperf"] *= 1.08
+                    t["throughput_mbps_user"] *= 1.08
+                    t["latency_ms"] *= 0.85
+                    t["packet_loss_pct"] *= 0.75
 
     # ── 内部 ───────────────────────────────────────────────────────────
     def _loop(self) -> None:

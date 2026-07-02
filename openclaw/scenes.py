@@ -144,6 +144,7 @@ def start_mock_server(server_url: str) -> tuple[bool, subprocess.Popen | None]:
 MOCK_SCENE_SR = {
     "ap1": {
         "service_name": "generic_data",
+        "business_type": "后台下载",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -159,6 +160,7 @@ MOCK_SCENE_SR = {
     },
     "ap2": {
         "service_name": "generic_data",
+        "business_type": "直播",
         "tx_power_dbm": 14.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -174,6 +176,7 @@ MOCK_SCENE_SR = {
     },
     "ap3": {
         "service_name": "generic_data",
+        "business_type": "后台下载",
         "tx_power_dbm": 8.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -189,40 +192,44 @@ MOCK_SCENE_SR = {
     },
 }
 
-# 场景二：Co-EDCA（三 AP 在本场景中承载不同优先级业务，当前 EDCA 参数未差异化，需协商）
+# 场景二：Co-EDCA（三 AP 当前 EDCA 参数未差异化，需协商）
 # 注意：这些业务类型是 mock 场景输入，不是 AP 编号的固定身份。
-# 邻居 RSSI 弱，不触发 Co-SR；通过优先级驱动 EDCA 差异化来保障 AP1 的 QoS
+# 邻居 RSSI 弱，不触发 Co-SR；AP2 承载直播，应获得更高 EDCA 优先级；
+# AP1/AP3 为后台下载，应降低竞争优先级，把信道机会让给 AP2。
 MOCK_SCENE_EDCA = {
     "ap1": {
-        "service_name": "interactive_video",
+        "service_name": "background_download",
+        "business_type": "后台下载",
         "tx_power_dbm": 10.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
-        "traffic_priority": "high",
-        "Data_rate_to_bandwidth_ratio": 0.55,
-        "tx_retries_ratio": 0.12,
+        "traffic_priority": "low",
+        "Data_rate_to_bandwidth_ratio": 0.42,
+        "tx_retries_ratio": 0.06,
         "neighbor_rssi_dbm": {"ap2": -85.0, "ap3": -88.0},
         "sta_rssi_dbm": -55.0,
         "noise_floor_dbm": -92.0,
+        "throughput_mbps_iperf": 30.2,
+        "latency_ms": 130.0,
+        "packet_loss_pct": 0.2,
+    },
+    "ap2": {
+        "service_name": "live_streaming",
+        "business_type": "直播",
+        "tx_power_dbm": 10.0,
+        "cwmin": 3, "cwmax": 4, "aifsn": 2,
+        "traffic_priority": "high",
+        "Data_rate_to_bandwidth_ratio": 0.72,
+        "tx_retries_ratio": 0.18,
+        "neighbor_rssi_dbm": {"ap1": -85.0, "ap3": -87.0},
+        "sta_rssi_dbm": -61.0,
+        "noise_floor_dbm": -91.0,
         "throughput_mbps_iperf": 18.4,
         "latency_ms": 312.0,
         "packet_loss_pct": 1.2,
     },
-    "ap2": {
-        "service_name": "best_effort_data",
-        "tx_power_dbm": 10.0,
-        "cwmin": 3, "cwmax": 4, "aifsn": 2,
-        "traffic_priority": "medium",
-        "Data_rate_to_bandwidth_ratio": 0.50,
-        "tx_retries_ratio": 0.10,
-        "neighbor_rssi_dbm": {"ap1": -85.0, "ap3": -87.0},
-        "sta_rssi_dbm": -61.0,
-        "noise_floor_dbm": -91.0,
-        "throughput_mbps_iperf": 28.7,
-        "latency_ms": 185.0,
-        "packet_loss_pct": 0.4,
-    },
     "ap3": {
-        "service_name": "background_transfer",
+        "service_name": "background_download",
+        "business_type": "后台下载",
         "tx_power_dbm": 10.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",
@@ -243,6 +250,7 @@ MOCK_SCENE_EDCA = {
 MOCK_SCENE_JOINT = {
     "ap1": {
         "service_name": "interactive_video",
+        "business_type": "后台下载",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "high",
@@ -257,6 +265,7 @@ MOCK_SCENE_JOINT = {
     },
     "ap2": {
         "service_name": "best_effort_data",
+        "business_type": "直播",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "medium",
@@ -271,6 +280,7 @@ MOCK_SCENE_JOINT = {
     },
     "ap3": {
         "service_name": "background_transfer",
+        "business_type": "后台下载",
         "tx_power_dbm": 20.0,
         "cwmin": 3, "cwmax": 4, "aifsn": 2,
         "traffic_priority": "low",
