@@ -15,7 +15,9 @@ STATE_SERVER="${MULTIAP_STATE_SERVER:-http://localhost:5001}"
 OLLAMA_MODEL="${MULTIAP_MODEL:-qwen3:14b}"
 CFG_DIR="$HOME/.openclaw-$PROFILE"
 CFG="$CFG_DIR/openclaw.json"
-PPIO_MODEL_ID="${MULTIAP_PPIO_MODEL_ID:-qwen/qwen3-next-80b-a3b-instruct}"
+# qwen3-next-80b-a3b-instruct 2026-07 起在 PPIO 下架（列表仍在但推理返回
+# MODEL_NOT_AVAILABLE），默认改用其后继 MoE instruct 模型。
+PPIO_MODEL_ID="${MULTIAP_PPIO_MODEL_ID:-qwen/qwen3.6-35b-a3b}"
 PPIO_MODEL_ALIAS="${MULTIAP_PPIO_MODEL_ALIAS:-qwen80binstruct}"
 PPIO_MODEL_NAME="${MULTIAP_PPIO_MODEL_NAME:-qwen80binstruct}"
 # 常驻 gateway 端口（serve.sh / drive_ap 都从此处读）。OpenClaw 默认给本 profile 的
