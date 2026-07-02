@@ -8,7 +8,11 @@ from pathlib import Path
 
 from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore, build_checkpoint
-from src.memory import find_similar_episodes
+from src.memory import (
+    collect_due_evaluations,
+    find_similar_episodes,
+    summarize_run_evaluations,
+)
 
 
 def main() -> None:
@@ -29,6 +33,11 @@ def main() -> None:
     similar.add_argument("run_id")
     similar.add_argument("--limit", type=int, default=5)
     similar.add_argument("--min-quality", type=float, default=0.0)
+    evaluate = sub.add_parser("evaluate", help="结算所有到期的效果评估窗口并回写案例质量")
+    evaluate.add_argument("--server", default="http://localhost:5001")
+    evaluate.add_argument("--run")
+    evaluations = sub.add_parser("evaluations", help="查看某个 run 的评估窗口、结论与回滚建议")
+    evaluations.add_argument("run_id")
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -81,6 +90,25 @@ def main() -> None:
             result = updated.__dict__
         elif args.command == "episodes":
             result = store.list_episodes(scene=args.scene, limit=args.limit)
+        elif args.command == "evaluate":
+            from src.profile import apply_profile
+            from src.state_client import get_all_states
+            result = collect_due_evaluations(
+                store,
+                lambda: apply_profile(get_all_states(args.server)),
+                run_id=args.run,
+            )
+        elif args.command == "evaluations":
+            windows = store.list_evaluations(args.run_id)
+            if not windows:
+                raise SystemExit(f"no evaluations for run: {args.run_id}")
+            episode = store.get_episode(run_id=args.run_id)
+            result = {
+                "windows": windows,
+                "summary": summarize_run_evaluations(windows),
+                "episode_quality": episode["quality_score"] if episode else None,
+                "episode_evaluation": episode["evaluation"] if episode else None,
+            }
         else:
             source = store.get_episode(run_id=args.run_id)
             if source is None:

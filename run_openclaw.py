@@ -347,6 +347,9 @@ def main():
                     help="每个 AP 回合可注入的会话上下文字符预算（最小 2000）")
     ap.add_argument("--context-recent-turns", type=int, default=6,
                     help="上下文中优先保留原文的最近发言数（最小 2）")
+    ap.add_argument("--eval-windows", default="",
+                    help="决策生效后的效果评估窗口秒数，逗号分隔（如 60,300,900）；"
+                         "默认 mock=10,30 / real=60,300,900；传 off 关闭")
     args = ap.parse_args()
     if args.context_budget_chars < 2000:
         ap.error("--context-budget-chars 不能小于 2000")
@@ -375,6 +378,11 @@ def main():
 
     os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
+
+    try:
+        eval_windows = _resolve_eval_windows(args.eval_windows, args.mode)
+    except ValueError as exc:
+        ap.error(f"--eval-windows 非法: {exc}")
 
     scene = MOCK_SCENES[args.scene]
     print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
@@ -426,6 +434,10 @@ def main():
             print(f"[错误] checkpoint 与当前网络状态不兼容：{reason}")
             print("请启动新协商，不要恢复旧 run。")
             sys.exit(1)
+
+    # 懒收割：上一轮协商登记的效果评估窗口若已到期，趁 state server 在线先结算，
+    # 让本轮提案检索到带真实效果结论的案例。
+    _harvest_due_evaluations(args.server)
 
     # Dashboard：强制复用常驻服务（serve.sh），事件经 HTTP /push 推给它。
     push_live = None
@@ -480,6 +492,7 @@ def main():
             observation_wait_seconds=args.observation_wait,
             executor_endpoints=executor_endpoints,
             resume_projection=resume_projection,
+            evaluation_windows=eval_windows,
         )
     else:
         _require_openclaw_config(require_qwen80b=args.require_qwen80b)
@@ -490,6 +503,7 @@ def main():
             server=args.server,
             observation_wait=args.observation_wait,
             executor_endpoints=executor_endpoints,
+            eval_windows=eval_windows,
         )
     dur = time.time() - t0
 
@@ -510,18 +524,87 @@ def main():
     else:
         print(f"{status_label('Validator')} {dim('无可验收决策（协商未收敛或未解析出决策 JSON）')}")
 
+    run_id = logger.session_id if logger is not None else None
+    pending_eval = bool(eval_windows) and result["outcome"] == "success" and run_id
     if feeder is not None and result["decision"]:
         feeder.apply_decision(result["decision"])
         if not args.exit_after_run:
             print("[Mock] 已将决策注入遥测，曲线将体现协商后改善。Ctrl-C 退出。")
+            if pending_eval:
+                print(f"[Outcome] 效果评估窗口已登记，到期自动结算：{eval_windows}s")
             try:
                 while True:
-                    time.sleep(1)
+                    time.sleep(2)
+                    if pending_eval:
+                        collected = _harvest_due_evaluations(args.server, run_id=run_id)
+                        if collected and not _has_pending_evaluations(run_id):
+                            pending_eval = False
+                            print("[Outcome] 全部评估窗口已结算完成。Ctrl-C 退出。")
             except KeyboardInterrupt:
                 pass
+    if pending_eval:
+        print(f"[Outcome] 效果评估窗口已登记（{eval_windows}s）；"
+              "到期后由下次 run_openclaw 自动收割，或手动执行 "
+              f".venv/bin/python memory_admin.py evaluate --server {args.server}")
     if feeder is not None:
         feeder.stop()
     # state server / dashboard / plot 均为 serve.sh 常驻服务，不由本进程管理，退出不动它们。
+
+
+def _resolve_eval_windows(spec: str, mode: str) -> tuple[float, ...] | None:
+    """解析评估窗口：CLI > 环境变量 > 按模式默认；off 关闭。"""
+    from src.memory import DEFAULT_WINDOWS, parse_windows
+    spec = (spec or os.environ.get("MULTIAP_EVAL_WINDOWS", "")).strip()
+    if spec.lower() == "off":
+        return None
+    if spec:
+        return parse_windows(spec)
+    return DEFAULT_WINDOWS[mode]
+
+
+def _event_store_enabled() -> bool:
+    return os.environ.get("MULTIAP_EVENT_STORE", "1").lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
+def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dict]:
+    """结算到期的效果评估窗口；失败保持 pending 可重试，绝不阻塞协商。"""
+    if not _event_store_enabled():
+        return []
+    from src.memory import collect_due_evaluations
+    store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+    try:
+        collected = collect_due_evaluations(
+            store,
+            lambda: orch.apply_profile(orch.get_all_states(server)),
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Outcome] 到期评估结算失败（保持 pending，稍后重试）：{exc}")
+        return []
+    finally:
+        store.close()
+    verdict_map = {
+        "improved": status_ok("实际改善"), "degraded": status_fail("实际恶化"),
+        "neutral": "无明显变化", "inconclusive": dim("数据不足"),
+    }
+    for item in collected:
+        deltas = item.get("deltas") or {}
+        print(f"[Outcome] run={item['run_id']} 窗口{item['window_label']} → "
+              f"{verdict_map.get(item['verdict'], item['verdict'])} "
+              f"(得分={deltas.get('score')} 置信度={item['confidence']})")
+    return collected
+
+
+def _has_pending_evaluations(run_id: str) -> bool:
+    if not _event_store_enabled():
+        return False
+    store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+    try:
+        return bool(store.list_evaluations(run_id, status="pending"))
+    finally:
+        store.close()
 
 
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
@@ -550,6 +633,7 @@ def _run_via_coordinator(
     server: str,
     observation_wait: float,
     executor_endpoints: dict[str, str] | None,
+    eval_windows: tuple[float, ...] | None = None,
 ) -> dict:
     env = dict(os.environ)
     env.setdefault("OLLAMA_API_KEY", "ollama-local")
@@ -561,6 +645,9 @@ def _run_via_coordinator(
     env["MULTIAP_MODE"] = mode
     env["MULTIAP_MODEL"] = env.get("MULTIAP_MODEL", "openclaw")
     env["MULTIAP_OBSERVATION_WAIT"] = str(observation_wait)
+    env["MULTIAP_EVAL_WINDOWS"] = (
+        ",".join(f"{w:g}" for w in eval_windows) if eval_windows else "off"
+    )
     if executor_endpoints:
         env["MULTIAP_EXECUTOR_ENDPOINTS"] = json.dumps(executor_endpoints, ensure_ascii=False)
     session_key = f"agent:coordinator:multiap-{scene}-{int(time.time())}"

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _now() -> str:
@@ -205,6 +205,7 @@ class EventStore:
                 observed_state_json TEXT,
                 metrics_json TEXT NOT NULL,
                 quality_score REAL NOT NULL,
+                evaluation_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -213,14 +214,46 @@ class EventStore:
                 ON episodic_memories(scene, strategy, quality_score DESC);
             CREATE INDEX IF NOT EXISTS idx_episodes_topology
                 ON episodic_memories(topology_signature, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS outcome_evaluations (
+                evaluation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+                window_label TEXT NOT NULL,
+                window_seconds REAL NOT NULL,
+                due_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                baseline_json TEXT NOT NULL,
+                observed_json TEXT,
+                deltas_json TEXT,
+                verdict TEXT,
+                confidence REAL,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                collected_at TEXT,
+                UNIQUE(run_id, window_label)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_outcome_eval_due
+                ON outcome_evaluations(status, due_at);
             """
         )
+        # v5 老库的 episodic_memories 缺 evaluation_json，就地补列。
+        self._ensure_column("episodic_memories", "evaluation_json", "TEXT")
         for version in range(1, SCHEMA_VERSION + 1):
             self._conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (version, _now()),
             )
         self._conn.commit()
+
+    def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in columns:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def start_run(
         self,
@@ -698,6 +731,128 @@ class EventStore:
             ).fetchall()
         return [self._episode_record(row) for row in rows]
 
+    def schedule_evaluation(
+        self,
+        run_id: str,
+        *,
+        window_label: str,
+        window_seconds: float,
+        due_at: str,
+        baseline: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Create a pending outcome-evaluation window, idempotent per (run, window)."""
+        now = _now()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT * FROM outcome_evaluations WHERE run_id=? AND window_label=?",
+                (run_id, window_label),
+            ).fetchone()
+            if row is not None:
+                return self._evaluation_record(row), False
+            evaluation_id = uuid.uuid4().hex
+            self._conn.execute(
+                """
+                INSERT INTO outcome_evaluations(
+                    evaluation_id, run_id, window_label, window_seconds, due_at,
+                    status, baseline_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                """,
+                (
+                    evaluation_id, run_id, window_label, float(window_seconds),
+                    due_at, _json(baseline), now, now,
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM outcome_evaluations WHERE evaluation_id=?",
+                (evaluation_id,),
+            ).fetchone()
+            return self._evaluation_record(row), True
+
+    def list_evaluations(
+        self,
+        run_id: str | None = None,
+        *,
+        status: str | None = None,
+        due_before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses, params = [], []
+        if run_id:
+            clauses.append("run_id=?")
+            params.append(run_id)
+        if status:
+            clauses.append("status=?")
+            params.append(status)
+        if due_before:
+            clauses.append("due_at<=?")
+            params.append(due_before)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM outcome_evaluations" + where
+                + " ORDER BY due_at ASC, window_label ASC",
+                params,
+            ).fetchall()
+        return [self._evaluation_record(row) for row in rows]
+
+    def finish_evaluation(
+        self,
+        evaluation_id: str,
+        *,
+        status: str,
+        observed: dict[str, Any] | None = None,
+        deltas: dict[str, Any] | None = None,
+        verdict: str | None = None,
+        confidence: float | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        if status not in {"collected", "failed"}:
+            raise ValueError(f"invalid terminal evaluation status: {status}")
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                UPDATE outcome_evaluations SET status=?, observed_json=?,
+                    deltas_json=?, verdict=?, confidence=?, error=?,
+                    updated_at=?, collected_at=? WHERE evaluation_id=?
+                """,
+                (
+                    status,
+                    _json(observed) if observed is not None else None,
+                    _json(deltas) if deltas is not None else None,
+                    verdict,
+                    confidence,
+                    error,
+                    now,
+                    now,
+                    evaluation_id,
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM outcome_evaluations WHERE evaluation_id=?",
+                (evaluation_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(evaluation_id)
+            return self._evaluation_record(row)
+
+    def update_episode_evaluation(
+        self,
+        run_id: str,
+        *,
+        evaluation: dict[str, Any],
+        quality_score: float,
+    ) -> bool:
+        now = _now()
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                UPDATE episodic_memories SET evaluation_json=?, quality_score=?,
+                    updated_at=? WHERE run_id=?
+                """,
+                (_json(evaluation), float(quality_score), now, run_id),
+            )
+            return cursor.rowcount > 0
+
     def get_run(self, run_id: str) -> RunRecord | None:
         with self._lock:
             row = self._conn.execute(
@@ -812,6 +967,29 @@ class EventStore:
             "observed_state": load("observed_state_json"),
             "metrics": load("metrics_json", {}),
             "quality_score": row["quality_score"],
+            "evaluation": load("evaluation_json"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+        }
+
+    @staticmethod
+    def _evaluation_record(row: sqlite3.Row) -> dict[str, Any]:
+        def load(column: str, default=None):
+            return json.loads(row[column]) if row[column] is not None else default
+        return {
+            "evaluation_id": row["evaluation_id"],
+            "run_id": row["run_id"],
+            "window_label": row["window_label"],
+            "window_seconds": row["window_seconds"],
+            "due_at": row["due_at"],
+            "status": row["status"],
+            "baseline": load("baseline_json", {}),
+            "observed": load("observed_json"),
+            "deltas": load("deltas_json"),
+            "verdict": row["verdict"],
+            "confidence": row["confidence"],
+            "error": row["error"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "collected_at": row["collected_at"],
         }

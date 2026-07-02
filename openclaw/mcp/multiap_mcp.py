@@ -235,6 +235,14 @@ def run_fast_negotiation(
             observation_wait_seconds
             or os.environ.get("MULTIAP_OBSERVATION_WAIT", "0")
         )
+        evaluation_windows = None
+        windows_spec = os.environ.get("MULTIAP_EVAL_WINDOWS", "").strip()
+        if windows_spec and windows_spec.lower() != "off":
+            from src.memory import parse_windows
+            try:
+                evaluation_windows = parse_windows(windows_spec)
+            except ValueError:
+                evaluation_windows = None
         logger = None
         if os.environ.get("MULTIAP_SESSION_LOG") == "1":
             from src.logger import SessionLogger
@@ -255,6 +263,7 @@ def run_fast_negotiation(
             observation_wait_seconds=wait_seconds,
             executor_endpoints=endpoints,
             initial_state=ap_state,
+            evaluation_windows=evaluation_windows,
         )
         result["transcript"] = _orch.session().transcript
         if logger is not None:

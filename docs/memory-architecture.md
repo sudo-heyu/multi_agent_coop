@@ -13,7 +13,7 @@ MULTIAP_EVENT_DB=/path/to/agent.sqlite3 .venv/bin/python run_openclaw.py
 MULTIAP_EVENT_STORE=0 .venv/bin/python run_openclaw.py  # 仅调试时禁用
 ```
 
-## Schema v5
+## Schema v6
 
 | 表 | 用途 |
 |---|---|
@@ -25,7 +25,8 @@ MULTIAP_EVENT_STORE=0 .venv/bin/python run_openclaw.py  # 仅调试时禁用
 | `action_journal` | 外部副作用 intent、幂等 key、请求、结果与不确定状态 |
 | `negotiation_projections` | 最新安全边界及 transcript/proposal/vote/retry 投影 |
 | `session_memories` | 增量摘要、摘要游标、上下文预算和结构化 memory |
-| `episodic_memories` | 环境、领域特征、决策、执行、观测结果和案例质量 |
+| `episodic_memories` | 环境、领域特征、决策、执行、观测结果、案例质量和执行后评估结论 |
+| `outcome_evaluations` | 决策生效后的多时间窗口效果评估：基线、观测、差值、verdict 与置信度 |
 
 SQLite 使用 WAL、foreign key 和事务。`SessionLogger` 先写事件存储，再写 JSONL；每条 JSONL 同时携带 `event_id` 和 `sequence`，便于两种格式对账。
 
@@ -53,9 +54,8 @@ SQLite 使用 WAL、foreign key 和事务。`SessionLogger` 先写事件存储�
 
 当前恢复粒度是协商安全边界，不恢复尚未完成的单个 LLM token/tool call。下一阶段需要：
 
-1. Outcome Evaluator：执行后按多个时间窗口采集真实效果；
-2. 对非副作用工具建立结果缓存与可重放 step；
-3. 增加恢复审批和 Dashboard 操作入口。
+1. 对非副作用工具建立结果缓存与可重放 step；
+2. 增加恢复审批和 Dashboard 操作入口。
 
 ## Session Memory
 
@@ -94,13 +94,41 @@ run 结束时，`src/memory/episodic.py` 从事件和快照自动物化一个案
 .venv/bin/python memory_admin.py similar <run_id> --limit 5 --min-quality 0.5
 ```
 
+## Outcome Evaluator
+
+决策通过 Validator 并生效后，`src/memory/outcome.py` 在事件存储中登记多个评估窗口
+（`--eval-windows`，默认 mock=`10,30`s、real=`60,300,900`s，`off` 关闭；coordinator
+路径经 `MULTIAP_EVAL_WINDOWS` 环境变量透传）。每个窗口到期时与协商前基线比较：
+
+- 指标：吞吐（iperf/user，相对变化）、延迟（相对变化，方向取反）、丢包（绝对
+  百分点 / 5.0 归一），单指标得分截断在 [-1, 1]；
+- 按业务优先级加权聚合（high=1.0 / medium=0.6 / low=0.3）：协商目标就是高优先级
+  收益最大化，低优先级"让出信道"的小幅退化不会把整体判成恶化；
+- 聚合得分 ≥ +0.05 → `improved`，≤ -0.05 → `degraded`，其间 `neutral`；
+  指标覆盖率 < 50% → `inconclusive`；置信度由覆盖率和得分幅度共同决定。
+
+评估结论确定性回写 episodic memory：最终 verdict 取最后一个有定论的窗口（最接近
+稳态）；`improved` 按置信度加成质量分，`degraded` 把质量分封顶 0.2——低于提案注入
+阈值 0.5，恶化方案不会再被当作高质量参考，同时生成恢复协商前参数的
+`rollback_plan`（只含决策实际改过的字段）。**回滚只产出建议，不自动执行**：
+真实下发仍需管理员经幂等 action journal 通道确认。
+
+收割是惰性且不阻塞的：mock 保活循环内实时结算；`run_openclaw.py` 每次启动时
+补收上一轮到期窗口（本轮提案即可检索到带真实效果结论的案例）；也可手动执行。
+状态获取失败时窗口保持 pending 可重试。
+
+```bash
+.venv/bin/python memory_admin.py evaluate --server http://localhost:5001
+.venv/bin/python memory_admin.py evaluations <run_id>
+```
+
 ## 后续 Memory 分层
 
 在 Event Store 稳定后依次增加：
 
-1. Session Memory：阶段增量摘要和上下文预算；
-2. Episodic Memory：一次协商的环境、行动、反馈和结果案例；
-3. Outcome Evaluator：执行后多时间窗口真实效果评估；
+1. ✅ Session Memory：阶段增量摘要和上下文预算；
+2. ✅ Episodic Memory：一次协商的环境、行动、反馈和结果案例；
+3. ✅ Outcome Evaluator：执行后多时间窗口真实效果评估、质量修订与回滚建议；
 4. Semantic Memory：从多个案例归纳、带证据和置信度的规律；
 5. Consolidation：带锁、门控、冲突检测和过期管理的后台整理。
 

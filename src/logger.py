@@ -310,6 +310,27 @@ class SessionLogger:
         )
         return episodes
 
+    def schedule_outcome_evaluations(
+        self,
+        baseline_state: dict[str, Any],
+        windows,
+    ) -> list[dict[str, Any]]:
+        """决策生效后登记多窗口效果评估（收割由 run_openclaw / memory_admin 完成）。"""
+        if self._event_store is None or not windows:
+            return []
+        from .memory import schedule_outcome_evaluations
+        scheduled = schedule_outcome_evaluations(
+            self._event_store, self.session_id, baseline_state, tuple(windows)
+        )
+        self._write(
+            "outcome_evaluation_scheduled",
+            windows=[
+                {"window": item["window_label"], "due_at": item["due_at"]}
+                for item in scheduled
+            ],
+        )
+        return scheduled
+
     def record_state_snapshot(
         self,
         label: str,

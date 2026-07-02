@@ -159,6 +159,16 @@ def _outcome_metrics(initial, observed) -> dict[str, Any]:
     return result
 
 
+def pipeline_quality(episode: dict[str, Any]) -> float:
+    """从 episode 内容重算流水线基础质量分（不含执行后效果修订）。"""
+    return _quality(
+        str(episode.get("outcome") or "incomplete"),
+        episode.get("validation"),
+        episode.get("execution") or [],
+        episode.get("observed_state"),
+    )
+
+
 def _quality(outcome, validation, executions, observed) -> float:
     score = 0.5 if outcome == "success" else 0.0
     if validation and validation.get("approved"):

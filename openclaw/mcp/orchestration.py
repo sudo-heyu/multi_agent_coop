@@ -752,12 +752,24 @@ def propose_instruction(
         ]
         for item in recalled_episodes[:3]:
             metrics = item.get("metrics") or {}
+            evaluation = item.get("evaluation") or {}
+            if evaluation.get("final_verdict"):
+                verdict_map = {
+                    "improved": "实际改善", "degraded": "实际恶化",
+                    "neutral": "无明显变化", "inconclusive": "数据不足",
+                }
+                feedback = (
+                    f"执行后评估={verdict_map.get(evaluation['final_verdict'], evaluation['final_verdict'])}"
+                    f"(置信度={evaluation.get('final_confidence', 0)})"
+                )
+            else:
+                feedback = f"实测反馈={'可用' if metrics.get('available') else '尚无'}"
             lines.append(
                 f"- 相似度={item.get('similarity', 0):.3f}，"
                 f"质量={item.get('quality_score', 0):.2f}，"
                 f"策略={item.get('strategy')}，结果={item.get('outcome')}，"
                 f"决策={json.dumps(item.get('decision'), ensure_ascii=False)}，"
-                f"实测反馈={'可用' if metrics.get('available') else '尚无'}"
+                f"{feedback}"
             )
         memory_hint = "\n".join(lines) + "\n\n"
     history_hint = (
@@ -1302,7 +1314,8 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
                      observation_wait_seconds: float = 0.0,
                      executor_endpoints: dict[str, str] | None = None,
                      initial_state: dict | None = None,
-                     resume_projection: dict | None = None) -> dict:
+                     resume_projection: dict | None = None,
+                     evaluation_windows: tuple[float, ...] | None = None) -> dict:
     """阶段级快速协商。on_tool：进程内 structured_relay 路径传入工具调用展示回调，
     在 drive_ap 每次 AP 发言后从 trajectory 提取并回调；coordinator 路径
     （run_fast_negotiation）不传，保持 None。"""
@@ -1325,6 +1338,7 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
             executor_endpoints=executor_endpoints,
             initial_state=initial_state,
             resume_projection=resume_projection,
+            evaluation_windows=evaluation_windows,
         )
     finally:
         _tool_callback = None
@@ -1340,7 +1354,8 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                      observation_wait_seconds: float = 0.0,
                      executor_endpoints: dict[str, str] | None = None,
                      initial_state: dict | None = None,
-                     resume_projection: dict | None = None) -> dict:
+                     resume_projection: dict | None = None,
+                     evaluation_windows: tuple[float, ...] | None = None) -> dict:
     global _tool_callback
 
     def emit(phase, who, reply):
@@ -1561,6 +1576,12 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                             )
                             logger.validation_result(val)
                         if val["approved"]:
+                            # 决策已生效（真实推送或 mock 注入即将发生）：登记多窗口
+                            # 效果评估，基线取协商前状态；收割不阻塞本进程退出。
+                            if logger is not None and evaluation_windows:
+                                logger.schedule_outcome_evaluations(
+                                    s.ap_state, evaluation_windows
+                                )
                             _finish(logger, "success", s.proposal_num, started_at)
                             s.decision = decision
                             return {"outcome": "success", "decision": decision,
