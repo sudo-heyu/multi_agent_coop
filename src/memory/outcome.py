@@ -9,12 +9,23 @@ episodic memory：劣化案例质量封顶，不会再被当作高质量参考�
 from __future__ import annotations
 
 import math
+import os
+import statistics
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from src.persistence import EventStore
 
 from .episodic import pipeline_quality
+
+
+def _env_float(name: str, default: float) -> float:
+    """让评估阈值可经环境变量部署级覆盖，便于按真实数据校准；默认值不变。"""
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
 
 
 # 每个 AP 的评估权重按业务优先级取值：协商目标就是高优先级收益最大化，
@@ -30,12 +41,13 @@ _METRICS: tuple[tuple[str, str, float | None], ...] = (
     ("packet_loss_pct", "lower", 5.0),
 )
 
-IMPROVE_THRESHOLD = 0.05
-DEGRADE_THRESHOLD = -0.05
-MIN_COVERAGE = 0.5
-ROLLBACK_CONFIDENCE = 0.5
+# 分类阈值可经环境变量覆盖（部署级校准），默认值经 mock/真实运行验证。
+IMPROVE_THRESHOLD = _env_float("MULTIAP_IMPROVE_THRESHOLD", 0.05)
+DEGRADE_THRESHOLD = _env_float("MULTIAP_DEGRADE_THRESHOLD", -0.05)
+MIN_COVERAGE = _env_float("MULTIAP_MIN_COVERAGE", 0.5)
+ROLLBACK_CONFIDENCE = _env_float("MULTIAP_ROLLBACK_CONFIDENCE", 0.5)
 # 聚合得分达到 ±0.15 视为满置信变化
-_FULL_CONFIDENCE_SCORE = 0.15
+_FULL_CONFIDENCE_SCORE = _env_float("MULTIAP_FULL_CONFIDENCE_SCORE", 0.15)
 
 # pending 窗口放弃门限：due_at 之后再等 max(窗口时长×4, 1 小时) 仍收不到有效
 # 状态，就标 abandoned，避免 state server 长期离线时窗口无限 pending。
@@ -288,23 +300,40 @@ def summarize_run_evaluations(
         }
         for item in collected
     ]
-    conclusive = [
-        item for item in collected
-        if item["verdict"] in {"improved", "degraded", "neutral"}
-    ]
-    final = conclusive[-1] if conclusive else collected[-1]
     pending = sum(1 for item in evaluations if item["status"] == "pending")
     abandoned = sum(1 for item in evaluations if item["status"] == "abandoned")
+
+    # 因果强化：自然波动不会在多个时间窗口持续同向，持续同向才更可能是决策效应。
+    # 跨窗口一致性 = 主导方向窗口占方向性窗口的比例；摇摆（既有改善又有恶化）会
+    # 压低最终置信度，从而不会误判、也不会因单窗口噪声触发回滚。
+    directional = [item for item in collected if item["verdict"] in {"improved", "degraded"}]
+    improved = sum(1 for item in directional if item["verdict"] == "improved")
+    degraded = len(directional) - improved
+    if directional:
+        cross_consistency = round(max(improved, degraded) / len(directional), 4)
+        dominant = "improved" if improved >= degraded else "degraded"
+        dom_windows = [item for item in directional if item["verdict"] == dominant]
+        final = dom_windows[-1]  # 主导方向里最接近稳态的窗口
+        final_verdict = dominant
+        final_confidence = round(float(final["confidence"] or 0.0) * cross_consistency, 4)
+    else:
+        # 全部 neutral/inconclusive：无方向性变化。
+        cross_consistency = 1.0
+        final = collected[-1]
+        final_verdict = final["verdict"]
+        final_confidence = final["confidence"]
+
     needs_rollback = (
-        final["verdict"] == "degraded"
-        and float(final["confidence"] or 0.0) >= ROLLBACK_CONFIDENCE
+        final_verdict == "degraded"
+        and float(final_confidence or 0.0) >= ROLLBACK_CONFIDENCE
     )
     return {
         "windows": windows,
         "pending_windows": pending,
         "abandoned_windows": abandoned,
-        "final_verdict": final["verdict"],
-        "final_confidence": final["confidence"],
+        "cross_window_consistency": cross_consistency,
+        "final_verdict": final_verdict,
+        "final_confidence": final_confidence,
         "final_score": (final["deltas"] or {}).get("score"),
         "needs_rollback": needs_rollback,
     }
@@ -380,6 +409,78 @@ def _metric_score(
     if direction == "lower":
         raw = -raw
     return max(-1.0, min(1.0, raw))
+
+
+def evaluation_diagnostics(store: EventStore) -> dict[str, Any]:
+    """扫历史评估，报告 score/verdict 分布与跨窗口摇摆率，辅助人工校准阈值。
+
+    没有 ground truth，无法自动定"最优"阈值；本函数给出当前阈值下真实数据的
+    表现和启发式提示，由人判断是否调整（阈值可经环境变量覆盖）。
+    """
+    collected = store.list_evaluations(status="collected")
+    scores = sorted(
+        (deltas or {}).get("score")
+        for e in collected
+        if (deltas := e.get("deltas")) is not None and (deltas or {}).get("score") is not None
+    )
+    verdicts = Counter(e["verdict"] for e in collected)
+    run_ids = {e["run_id"] for e in collected}
+    swinging = 0
+    for run_id in run_ids:
+        summary = summarize_run_evaluations(store.list_evaluations(run_id))
+        if summary and summary.get("cross_window_consistency", 1.0) < 1.0:
+            swinging += 1
+
+    hints = []
+    total = len(scores)
+    if total:
+        neutral_band = sum(1 for s in scores if DEGRADE_THRESHOLD < s < IMPROVE_THRESHOLD)
+        neutral_ratio = neutral_band / total
+        if neutral_ratio > 0.6:
+            hints.append(
+                f"{neutral_ratio:.0%} 的窗口得分落在中性带 "
+                f"({DEGRADE_THRESHOLD}, {IMPROVE_THRESHOLD})，阈值可能偏宽；"
+                "如需更灵敏可下调 MULTIAP_IMPROVE_THRESHOLD / MULTIAP_DEGRADE_THRESHOLD。"
+            )
+        elif neutral_ratio < 0.1:
+            hints.append(
+                f"仅 {neutral_ratio:.0%} 落在中性带，阈值可能偏窄（易把噪声判成变化）；"
+                "如需更保守可上调阈值。"
+            )
+    if run_ids and swinging / len(run_ids) > 0.3:
+        hints.append(
+            f"{swinging}/{len(run_ids)} 个 run 跨窗口方向摇摆，因果信号弱——"
+            "可增加评估窗口数或延长窗口以观察稳态。"
+        )
+
+    return {
+        "collected_windows": len(collected),
+        "verdict_counts": dict(verdicts),
+        "score_distribution": _distribution(scores),
+        "swinging_runs": swinging,
+        "total_runs": len(run_ids),
+        "active_thresholds": {
+            "improve": IMPROVE_THRESHOLD,
+            "degrade": DEGRADE_THRESHOLD,
+            "min_coverage": MIN_COVERAGE,
+            "rollback_confidence": ROLLBACK_CONFIDENCE,
+        },
+        "hints": hints or ["当前阈值下分布正常，无明显校准建议。"],
+    }
+
+
+def _distribution(sorted_values: list[float]) -> dict[str, Any]:
+    if not sorted_values:
+        return {"count": 0}
+    n = len(sorted_values)
+    return {
+        "count": n,
+        "min": round(sorted_values[0], 6),
+        "p25": round(sorted_values[max(0, n // 4)], 6),
+        "median": round(statistics.median(sorted_values), 6),
+        "p75": round(sorted_values[min(n - 1, 3 * n // 4)], 6),
+        "max": round(sorted_values[-1], 6),
+    }
 
 
 def _parse_ts(value: str) -> datetime:

@@ -73,7 +73,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 
 **测试**
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 86/86
+.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 94/94
 ```
 
 常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。

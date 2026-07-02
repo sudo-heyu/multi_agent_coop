@@ -10,6 +10,7 @@ from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore, build_checkpoint
 from src.memory import (
     consolidate,
+    evaluation_diagnostics,
     execute_rollback,
     find_similar_episodes,
     harvest_evaluations,
@@ -56,6 +57,7 @@ def main() -> None:
     consolidate_cmd = sub.add_parser("consolidate", help="L6 整理：容量/过期归档 + 重归纳 + 冲突标记")
     consolidate_cmd.add_argument("--max-per-topology", type=int, default=50)
     consolidate_cmd.add_argument("--max-age-days", type=float, default=90.0)
+    sub.add_parser("calibrate", help="评估阈值校准诊断：score/verdict 分布与摇摆率")
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -140,6 +142,8 @@ def main() -> None:
                     max_age_days=args.max_age_days,
                 ),
             )
+        elif args.command == "calibrate":
+            result = evaluation_diagnostics(store)
         elif args.command == "evaluations":
             windows = store.list_evaluations(args.run_id)
             if not windows:

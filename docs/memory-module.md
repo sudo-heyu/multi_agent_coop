@@ -169,8 +169,15 @@ state 可用，逾期窗口仍照常收割（稳态近似）。
   指标覆盖率 < 50% → `inconclusive`；
 - 置信度 = 覆盖率 × min(1, |得分|/0.15)。
 
-**回写**（`apply_evaluation_to_episode`）：最终 verdict 取最后一个有定论的窗口
-（最接近稳态）。质量修订从流水线基础分重算（幂等）：
+**因果强化（跨窗口一致性）**：单窗口变化未必是决策造成的（流量自然涨落也会
+产生 delta），但自然波动不会在多个时间窗口持续同向。`summarize_run_evaluations`
+统计各窗口方向：全部同向 → 一致性 1.0，置信度不折损；方向摇摆（既有改善又有
+恶化）→ 一致性 = 主导方向占比，**按比例压低最终置信度**。这样单窗口噪声不会
+误判、也不会触发回滚——只有多窗口持续同向的变化才被当作可信的因果效应。平票时
+保守取 improved（不回滚）。
+
+**回写**（`apply_evaluation_to_episode`）：最终 verdict 取主导方向里最接近稳态的
+窗口。质量修订从流水线基础分重算（幂等）：
 
 - `improved` → base + 0.15 × 置信度（封顶 1.0）；
 - `degraded` → 封顶 **0.2**，低于注入阈值 0.5，恶化方案退出提案参考池；
@@ -182,6 +189,12 @@ state 可用，逾期窗口仍照常收割（稳态近似）。
 下发。下发走 action journal 幂等（成功不重发、`unknown` 阻塞待人工核对），且
 `rollback_plan` 的值本就是 executor `/apply` 的 wire 格式（CW 为指数、tx_power 为
 实际 dBm），直接下发**不做二次编码**（与决策下发的 `encode_params_edca` 路径不同）。
+
+**参数校准**：分类阈值（improve/degrade/min_coverage/rollback_confidence/满置信
+得分）都可经环境变量覆盖（`MULTIAP_IMPROVE_THRESHOLD` 等），默认值经真实运行
+验证。`memory_admin.py calibrate` 扫历史评估，报告 score 分位分布、verdict 计数、
+跨窗口摇摆率，并给出启发式提示（如"X% 落在中性带，阈值可能偏宽"）。没有 ground
+truth，不自动定"最优"阈值——由人看真实数据表现后调整。
 
 **实测样例**（mock EDCA，run `0badeaed`）：协商 94s 成功 → 窗口 t+10s/t+30s 均判
 "实际改善"（置信度 0.95/0.91）——高优先级直播 AP 延迟 312→185ms、吞吐 +24%，
@@ -238,6 +251,13 @@ TTL；拿不到锁（他人正在整理）直接返回 `skipped`，绝不阻塞�
 默认排除，`--include-conflicted` 可查）。整理由后台 harvester 收到新反馈时触发，
 或 `memory_admin.py consolidate` 手动执行。
 
+## 评估质量与校准
+
+见 L4 章节的"因果强化（跨窗口一致性）"与"参数校准"：多窗口持续同向才算可信
+因果效应，摇摆窗口压低置信度；分类阈值经环境变量可覆盖，`memory_admin.py
+calibrate` 给出真实数据下的分布诊断供人工校准。这两项让 L4 的结论从"单点观测"
+升级为"有因果强度和可校准阈值的判断"。
+
 ## 一次协商的记忆生命周期
 
 ```text
@@ -276,6 +296,7 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 .venv/bin/python memory_admin.py rollback <run_id> --ap-endpoints ap1=host:port,... --confirm
 .venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5] [--include-conflicted]
 .venv/bin/python memory_admin.py consolidate [--max-per-topology 50] [--max-age-days 90]
+.venv/bin/python memory_admin.py calibrate                  # 评估阈值校准诊断
 .venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
 ```
 
@@ -292,6 +313,8 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 | `--context-recent-turns` | 6 | 保留原文的最近发言数（≥2） |
 | `--eval-windows` / `MULTIAP_EVAL_WINDOWS` | mock=`10,30` real=`60,300,900` | 评估窗口秒数，`off` 关闭 |
 | `MULTIAP_HARVEST_INTERVAL` | 30 | 后台 harvester 两次收割间隔秒数 |
+| `MULTIAP_IMPROVE_THRESHOLD` / `MULTIAP_DEGRADE_THRESHOLD` | 0.05 / -0.05 | 评估分类阈值（校准用） |
+| `MULTIAP_MIN_COVERAGE` / `MULTIAP_ROLLBACK_CONFIDENCE` | 0.5 / 0.5 | 覆盖率下限 / 回滚置信门槛 |
 
 ## 测试
 
@@ -300,13 +323,13 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃、
 收割/放弃解耦、回滚 dry-run/幂等下发/wire 不二次编码；L5：分组归纳、support 阈值、
 只用有反馈案例、action_summary 中位数、拓扑/置信度检索；L6：容量淘汰、过期归档、
-冲突标记与清除、检索排除归档、维护锁串行化。
+冲突标记与清除、检索排除归档、维护锁串行化；评估质量：跨窗口一致性因果强化
+（摇摆压低置信、平票不回滚）、阈值环境变量覆盖、校准诊断报告。
 
 ## 演进路线
 
-已完成 L1–L6 六层：**L4 可靠性闭环** + **L5 语义归纳** + **L6 带锁整理**。
-记忆结构完整。后续为质量与可观测性打磨（见 `docs/memory-architecture.md`）：
+已完成 L1–L6 六层 + **因果强化与阈值校准**。记忆结构完整、可信度打磨到位。
+后续（见 `docs/memory-architecture.md`）：
 
-1. 评估因果对照与硬编码参数（相似度权重/分类阈值/质量公式）的数据校准；
-2. 记忆可观测性（Dashboard 集成：案例数、质量分布、卡住/归档窗口、冲突规律）；
-3. 跨拓扑泛化、Session Memory 模型化摘要（开放研究项）。
+1. 记忆可观测性（Dashboard 集成：案例数、质量分布、卡住/归档窗口、冲突规律）；
+2. 跨拓扑泛化、Session Memory 模型化摘要（开放研究项）。
