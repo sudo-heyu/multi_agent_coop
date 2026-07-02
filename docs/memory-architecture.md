@@ -134,6 +134,7 @@ run 结束时，`src/memory/episodic.py` 从事件和快照自动物化一个案
 1. ✅ Session Memory：阶段增量摘要和上下文预算；
 2. ✅ Episodic Memory：一次协商的环境、行动、反馈和结果案例；
 3. ✅ Outcome Evaluator：执行后多时间窗口真实效果评估、质量修订与回滚建议；
+   ✅ 可靠性闭环：后台常驻 harvester、逾期窗口放弃、人工审批回滚执行通道；
 4. Semantic Memory：从多个案例归纳、带证据和置信度的规律；
 5. Consolidation：带锁、门控、冲突检测和过期管理的后台整理。
 

@@ -37,6 +37,11 @@ ROLLBACK_CONFIDENCE = 0.5
 # 聚合得分达到 ±0.15 视为满置信变化
 _FULL_CONFIDENCE_SCORE = 0.15
 
+# pending 窗口放弃门限：due_at 之后再等 max(窗口时长×4, 1 小时) 仍收不到有效
+# 状态，就标 abandoned，避免 state server 长期离线时窗口无限 pending。
+ABANDON_GRACE_MULTIPLIER = 4.0
+MIN_ABANDON_GRACE_SECONDS = 3600.0
+
 DEFAULT_WINDOWS: dict[str, tuple[float, ...]] = {
     "mock": (10.0, 30.0),
     "real": (60.0, 300.0, 900.0),
@@ -99,6 +104,43 @@ def schedule_outcome_evaluations(
     return scheduled
 
 
+def abandon_stale_evaluations(
+    store: EventStore,
+    *,
+    run_id: str | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """把逾期太久仍无法收割的 pending 窗口标 abandoned（不需要读状态）。
+
+    收割依赖 state server 在线；若其长期离线，窗口会永远 pending。此函数按
+    due_at + grace 判断放弃，让卡住的窗口有明确终态，不再阻塞 summary/告警。
+    """
+    now = now or datetime.now(timezone.utc)
+    pending = store.list_evaluations(run_id, status="pending")
+    abandoned = []
+    for evaluation in pending:
+        grace = max(
+            float(evaluation["window_seconds"]) * ABANDON_GRACE_MULTIPLIER,
+            MIN_ABANDON_GRACE_SECONDS,
+        )
+        deadline = _parse_ts(evaluation["due_at"]) + timedelta(seconds=grace)
+        if now < deadline:
+            continue
+        abandoned.append(
+            store.finish_evaluation(
+                evaluation["evaluation_id"],
+                status="abandoned",
+                error=(
+                    f"逾期未收割：due_at={evaluation['due_at']} 后超过 grace={grace:g}s "
+                    "仍无法采集观测状态（state server 长期离线？）"
+                ),
+            )
+        )
+    for touched_run in sorted({item["run_id"] for item in abandoned}):
+        apply_evaluation_to_episode(store, touched_run)
+    return abandoned
+
+
 def collect_due_evaluations(
     store: EventStore,
     state_getter: Callable[[], dict[str, Any]],
@@ -133,6 +175,32 @@ def collect_due_evaluations(
     for touched_run in sorted({item["run_id"] for item in collected}):
         apply_evaluation_to_episode(store, touched_run)
     return collected
+
+
+def harvest_evaluations(
+    store: EventStore,
+    state_getter: Callable[[], dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """一次完整收割：先尽力结算到期窗口，再放弃逾期太久的窗口。
+
+    收割与放弃解耦——即便 state server 离线导致收割抛错，放弃逻辑仍会执行，
+    保证卡死窗口最终有终态。供后台 harvester、启动补收和手动 evaluate 复用。
+    """
+    now = now or datetime.now(timezone.utc)
+    collected: list[dict[str, Any]] = []
+    error: Exception | None = None
+    try:
+        collected = collect_due_evaluations(store, state_getter, run_id=run_id, now=now)
+    except Exception as exc:  # noqa: BLE001 — 收割失败不应阻断放弃逻辑
+        error = exc
+    abandoned = abandon_stale_evaluations(store, run_id=run_id, now=now)
+    result = {"collected": collected, "abandoned": abandoned}
+    if error is not None:
+        result["error"] = str(error)
+    return result
 
 
 def evaluate_deltas(
@@ -226,6 +294,7 @@ def summarize_run_evaluations(
     ]
     final = conclusive[-1] if conclusive else collected[-1]
     pending = sum(1 for item in evaluations if item["status"] == "pending")
+    abandoned = sum(1 for item in evaluations if item["status"] == "abandoned")
     needs_rollback = (
         final["verdict"] == "degraded"
         and float(final["confidence"] or 0.0) >= ROLLBACK_CONFIDENCE
@@ -233,6 +302,7 @@ def summarize_run_evaluations(
     return {
         "windows": windows,
         "pending_windows": pending,
+        "abandoned_windows": abandoned,
         "final_verdict": final["verdict"],
         "final_confidence": final["confidence"],
         "final_score": (final["deltas"] or {}).get("score"),
@@ -310,6 +380,12 @@ def _metric_score(
     if direction == "lower":
         raw = -raw
     return max(-1.0, min(1.0, raw))
+
+
+def _parse_ts(value: str) -> datetime:
+    """解析 ISO 时间戳；无时区信息时按 UTC 处理。"""
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _num(value: Any) -> float | None:

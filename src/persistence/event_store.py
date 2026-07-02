@@ -805,7 +805,7 @@ class EventStore:
         confidence: float | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        if status not in {"collected", "failed"}:
+        if status not in {"collected", "failed", "abandoned"}:
             raise ValueError(f"invalid terminal evaluation status: {status}")
         now = _now()
         with self._lock, self._conn:

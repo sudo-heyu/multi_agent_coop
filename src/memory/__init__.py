@@ -6,21 +6,26 @@ from .episodic import (
 )
 from .outcome import (
     DEFAULT_WINDOWS,
+    abandon_stale_evaluations,
     apply_evaluation_to_episode,
     build_rollback_plan,
     classify,
     collect_due_evaluations,
     evaluate_deltas,
+    harvest_evaluations,
     parse_windows,
     revise_quality,
     schedule_outcome_evaluations,
     summarize_run_evaluations,
 )
+from .rollback import execute_rollback, resolve_rollback_plan
 
 __all__ = [
     "SessionMemory", "SessionMemoryManager", "encode_features",
     "find_similar_episodes", "materialize_episode", "pipeline_quality",
-    "DEFAULT_WINDOWS", "apply_evaluation_to_episode", "build_rollback_plan",
-    "classify", "collect_due_evaluations", "evaluate_deltas", "parse_windows",
-    "revise_quality", "schedule_outcome_evaluations", "summarize_run_evaluations",
+    "DEFAULT_WINDOWS", "abandon_stale_evaluations", "apply_evaluation_to_episode",
+    "build_rollback_plan", "classify", "collect_due_evaluations", "evaluate_deltas",
+    "harvest_evaluations", "parse_windows", "revise_quality",
+    "schedule_outcome_evaluations", "summarize_run_evaluations",
+    "execute_rollback", "resolve_rollback_plan",
 ]

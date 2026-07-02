@@ -19,8 +19,10 @@
    不引入后台模型摘要（未来若加，必须保留确定性降级路径）。
 3. **幂等。** 事件按 event_id 幂等追加；评估窗口按 (run, window) 幂等登记；执行
    下发按 idempotency_key 幂等；质量修订从流水线基础分重算，重复评估不叠加。
-4. **副作用保守。** 网络结果不确定的下发标 `unknown` 并阻塞自动恢复，需人工核对
-   AP `/status` 后 `resolve-action`；效果恶化只产出回滚**建议与参数计划**，不自动执行。
+4. **副作用保守，人在回路。** 网络结果不确定的下发标 `unknown` 并阻塞自动恢复，
+   需人工核对 AP `/status` 后 `resolve-action`；效果恶化默认只产出回滚**建议与参数
+   计划**，绝不自动执行——管理员显式 `--confirm` 审批后才经同一套幂等 action journal
+   下发（`memory_admin.py rollback`）。
 5. **评估读全量原始遥测，agent 读白名单视图。** `apply_profile` 白名单限制 LLM
    视野（只见 `throughput_mbps_user` 等协商字段）；Outcome 评估必须绕开白名单读
    iperf 吞吐/延迟/丢包，否则覆盖率不足会误判 inconclusive（实跑踩过的坑）。
@@ -133,13 +135,21 @@ transcript 仍完整保存在 SQLite/JSONL。
 `60,300,900`s，`off` 关闭；coordinator 兼容路径经 `MULTIAP_EVAL_WINDOWS` 透传。
 **基线优先取 run 的 `initial` 快照**（全量原始遥测），传入状态仅兜底。
 
-**收割（惰性、不阻塞、可重试）**，三条路径共用 `collect_due_evaluations`：
+**收割（惰性、不阻塞、可重试）**，四条路径共用 `harvest_evaluations`
+（= 尽力 `collect_due_evaluations` + `abandon_stale_evaluations`）：
 
-1. mock 保活循环内每 2s 结算到期窗口并实时打印 verdict；
-2. 下次 `run_openclaw.py` 启动时补收上一轮到期窗口（本轮提案立即用上带反馈的案例）；
-3. `memory_admin.py evaluate --server <url>` 手动结算。
+1. **后台常驻 harvester**（`state_server/outcome_harvester.py`，由 `serve.sh` 拉起，
+   默认每 30s）——real 模式长窗口（可达 15 分钟）不再依赖后续协商即可自动结算，
+   是 L4 在真实部署下可靠的前提；
+2. mock 保活循环内每 2s 结算到期窗口并实时打印 verdict；
+3. 下次 `run_openclaw.py` 启动时补收上一轮到期窗口（本轮提案立即用上带反馈的案例）；
+4. `memory_admin.py evaluate --server <url>` 手动结算。
 
-状态获取失败（如 state server 离线/数据过期）窗口保持 pending，之后任一路径重试。
+状态获取失败（state server 离线/数据过期）窗口保持 pending，之后任一路径重试；
+但逾期太久（`due_at` 后超过 `max(窗口×4, 1 小时)`）仍收不到有效状态的窗口会被标
+`abandoned`，避免孤儿窗口永久 pending。收割与放弃**解耦**：即便收割因 state 离线
+抛错，放弃逻辑仍执行。注意 abandon 是"拿不到数据"的兜底，不是"逾期即弃"——只要
+state 可用，逾期窗口仍照常收割（稳态近似）。
 
 **打分与分类**（`evaluate_deltas` + `classify`）：
 
@@ -157,7 +167,13 @@ transcript 仍完整保存在 SQLite/JSONL。
 - `improved` → base + 0.15 × 置信度（封顶 1.0）；
 - `degraded` → 封顶 **0.2**，低于注入阈值 0.5，恶化方案退出提案参考池；
 - `degraded` 且置信度 ≥ 0.5 → `needs_rollback=true` 并生成 `rollback_plan`
-  （只含决策实际改过的字段、恢复到协商前值）。**只建议不执行**。
+  （只含决策实际改过的字段、恢复到协商前值）。
+
+**回滚执行通道**（`src/memory/rollback.py`，`memory_admin.py rollback <run_id>`）：
+默认 dry-run 只回显计划不发请求；管理员核对后加 `--confirm --ap-endpoints ...` 才
+下发。下发走 action journal 幂等（成功不重发、`unknown` 阻塞待人工核对），且
+`rollback_plan` 的值本就是 executor `/apply` 的 wire 格式（CW 为指数、tx_power 为
+实际 dBm），直接下发**不做二次编码**（与决策下发的 `encode_params_edca` 路径不同）。
 
 **实测样例**（mock EDCA，run `0badeaed`）：协商 94s 成功 → 窗口 t+10s/t+30s 均判
 "实际改善"（置信度 0.95/0.91）——高优先级直播 AP 延迟 312→185ms、吞吐 +24%，
@@ -177,9 +193,12 @@ run 开始     session_start → agent_runs + initial 快照（全量遥测）
    │
 run 结束     session_end → L3 物化案例（流水线质量分）
    │
-窗口到期     L4 收割 → verdict/置信度 → 修订案例质量（±）/回滚建议
+窗口到期     后台 harvester/启动补收/手动 → 收割 verdict、逾期则放弃
+   │         → 修订案例质量（±）→ degraded 生成回滚建议
    │
-下一次 run   启动补收到期窗口 → 提案注入带真实反馈的案例  ←──循环
+回滚(可选)   memory_admin rollback：dry-run 预演 → --confirm 幂等下发
+   │
+下一次 run   提案注入带真实反馈的案例（恶化案例已被踢出参考池）  ←──循环
 ```
 
 ## 运维与查询
@@ -192,8 +211,13 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 .venv/bin/python memory_admin.py similar <run_id> [--limit 5] [--min-quality 0.5]
 .venv/bin/python memory_admin.py evaluate --server http://localhost:5001 [--run <id>]
 .venv/bin/python memory_admin.py evaluations <run_id>       # 窗口结论+回滚建议
+.venv/bin/python memory_admin.py rollback <run_id>          # 预演回滚计划（dry-run）
+.venv/bin/python memory_admin.py rollback <run_id> --ap-endpoints ap1=host:port,... --confirm
 .venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
 ```
+
+后台收割器随常驻服务启动：`bash openclaw/serve.sh start` 会拉起 `outcome_harvester`，
+`serve.sh status` 显示其状态。
 
 ## 配置汇总
 
@@ -204,18 +228,21 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 | `--context-budget-chars` | 14000 | 每回合注入上下文字符预算（≥2000） |
 | `--context-recent-turns` | 6 | 保留原文的最近发言数（≥2） |
 | `--eval-windows` / `MULTIAP_EVAL_WINDOWS` | mock=`10,30` real=`60,300,900` | 评估窗口秒数，`off` 关闭 |
+| `MULTIAP_HARVEST_INTERVAL` | 30 | 后台 harvester 两次收割间隔秒数 |
 
 ## 测试
 
-`tests/` 内 59 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v6 就地升级）、幂等
+`tests/` 内 68 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v6 就地升级）、幂等
 追加/下发、恢复边界与阻塞、Session 摘要游标与预算、案例物化/拓扑隔离/相似排序、
-评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等、回滚计划、失败重试。
+评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃
+（abandon grace）、收割/放弃解耦、回滚 dry-run、幂等下发、wire 格式不二次编码。
 
 ## 演进路线
 
-已完成 L1–L4。下一步（见 `docs/memory-architecture.md`）：
+已完成 L1–L4，**含 L4 可靠性闭环**（后台 harvester、逾期放弃、人工审批回滚执行）。
+下一步（见 `docs/memory-architecture.md`）：
 
 1. **L5 Semantic Memory**：从多个带 Outcome 反馈的案例归纳规律（带证据引用与
    置信度），前提正是 L4——否则归纳的是"跑完了的方案"而非"有效的方案"；
 2. **L6 Consolidation**：带锁、门控、冲突检测和过期管理的后台整理；
-3. 恢复审批与 Dashboard 操作入口、非副作用工具结果缓存。
+3. 评估因果对照与参数校准、记忆可观测性（Dashboard 集成）。

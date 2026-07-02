@@ -47,6 +47,10 @@ DASH_LOG="$RUN_DIR/dashboard.log"
 # academic plot：matplotlib GUI 窗口（真实/mock 通用可视化）。无桌面时 start 跳过。
 PLOT_PID="$RUN_DIR/plot.pid"
 PLOT_LOG="$RUN_DIR/plot.log"
+# outcome harvester：常驻后台收割效果评估窗口（L4 在真实部署下可靠的前提）。
+HARVEST_PID="$RUN_DIR/harvester.pid"
+HARVEST_LOG="$RUN_DIR/harvester.log"
+HARVEST_INTERVAL="${MULTIAP_HARVEST_INTERVAL:-30}"
 
 mkdir -p "$RUN_DIR"
 
@@ -58,6 +62,9 @@ dash_alive()     { curl -sf -m 2 --noproxy '*' "http://localhost:${DASH_PORT}/" 
 # plt.show() 阻塞主线程，窗口关闭即进程退出，故 pid 存活 ≈ 窗口在。
 plot_alive()     { [ -f "$PLOT_PID" ] || return 1
                    local pid; pid="$(cat "$PLOT_PID" 2>/dev/null || true)"
+                   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+harvest_alive()  { [ -f "$HARVEST_PID" ] || return 1
+                   local pid; pid="$(cat "$HARVEST_PID" 2>/dev/null || true)"
                    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 launchd_exists() { launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; }
 
@@ -168,6 +175,31 @@ start_plot() {
     fi
 }
 
+start_harvester() {
+    if harvest_alive; then echo "[serve] outcome harvester 已在线: pid $(cat "$HARVEST_PID")"; return 0; fi
+    echo "[serve] 启动 outcome harvester（间隔 ${HARVEST_INTERVAL}s）..."
+    NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
+        nohup "$PY" "$REPO/state_server/outcome_harvester.py" \
+        --server "$STATE_URL" --interval "$HARVEST_INTERVAL" >"$HARVEST_LOG" 2>&1 &
+    echo $! > "$HARVEST_PID"
+    sleep 1
+    if harvest_alive; then
+        echo "[serve] outcome harvester UP: pid $(cat "$HARVEST_PID")"
+    else
+        echo "[serve] outcome harvester 启动失败，见 $HARVEST_LOG"; rm -f "$HARVEST_PID"; return 1
+    fi
+}
+
+stop_harvester() {
+    if [ -f "$HARVEST_PID" ]; then
+        local pid; pid="$(cat "$HARVEST_PID" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true; echo "[serve] 已停止 outcome harvester (pid $pid)"
+        else echo "[serve] outcome harvester 进程已不在"; fi
+        rm -f "$HARVEST_PID"
+    else echo "[serve] outcome harvester 无 PID 文件（非 serve.sh 启动）"; fi
+}
+
 stop_state() {
     if [ -f "$STATE_PID" ]; then
         local pid; pid="$(cat "$STATE_PID" 2>/dev/null || true)"
@@ -241,12 +273,14 @@ status() {
     else echo "[serve] dashboard    : down (:$DASH_PORT)"; fi
     if plot_alive; then echo "[serve] academic plot: UP   pid $(cat "$PLOT_PID") (matplotlib 窗口)"
     else echo "[serve] academic plot: down (可选；无 GUI 时 serve.sh start 自动跳过)"; fi
+    if harvest_alive; then echo "[serve] outcome harvest: UP   pid $(cat "$HARVEST_PID") (间隔 ${HARVEST_INTERVAL}s)"
+    else echo "[serve] outcome harvest: down (:评估窗口靠下次运行/手动收割)"; fi
 }
 
 case "${1:-}" in
-    start)   start_state; start_gateway; start_dashboard_svc; start_plot || true ;;
-    stop)    stop_plot; stop_dashboard_svc; stop_gateway; stop_state ;;
+    start)   start_state; start_gateway; start_dashboard_svc; start_harvester || true; start_plot || true ;;
+    stop)    stop_plot; stop_harvester; stop_dashboard_svc; stop_gateway; stop_state ;;
     status)  status ;;
-    restart) stop_plot; stop_dashboard_svc; stop_state; sleep 1; start_state; restart_gateway; start_dashboard_svc; start_plot || true ;;
+    restart) stop_plot; stop_harvester; stop_dashboard_svc; stop_state; sleep 1; start_state; restart_gateway; start_dashboard_svc; start_harvester || true; start_plot || true ;;
     *) echo "用法: bash openclaw/serve.sh {start|stop|status|restart}"; exit 1 ;;
 esac

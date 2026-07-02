@@ -9,10 +9,12 @@ from pathlib import Path
 from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore, build_checkpoint
 from src.memory import (
-    collect_due_evaluations,
+    execute_rollback,
     find_similar_episodes,
+    harvest_evaluations,
     summarize_run_evaluations,
 )
+from openclaw.scenes import _parse_executor_endpoints
 
 
 def main() -> None:
@@ -33,11 +35,17 @@ def main() -> None:
     similar.add_argument("run_id")
     similar.add_argument("--limit", type=int, default=5)
     similar.add_argument("--min-quality", type=float, default=0.0)
-    evaluate = sub.add_parser("evaluate", help="结算所有到期的效果评估窗口并回写案例质量")
+    evaluate = sub.add_parser("evaluate", help="结算到期评估窗口并放弃逾期窗口，回写案例质量")
     evaluate.add_argument("--server", default="http://localhost:5001")
     evaluate.add_argument("--run")
     evaluations = sub.add_parser("evaluations", help="查看某个 run 的评估窗口、结论与回滚建议")
     evaluations.add_argument("run_id")
+    rollback = sub.add_parser("rollback", help="人工审批后回滚某次恶化决策到协商前参数")
+    rollback.add_argument("run_id")
+    rollback.add_argument("--ap-endpoints", default="",
+                          help="各 AP 执行端点，格式 ap1=host:port,ap2=...；执行回滚必填")
+    rollback.add_argument("--confirm", action="store_true",
+                          help="确认下发（缺省仅预演打印计划，不发请求）")
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -93,10 +101,16 @@ def main() -> None:
         elif args.command == "evaluate":
             from src.state_client import get_all_states
             # 全量原始遥测，不套 agent 字段白名单（评估需要 iperf/延迟/丢包）。
-            result = collect_due_evaluations(
+            # harvest = 尽力收割到期窗口 + 放弃逾期太久的窗口。
+            result = harvest_evaluations(
                 store,
                 lambda: get_all_states(args.server),
                 run_id=args.run,
+            )
+        elif args.command == "rollback":
+            endpoints = _parse_executor_endpoints(args.ap_endpoints) if args.ap_endpoints else None
+            result = execute_rollback(
+                store, args.run_id, endpoints, confirm=args.confirm
             )
         elif args.command == "evaluations":
             windows = store.list_evaluations(args.run_id)

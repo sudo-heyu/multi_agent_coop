@@ -584,33 +584,35 @@ def _event_store_enabled() -> bool:
 
 
 def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dict]:
-    """结算到期的效果评估窗口；失败保持 pending 可重试，绝不阻塞协商。"""
+    """结算到期评估窗口 + 放弃逾期太久的窗口；失败保持 pending 可重试，绝不阻塞协商。"""
     if not _event_store_enabled():
         return []
-    from src.memory import collect_due_evaluations
+    from src.memory import harvest_evaluations
     store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
     try:
         # 评估比较用全量原始遥测（含 iperf 吞吐/延迟/丢包），不套 agent 字段白名单。
-        collected = collect_due_evaluations(
+        outcome = harvest_evaluations(
             store,
             lambda: orch.get_all_states(server),
             run_id=run_id,
         )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Outcome] 到期评估结算失败（保持 pending，稍后重试）：{exc}")
-        return []
     finally:
         store.close()
+    if outcome.get("error"):
+        print(f"[Outcome] 到期评估结算失败（保持 pending，稍后重试）：{outcome['error']}")
     verdict_map = {
         "improved": status_ok("实际改善"), "degraded": status_fail("实际恶化"),
         "neutral": "无明显变化", "inconclusive": dim("数据不足"),
     }
-    for item in collected:
+    for item in outcome.get("collected", []):
         deltas = item.get("deltas") or {}
         print(f"[Outcome] run={item['run_id']} 窗口{item['window_label']} → "
               f"{verdict_map.get(item['verdict'], item['verdict'])} "
               f"(得分={deltas.get('score')} 置信度={item['confidence']})")
-    return collected
+    for item in outcome.get("abandoned", []):
+        print(f"[Outcome] run={item['run_id']} 窗口{item['window_label']} → "
+              f"{status_fail('已放弃')}（逾期未收割）")
+    return outcome.get("collected", [])
 
 
 def _has_pending_evaluations(run_id: str) -> bool:

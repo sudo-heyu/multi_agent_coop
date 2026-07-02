@@ -73,7 +73,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 
 **测试**
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 58/58
+.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 68/68
 ```
 
 常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
@@ -86,8 +86,8 @@ OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server
 ```bash
 MULTIAP_STATE_MODE=mock bash openclaw/serve.sh start   # mock，state 接受生成数据（默认）
 MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart # real，state 拒收生成数据
-bash openclaw/serve.sh status    # 查看四者状态
-bash openclaw/serve.sh stop      # 停曲线/State/Dashboard；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
+bash openclaw/serve.sh status    # 查看五者状态（state / gateway / dashboard / harvester / plot）
+bash openclaw/serve.sh stop      # 停曲线/State/Dashboard/harvester；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
 bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 gateway（否则缓存旧 MCP 连接，AP 调工具报 "tool isn't available"）
 ```
 
@@ -95,6 +95,7 @@ bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 ga
 - gateway 端口取自 profile 配置 `gateway.port`（默认 18789）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。`drive_ap` 运行时若 gateway 连接失败会回退 `--local`（保底）。
 - **学术曲线窗（matplotlib）也常驻**：`serve.sh start` 起一个常驻窗口，`run_openclaw.py` 检测到即复用（省每次 matplotlib 冷启动 ~2-3s），未在线则跳过提示。无桌面/SSH 环境自动跳过；`--no-academic-plot` 可主动关。
 - **Dashboard 实时对话流**：常驻 Dashboard 是独立进程，`run_openclaw.py` 把会话事件经 HTTP `POST /push` 推给它，再由 SSE 广播到浏览器——不再依赖进程内 `push_event`，常驻 Dashboard 也能看到实时对话/投票/决策（终端不再有 `Serving Flask app` 噪声）。
+- **Outcome 收割器常驻**：`serve.sh start` 拉起 `state_server/outcome_harvester.py`，每 `MULTIAP_HARVEST_INTERVAL`（默认 30s）结算到期的效果评估窗口、放弃逾期太久的窗口——real 模式长评估窗口（可达 15 分钟）不再依赖下次协商即可自动结算，是记忆效果反馈在真实部署下可靠的前提。
 - `MULTIAP_STATE_MODE=mock` 时 state server 带 `--allow-mock`；`real` 时不带。数据新鲜度分别由 feeder 或香蕉派 reporter 维持。
 - **提速预期**：省掉每回合 runtime/provider/MCP 冷启动 + 各服务临时启动；**不缩短模型推理本身**（每回合 ~13s 不变），整体收益取决于冷启动占比。
 
