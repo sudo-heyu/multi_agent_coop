@@ -12,6 +12,7 @@ from src.memory import (
     execute_rollback,
     find_similar_episodes,
     harvest_evaluations,
+    induce_rules,
     summarize_run_evaluations,
 )
 from openclaw.scenes import _parse_executor_endpoints
@@ -46,6 +47,10 @@ def main() -> None:
                           help="各 AP 执行端点，格式 ap1=host:port,ap2=...；执行回滚必填")
     rollback.add_argument("--confirm", action="store_true",
                           help="确认下发（缺省仅预演打印计划，不发请求）")
+    rules = sub.add_parser("rules", help="查看/归纳 L5 语义规律（跨案例统计）")
+    rules.add_argument("--induce", action="store_true", help="先从已评估案例重新归纳规律")
+    rules.add_argument("--scene")
+    rules.add_argument("--min-confidence", type=float, default=0.0)
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -112,6 +117,14 @@ def main() -> None:
             result = execute_rollback(
                 store, args.run_id, endpoints, confirm=args.confirm
             )
+        elif args.command == "rules":
+            induced = induce_rules(store) if args.induce else None
+            result = {
+                "induced_count": len(induced) if induced is not None else None,
+                "rules": store.list_rules(
+                    scene=args.scene, min_confidence=args.min_confidence
+                ),
+            }
         elif args.command == "evaluations":
             windows = store.list_evaluations(args.run_id)
             if not windows:

@@ -130,6 +130,7 @@ class Session:
         self.proposal_num: int = 0
         self.decision: dict | None = None
         self.recalled_episodes: list[dict] = []
+        self.recalled_rules: list[dict] = []
         self.memory_manager = SessionMemoryManager(
             budget_chars=int(os.environ.get("MULTIAP_CONTEXT_BUDGET_CHARS", "14000")),
             recent_turns=int(os.environ.get("MULTIAP_CONTEXT_RECENT_TURNS", "6")),
@@ -720,6 +721,7 @@ def propose_instruction(
     proposer_id: str,
     strategy_hint: str | None = None,
     recalled_episodes: list[dict] | None = None,
+    recalled_rules: list[dict] | None = None,
 ) -> str:
     state_summary = json.dumps(agent_view(_SESSION.ap_state), ensure_ascii=False, indent=2)
     if strategy_hint == "co_edca":
@@ -772,6 +774,16 @@ def propose_instruction(
                 f"{feedback}"
             )
         memory_hint = "\n".join(lines) + "\n\n"
+    rule_hint = ""
+    if recalled_rules:
+        from src.memory import format_rule
+        rule_lines = [
+            "【历史规律（本拓扑下多个带真实反馈案例的统计归纳，比单个案例更可靠；"
+            "仍须按当前最新状态重新验算）】"
+        ]
+        for rule in recalled_rules[:3]:
+            rule_lines.append("- " + format_rule(rule))
+        rule_hint = "\n".join(rule_lines) + "\n\n"
     history_hint = (
         "【重要】请先完整阅读上方的对话记录。\n"
         "如果记录中有 VALIDATOR 发出的验证失败消息，你的新提案必须直接解决其中列出的具体问题。\n"
@@ -782,6 +794,7 @@ def propose_instruction(
         f"你（{proposer_id.upper()}）是本轮的提案方，请发起参数调整提案。\n\n"
         f"{history_hint}"
         f"{tool_path_hint}"
+        f"{rule_hint}"
         f"{memory_hint}"
         f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
         "请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n"
@@ -961,7 +974,7 @@ def run_propose(
     on_event_chunk: Callable | None = None,
 ) -> dict:
     instruction = propose_instruction(
-        proposer_id, strategy_hint, _SESSION.recalled_episodes
+        proposer_id, strategy_hint, _SESSION.recalled_episodes, _SESSION.recalled_rules
     )
     reply, _ = _run_agent_turn(
         proposer_id,
@@ -1429,6 +1442,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
         in {"proposal_ready", "vote_progress", "counter_proposal_ready"}
     ):
         s.recalled_episodes = logger.recall_episodes(s.ap_state, limit=3, min_quality=0.5)
+        s.recalled_rules = logger.recall_rules(s.ap_state, min_confidence=0.5, limit=3)
 
     _log_phase(logger, 2, "协商触发，等待 AP1 自主选路")
 

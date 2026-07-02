@@ -12,9 +12,9 @@
 
 这些约束贯穿所有记忆层，后续迭代不得破坏：
 
-1. **记忆只作参考，实时状态与确定性 Validator 永远优先。** 历史案例注入提案提示时
-   明确标注"仅作参考，必须按当前最新状态重新调用工具验算"；任何决策最终都要过
-   物理约束 Validator。
+1. **记忆只作参考，实时状态与确定性 Validator 永远优先。** 历史案例（L3）和归纳
+   规律（L5）注入提案提示时都明确标注"仅作参考，必须按当前最新状态重新调用工具
+   验算"；任何决策最终都要过物理约束 Validator。
 2. **确定性。** 摘要、特征编码、相似度、效果分类全部是纯函数，同输入必同输出；
    不引入后台模型摘要（未来若加，必须保留确定性降级路径）。
 3. **幂等。** 事件按 event_id 幂等追加；评估窗口按 (run, window) 幂等登记；执行
@@ -31,6 +31,8 @@
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
+│  L5 Semantic Memory     跨案例归纳带证据/置信度的规律         │
+│      src/memory/semantic.py       ↑ 只用带真实反馈的案例     │
 │  L4 Outcome Evaluator   决策生效后多窗口真实效果评估          │
 │      src/memory/outcome.py        ↓ 质量修订/回滚建议        │
 │  L3 Episodic Memory     一次协商 = 一个案例；相似检索注入提案  │
@@ -40,7 +42,7 @@
 │  L1 Event Store + 恢复  有序幂等事件流 / 快照 / action journal│
 │      src/persistence/{event_store,recovery}.py              │
 └────────────────────────────────────────────────────────────┘
-  规划中：L5 Semantic Memory（跨案例归纳规律）、L6 Consolidation（后台整理）
+  规划中：L6 Consolidation（后台整理：过期/去重/冲突/锁）
 ```
 
 数据库：`logs/agent_memory.sqlite3`（WAL + foreign key + 事务）。
@@ -48,11 +50,11 @@
 
 ## L1 事件存储与恢复（src/persistence/）
 
-### Schema v6 表
+### Schema v7 表
 
 | 表 | 内容 |
 |---|---|
-| `schema_migrations` | 版本号 1..6，新版本就地迁移（含 ALTER 补列） |
+| `schema_migrations` | 版本号 1..7，新版本就地迁移（含 ALTER 补列） |
 | `agent_runs` | run 状态/模式/场景/模型/当前阶段/outcome |
 | `run_events` | 严格有序事件流：event_id 主键幂等，(run_id, sequence) 唯一 |
 | `state_snapshots` | 不可变状态快照：`initial`（全量原始遥测）、`final_observed`/`final_fallback` |
@@ -62,6 +64,7 @@
 | `session_memories` | L2 摘要与游标 |
 | `episodic_memories` | L3 案例（run_id 唯一，upsert） |
 | `outcome_evaluations` | L4 评估窗口：(run_id, window_label) 唯一，due_at 驱动收割 |
+| `semantic_rules` | L5 归纳规律：(拓扑, 场景, 策略) 唯一，含证据/支持数/置信度 |
 
 ### 双轨日志
 
@@ -179,6 +182,34 @@ state 可用，逾期窗口仍照常收割（稳态近似）。
 "实际改善"（置信度 0.95/0.91）——高优先级直播 AP 延迟 312→185ms、吞吐 +24%，
 低优先级 AP 小幅让出——案例质量 0.8 → 0.937。
 
+## L5 Semantic Memory（src/memory/semantic.py）
+
+把 L4 攒下的真实反馈**跨案例归纳成规律**：回答"这种拓扑/场景下采用某策略倾向
+产生什么效果、典型做法是什么"。规律比单案例更抽象、更可靠（有统计支撑）。
+
+**红线**：只用经过 L4 评估、结论有定论（improved/neutral/degraded）的案例归纳；
+无 L4 反馈或 inconclusive 的案例一律排除——否则归纳的是"跑完了的方案"而非
+"有效的方案"。全过程确定性、无 LLM。
+
+**归纳**（`induce_rules`，幂等 upsert 入 `semantic_rules` 表）：
+
+- 分组键 `(拓扑签名, 场景, 策略)`——只有同拓扑同场景同策略的案例才可比；
+- 每组 `support`（有定论案例数）≥ `MIN_SUPPORT`(2) 才成规律，避免单例噪声；
+- `dominant_verdict` = 占比最高的结论；`consistency` = 其占比；
+- `confidence = consistency × min(1, support/FULL_SUPPORT)`，`FULL_SUPPORT=3`
+  （本系统案例稀缺，3 个方向一致即视为满支撑，consistency 与阈值再双重把关）；
+- `action_summary` = 主导结论案例决策的逐 AP 逐参数中位数（"典型做法"）；
+- `evidence` = 参与案例的 run_id + 各自 verdict（可回溯）。
+
+**注入**：提案阶段 `find_matching_rules` 按当前拓扑检索 `confidence ≥ 0.5` 的规律，
+最多注入 3 条，渲染为"策略=co_edca，N 个带真实反馈案例中倾向改善（分布…，
+一致性…，置信度…），典型做法：ap2 CWmin=3…"。放在案例注入之前（更宏观），
+同样强制"仍须按当前最新状态重新验算"。检索记 `semantic_rules_recalled` 事件。
+
+**自动演进**：后台 harvester 每次收到新反馈就重新 `induce_rules`；`run_openclaw`
+启动补收后也归纳一次，让本轮提案读到最新规律。手动：`memory_admin.py rules
+[--induce]`。
+
 ## 一次协商的记忆生命周期
 
 ```text
@@ -198,7 +229,9 @@ run 结束     session_end → L3 物化案例（流水线质量分）
    │
 回滚(可选)   memory_admin rollback：dry-run 预演 → --confirm 幂等下发
    │
-下一次 run   提案注入带真实反馈的案例（恶化案例已被踢出参考池）  ←──循环
+反馈落地     L5 归纳：同拓扑/场景/策略案例 → 带证据和置信度的规律
+   │
+下一次 run   提案注入案例(L3)+规律(L5)；恶化案例已踢出、劣质规律被阈值挡  ←──循环
 ```
 
 ## 运维与查询
@@ -213,6 +246,7 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 .venv/bin/python memory_admin.py evaluations <run_id>       # 窗口结论+回滚建议
 .venv/bin/python memory_admin.py rollback <run_id>          # 预演回滚计划（dry-run）
 .venv/bin/python memory_admin.py rollback <run_id> --ap-endpoints ap1=host:port,... --confirm
+.venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5]
 .venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
 ```
 
@@ -232,17 +266,18 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 
 ## 测试
 
-`tests/` 内 68 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v6 就地升级）、幂等
+`tests/` 内 76 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v7 就地升级）、幂等
 追加/下发、恢复边界与阻塞、Session 摘要游标与预算、案例物化/拓扑隔离/相似排序、
 评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃
-（abandon grace）、收割/放弃解耦、回滚 dry-run、幂等下发、wire 格式不二次编码。
+（abandon grace）、收割/放弃解耦、回滚 dry-run、幂等下发、wire 格式不二次编码；
+L5：分组归纳、support 阈值、只用有反馈案例、action_summary 中位数、upsert 幂等、
+拓扑/置信度检索。
 
 ## 演进路线
 
-已完成 L1–L4，**含 L4 可靠性闭环**（后台 harvester、逾期放弃、人工审批回滚执行）。
-下一步（见 `docs/memory-architecture.md`）：
+已完成 L1–L5：**L4 可靠性闭环**（后台 harvester、逾期放弃、人工审批回滚执行）+
+**L5 语义归纳**（跨案例统计规律注入提案）。下一步（见 `docs/memory-architecture.md`）：
 
-1. **L5 Semantic Memory**：从多个带 Outcome 反馈的案例归纳规律（带证据引用与
-   置信度），前提正是 L4——否则归纳的是"跑完了的方案"而非"有效的方案"；
-2. **L6 Consolidation**：带锁、门控、冲突检测和过期管理的后台整理；
-3. 评估因果对照与参数校准、记忆可观测性（Dashboard 集成）。
+1. **L6 Consolidation**：带锁、门控、冲突检测和过期管理的后台整理；
+2. 评估因果对照与参数校准；
+3. 记忆可观测性（Dashboard 集成）。

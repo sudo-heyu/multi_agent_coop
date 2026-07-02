@@ -587,7 +587,7 @@ def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dic
     """结算到期评估窗口 + 放弃逾期太久的窗口；失败保持 pending 可重试，绝不阻塞协商。"""
     if not _event_store_enabled():
         return []
-    from src.memory import harvest_evaluations
+    from src.memory import harvest_evaluations, induce_rules
     store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
     try:
         # 评估比较用全量原始遥测（含 iperf 吞吐/延迟/丢包），不套 agent 字段白名单。
@@ -596,6 +596,9 @@ def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dic
             lambda: orch.get_all_states(server),
             run_id=run_id,
         )
+        # 有新反馈就刷新 L5 规律，让本轮提案读到最新统计归纳。
+        if outcome.get("collected"):
+            induce_rules(store)
     finally:
         store.close()
     if outcome.get("error"):

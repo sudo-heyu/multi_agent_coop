@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _now() -> str:
@@ -236,6 +236,26 @@ class EventStore:
 
             CREATE INDEX IF NOT EXISTS idx_outcome_eval_due
                 ON outcome_evaluations(status, due_at);
+
+            CREATE TABLE IF NOT EXISTS semantic_rules (
+                rule_id TEXT PRIMARY KEY,
+                topology_signature TEXT NOT NULL,
+                scene TEXT,
+                strategy TEXT,
+                dominant_verdict TEXT NOT NULL,
+                support INTEGER NOT NULL,
+                consistency REAL NOT NULL,
+                confidence REAL NOT NULL,
+                verdict_counts_json TEXT NOT NULL,
+                action_summary_json TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(topology_signature, scene, strategy)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_rules_topo_scene
+                ON semantic_rules(topology_signature, scene, confidence DESC);
             """
         )
         # v5 老库的 episodic_memories 缺 evaluation_json，就地补列。
@@ -853,6 +873,76 @@ class EventStore:
             )
             return cursor.rowcount > 0
 
+    def upsert_rule(self, rule: dict[str, Any]) -> str:
+        """按 (topology, scene, strategy) upsert 一条归纳规律，保留 created_at。"""
+        now = _now()
+        key = (rule["topology_signature"], rule.get("scene"), rule.get("strategy"))
+        with self._lock, self._conn:
+            existing = self._conn.execute(
+                """
+                SELECT rule_id, created_at FROM semantic_rules
+                WHERE topology_signature IS ? AND scene IS ? AND strategy IS ?
+                """,
+                key,
+            ).fetchone()
+            rule_id = existing["rule_id"] if existing else uuid.uuid4().hex
+            created_at = existing["created_at"] if existing else now
+            self._conn.execute(
+                """
+                INSERT INTO semantic_rules(
+                    rule_id, topology_signature, scene, strategy, dominant_verdict,
+                    support, consistency, confidence, verdict_counts_json,
+                    action_summary_json, evidence_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(rule_id) DO UPDATE SET
+                    dominant_verdict=excluded.dominant_verdict,
+                    support=excluded.support,
+                    consistency=excluded.consistency,
+                    confidence=excluded.confidence,
+                    verdict_counts_json=excluded.verdict_counts_json,
+                    action_summary_json=excluded.action_summary_json,
+                    evidence_json=excluded.evidence_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    rule_id, rule["topology_signature"], rule.get("scene"),
+                    rule.get("strategy"), rule["dominant_verdict"],
+                    int(rule["support"]), float(rule["consistency"]),
+                    float(rule["confidence"]), _json(rule.get("verdict_counts") or {}),
+                    _json(rule.get("action_summary") or {}),
+                    _json(rule.get("evidence") or []), created_at, now,
+                ),
+            )
+        return rule_id
+
+    def list_rules(
+        self,
+        *,
+        topology_signature: str | None = None,
+        scene: str | None = None,
+        min_confidence: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        clauses, params = ["confidence>=?"], [float(min_confidence)]
+        if topology_signature:
+            clauses.append("topology_signature=?")
+            params.append(topology_signature)
+        if scene:
+            clauses.append("scene=?")
+            params.append(scene)
+        where = " WHERE " + " AND ".join(clauses)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM semantic_rules" + where
+                + " ORDER BY confidence DESC, support DESC",
+                params,
+            ).fetchall()
+        return [self._rule_record(row) for row in rows]
+
+    def delete_rules(self) -> int:
+        with self._lock, self._conn:
+            cursor = self._conn.execute("DELETE FROM semantic_rules")
+            return cursor.rowcount
+
     def get_run(self, run_id: str) -> RunRecord | None:
         with self._lock:
             row = self._conn.execute(
@@ -968,6 +1058,24 @@ class EventStore:
             "metrics": load("metrics_json", {}),
             "quality_score": row["quality_score"],
             "evaluation": load("evaluation_json"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    @staticmethod
+    def _rule_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "rule_id": row["rule_id"],
+            "topology_signature": row["topology_signature"],
+            "scene": row["scene"],
+            "strategy": row["strategy"],
+            "dominant_verdict": row["dominant_verdict"],
+            "support": row["support"],
+            "consistency": row["consistency"],
+            "confidence": row["confidence"],
+            "verdict_counts": json.loads(row["verdict_counts_json"]),
+            "action_summary": json.loads(row["action_summary_json"]),
+            "evidence": json.loads(row["evidence_json"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

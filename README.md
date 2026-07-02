@@ -73,7 +73,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 
 **测试**
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 68/68
+.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 76/76
 ```
 
 常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
@@ -220,7 +220,9 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 每次 run 结束会自动生成 Episodic Memory，保存初始环境、领域特征、决策、Validator、执行结果和观测指标。下一次同拓扑协商会检索最多 3 个高质量相似案例注入提案提示，但历史参数不能绕过最新状态读取和工具验算。可用 `memory_admin.py episodes` 和 `memory_admin.py similar <run_id>` 查询。
 
-决策生效后还会登记多时间窗口的 Outcome 评估（`--eval-windows`，默认 mock=10,30s / real=60,300,900s）：到期时与协商前基线比较吞吐/延迟/丢包，按业务优先级加权判定 `improved / degraded / neutral / inconclusive`，并把结论回写案例质量——实际恶化的案例质量封顶 0.2，不会再被当作高质量参考注入提案，同时生成恢复协商前参数的回滚建议（只建议，不自动执行）。收割不阻塞进程：mock 保活循环内实时结算，其余由下次 `run_openclaw.py` 启动时或 `memory_admin.py evaluate --server <url>` 补收；`memory_admin.py evaluations <run_id>` 查看窗口结论与回滚建议。
+决策生效后还会登记多时间窗口的 Outcome 评估（`--eval-windows`，默认 mock=10,30s / real=60,300,900s）：到期时与协商前基线比较吞吐/延迟/丢包，按业务优先级加权判定 `improved / degraded / neutral / inconclusive`，并把结论回写案例质量——实际恶化的案例质量封顶 0.2，不会再被当作高质量参考注入提案，同时生成恢复协商前参数的回滚建议。回滚默认只建议不执行，管理员显式审批后经幂等通道下发：`memory_admin.py rollback <run_id>`（dry-run）、加 `--ap-endpoints ... --confirm` 执行。收割不阻塞进程：常驻 harvester 定期结算、逾期太久的窗口标 abandoned，mock 保活循环实时结算，也可 `memory_admin.py evaluate --server <url>` 手动补收；`memory_admin.py evaluations <run_id>` 查看窗口结论与回滚建议。
+
+带真实反馈的案例进一步归纳为 **Semantic Memory（L5）语义规律**：同拓扑/场景/策略的多个有定论案例，统计出"倾向改善/恶化"的规律（带证据 run_id、支持数、一致性、置信度和典型做法），下次同拓扑提案时注入高置信规律（比单案例更可靠），仍强制按最新状态重新验算。规律随后台 harvester 收到新反馈自动重新归纳；`memory_admin.py rules [--induce]` 查看/归纳。
 
 ---
 

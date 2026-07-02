@@ -19,6 +19,7 @@ from .outcome import (
     summarize_run_evaluations,
 )
 from .rollback import execute_rollback, resolve_rollback_plan
+from .semantic import find_matching_rules, format_rule, induce_rules
 
 __all__ = [
     "SessionMemory", "SessionMemoryManager", "encode_features",
@@ -28,4 +29,5 @@ __all__ = [
     "harvest_evaluations", "parse_windows", "revise_quality",
     "schedule_outcome_evaluations", "summarize_run_evaluations",
     "execute_rollback", "resolve_rollback_plan",
+    "find_matching_rules", "format_rule", "induce_rules",
 ]

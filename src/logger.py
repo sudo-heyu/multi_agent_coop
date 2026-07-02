@@ -331,6 +331,36 @@ class SessionLogger:
         )
         return scheduled
 
+    def recall_rules(
+        self,
+        state: dict[str, Any],
+        *,
+        scene: str | None = None,
+        min_confidence: float = 0.5,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        if self._event_store is None:
+            return []
+        from .memory import find_matching_rules
+        rules = find_matching_rules(
+            self._event_store, state, scene=scene,
+            min_confidence=min_confidence, limit=limit,
+        )
+        self._write(
+            "semantic_rules_recalled",
+            matches=[
+                {
+                    "rule_id": r["rule_id"],
+                    "strategy": r["strategy"],
+                    "dominant_verdict": r["dominant_verdict"],
+                    "support": r["support"],
+                    "confidence": r["confidence"],
+                }
+                for r in rules
+            ],
+        )
+        return rules
+
     def record_state_snapshot(
         self,
         label: str,
