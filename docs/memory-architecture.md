@@ -140,5 +140,7 @@ run 结束时，`src/memory/episodic.py` 从事件和快照自动物化一个案
    规律冲突标记、维护锁串行化）。
 6. ✅ 评估质量与校准：跨窗口一致性因果强化（摇摆压低置信、平票不回滚）、分类
    阈值环境变量可覆盖、`calibrate` 校准诊断报告。
+7. ✅ 可观测性：`memory_health` 聚合、Dashboard `/memory` 健康度面板、
+   `memory_admin.py health` CLI。
 
 任何长期记忆都只作为提案参考，当前实时状态和确定性 Validator 始终具有更高优先级。

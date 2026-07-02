@@ -1025,6 +1025,16 @@ class EventStore:
             ).fetchone()
         return self._run_record(row) if row is not None else None
 
+    def run_counts(self) -> dict[str, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) AS n FROM agent_runs GROUP BY status"
+            ).fetchall()
+        counts = {row["status"]: int(row["n"]) for row in rows}
+        total = sum(counts.values())
+        completed = counts.get("completed", 0)
+        return {"total": total, "completed": completed, "incomplete": total - completed}
+
     def list_incomplete_runs(self) -> list[RunRecord]:
         with self._lock:
             rows = self._conn.execute(

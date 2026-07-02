@@ -22,6 +22,7 @@ from .outcome import (
 from .rollback import execute_rollback, resolve_rollback_plan
 from .semantic import find_matching_rules, format_rule, induce_rules
 from .consolidation import ConsolidationConfig, consolidate
+from .observability import memory_health
 
 __all__ = [
     "SessionMemory", "SessionMemoryManager", "encode_features",
@@ -32,5 +33,5 @@ __all__ = [
     "revise_quality", "schedule_outcome_evaluations", "summarize_run_evaluations",
     "execute_rollback", "resolve_rollback_plan",
     "find_matching_rules", "format_rule", "induce_rules",
-    "ConsolidationConfig", "consolidate",
+    "ConsolidationConfig", "consolidate", "memory_health",
 ]

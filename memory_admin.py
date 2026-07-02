@@ -58,6 +58,7 @@ def main() -> None:
     consolidate_cmd.add_argument("--max-per-topology", type=int, default=50)
     consolidate_cmd.add_argument("--max-age-days", type=float, default=90.0)
     sub.add_parser("calibrate", help="评估阈值校准诊断：score/verdict 分布与摇摆率")
+    sub.add_parser("health", help="记忆系统健康度快照（案例/评估/规律/runs）")
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -144,6 +145,9 @@ def main() -> None:
             )
         elif args.command == "calibrate":
             result = evaluation_diagnostics(store)
+        elif args.command == "health":
+            from src.memory import memory_health
+            result = memory_health(store)
         elif args.command == "evaluations":
             windows = store.list_evaluations(args.run_id)
             if not windows:

@@ -258,6 +258,20 @@ TTL；拿不到锁（他人正在整理）直接返回 `skipped`，绝不阻塞�
 calibrate` 给出真实数据下的分布诊断供人工校准。这两项让 L4 的结论从"单点观测"
 升级为"有因果强度和可校准阈值的判断"。
 
+## 可观测性（src/memory/observability.py）
+
+`memory_health(store)` 把六层记忆的关键指标聚合成一个只读快照：runs 完成度、
+案例存活/归档数与质量分布、按 verdict 分桶与恶化占比、评估窗口 pending/collected/
+abandoned、规律生效/冲突数与平均置信度、拓扑数与单拓扑存活上限。两种入口：
+
+- **命令行**：`memory_admin.py health`（JSON）；
+- **Dashboard**：常驻 Dashboard 新增 `/memory` 页面（每 15s 自动刷新的健康度卡片）
+  与 `/memory/health` JSON 端点。
+
+关键信号一眼可见：pending 堆积（收割器是否掉线）、abandoned 增长（state server
+长期离线）、degraded 占比偏高（决策质量下滑）、conflicted 规律增多（环境在变、
+旧规律失效）——把此前只散落在 SQLite 里的记忆状态变成可监控面板。
+
 ## 一次协商的记忆生命周期
 
 ```text
@@ -297,8 +311,11 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 .venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5] [--include-conflicted]
 .venv/bin/python memory_admin.py consolidate [--max-per-topology 50] [--max-age-days 90]
 .venv/bin/python memory_admin.py calibrate                  # 评估阈值校准诊断
+.venv/bin/python memory_admin.py health                     # 记忆健康度快照
 .venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
 ```
+
+Dashboard 健康度：`http://localhost:5050/memory`（常驻 Dashboard 起后可访问）。
 
 后台收割器随常驻服务启动：`bash openclaw/serve.sh start` 会拉起 `outcome_harvester`，
 `serve.sh status` 显示其状态。
@@ -324,12 +341,13 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 收割/放弃解耦、回滚 dry-run/幂等下发/wire 不二次编码；L5：分组归纳、support 阈值、
 只用有反馈案例、action_summary 中位数、拓扑/置信度检索；L6：容量淘汰、过期归档、
 冲突标记与清除、检索排除归档、维护锁串行化；评估质量：跨窗口一致性因果强化
-（摇摆压低置信、平票不回滚）、阈值环境变量覆盖、校准诊断报告。
+（摇摆压低置信、平票不回滚）、阈值环境变量覆盖、校准诊断报告；可观测性：健康度
+聚合、Dashboard `/memory` 页面与空库处理。
 
 ## 演进路线
 
-已完成 L1–L6 六层 + **因果强化与阈值校准**。记忆结构完整、可信度打磨到位。
-后续（见 `docs/memory-architecture.md`）：
+已完成 L1–L6 六层 + **因果强化与阈值校准** + **可观测性**。记忆结构完整、
+可信度打磨到位、状态可监控。剩余为开放研究项（见 `docs/memory-architecture.md`）：
 
-1. 记忆可观测性（Dashboard 集成：案例数、质量分布、卡住/归档窗口、冲突规律）；
-2. 跨拓扑泛化、Session Memory 模型化摘要（开放研究项）。
+1. 跨拓扑泛化（当前新拓扑冷启动，签名严格隔离）；
+2. Session Memory 模型化摘要（当前为确定性截断，预留了替换位）。

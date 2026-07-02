@@ -73,7 +73,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 
 **测试**
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 94/94
+.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 98/98
 ```
 
 常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
@@ -224,7 +224,9 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 带真实反馈的案例进一步归纳为 **Semantic Memory（L5）语义规律**：同拓扑/场景/策略的多个有定论案例，统计出"倾向改善/恶化"的规律（带证据 run_id、支持数、一致性、置信度和典型做法），下次同拓扑提案时注入高置信规律（比单案例更可靠），仍强制按最新状态重新验算。规律随后台 harvester 收到新反馈自动重新归纳；`memory_admin.py rules [--induce]` 查看/归纳。
 
-**Consolidation（L6）后台整理**防止记忆无限膨胀、旧规律误导：带维护锁定期做容量淘汰（每拓扑保留质量最高的 top-N）、过期归档（老且低质案例软删）、规律冲突检测（证据分歧大的规律标 conflicted 不再注入）。归档/冲突均软删不物理删除，保留审计链；随 harvester 自动触发，或 `memory_admin.py consolidate` 手动执行。记忆模块完整设计见 `docs/memory-module.md`。
+**Consolidation（L6）后台整理**防止记忆无限膨胀、旧规律误导：带维护锁定期做容量淘汰（每拓扑保留质量最高的 top-N）、过期归档（老且低质案例软删）、规律冲突检测（证据分歧大的规律标 conflicted 不再注入）。归档/冲突均软删不物理删除，保留审计链；随 harvester 自动触发，或 `memory_admin.py consolidate` 手动执行。
+
+评估还做了**因果强化**：多窗口持续同向才算可信效果，方向摇摆的窗口会压低置信度、不触发回滚（`memory_admin.py calibrate` 查看阈值校准诊断）。记忆整体状态可观测：`memory_admin.py health` 或常驻 Dashboard 的 `http://localhost:5050/memory` 面板，一眼看清案例质量分布、评估积压、规律冲突等健康信号。记忆模块完整设计见 `docs/memory-module.md`。
 
 ---
 

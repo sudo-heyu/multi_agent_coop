@@ -9,10 +9,15 @@
 """
 import argparse
 import json
+import os
 import queue as _queue
+import sys
 import threading
 import time
 from pathlib import Path
+
+# dashboard 作为独立进程运行时 sys.path[0] 是 dashboard/，补上 repo root 才能 import src.*
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask, Response, request, jsonify, stream_with_context
 import requests as _req
@@ -642,6 +647,81 @@ def events():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+_MEMORY_HTML = r"""<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>Multi-AP 记忆健康度</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'SF Mono','Consolas','Menlo',monospace; background: #111827; color: #d1d5db; padding: 18px; }
+h1 { font-size: 17px; color: #93c5fd; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #6b7280; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 13px 15px; }
+.card h2 { font-size: 13px; color: #9ca3af; margin-bottom: 10px; letter-spacing: .5px; }
+.row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.row .k { color: #9ca3af; }
+.row .v { color: #f9fafb; font-weight: bold; }
+.v.warn { color: #fbbf24; } .v.bad { color: #f87171; } .v.good { color: #4ade80; }
+.bars { margin-top: 6px; }
+.bar { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
+.bar .lbl { width: 82px; color: #9ca3af; } .bar .fill { height: 9px; border-radius: 2px; }
+</style></head><body>
+<h1>Multi-AP 记忆健康度</h1>
+<div class="sub" id="ts">加载中…</div>
+<div class="grid" id="grid"></div>
+<script>
+const VCOLOR = { improved:"#4ade80", neutral:"#9ca3af", degraded:"#f87171", inconclusive:"#60a5fa", unevaluated:"#4b5563" };
+function row(k, v, cls){ return `<div class="row"><span class="k">${k}</span><span class="v ${cls||''}">${v}</span></div>`; }
+function bars(obj, total){
+  total = total || Object.values(obj).reduce((a,b)=>a+b,0) || 1;
+  return '<div class="bars">' + Object.entries(obj).map(([k,v])=>{
+    const w = Math.max(3, Math.round(v/total*140));
+    return `<div class="bar"><span class="lbl">${k}</span><span class="fill" style="width:${w}px;background:${VCOLOR[k]||'#6b7280'}"></span><span>${v}</span></div>`;
+  }).join('') + '</div>';
+}
+function card(title, html){ return `<div class="card"><h2>${title}</h2>${html}</div>`; }
+function render(d){
+  document.getElementById('ts').textContent = '生成于 ' + d.generated_at;
+  const g = document.getElementById('grid');
+  const ep = d.episodes, q = ep.quality || {};
+  const degCls = ep.degraded_ratio > 0.3 ? 'bad' : (ep.degraded_ratio > 0.1 ? 'warn' : 'good');
+  const ev = d.evaluations, ru = d.rules, rn = d.runs;
+  g.innerHTML =
+    card('Runs', row('总数', rn.total) + row('已完成', rn.completed, 'good') + row('未完成', rn.incomplete, rn.incomplete?'warn':'')) +
+    card('案例 Episodes', row('存活', ep.alive, 'good') + row('已归档', ep.archived) +
+      row('质量中位数', (q.median!==undefined?q.median:'—')) + row('恶化占比', (ep.degraded_ratio*100).toFixed(0)+'%', degCls) + bars(ep.by_verdict)) +
+    card('评估窗口 Evaluations', row('待结算 pending', ev.pending, ev.pending?'warn':'') +
+      row('已结算 collected', ev.collected, 'good') + row('已放弃 abandoned', ev.abandoned, ev.abandoned?'bad':'')) +
+    card('规律 Rules', row('生效 active', ru.active, 'good') + row('冲突 conflicted', ru.conflicted, ru.conflicted?'warn':'') +
+      row('平均置信度', (ru.avg_confidence!==null?ru.avg_confidence:'—')) + bars(ru.by_verdict)) +
+    card('拓扑 Topologies', row('拓扑数', d.topologies.count) + row('单拓扑最多存活', d.topologies.max_alive_per_topology));
+}
+function refresh(){ fetch('/memory/health').then(r=>r.json()).then(render).catch(()=>{}); }
+refresh(); setInterval(refresh, 15000);
+</script></body></html>
+"""
+
+
+@app.route("/memory")
+def memory_page():
+    return _MEMORY_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/memory/health")
+def memory_health_json():
+    from src.persistence import EventStore
+    from src.memory import memory_health
+    from src.logger import DEFAULT_EVENT_DB
+    db = os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB))
+    store = EventStore(db)
+    try:
+        return jsonify(memory_health(store))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        store.close()
 
 
 @app.route("/metrics")
