@@ -9,6 +9,7 @@ from pathlib import Path
 from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore, build_checkpoint
 from src.memory import (
+    consolidate,
     execute_rollback,
     find_similar_episodes,
     harvest_evaluations,
@@ -51,6 +52,10 @@ def main() -> None:
     rules.add_argument("--induce", action="store_true", help="先从已评估案例重新归纳规律")
     rules.add_argument("--scene")
     rules.add_argument("--min-confidence", type=float, default=0.0)
+    rules.add_argument("--include-conflicted", action="store_true", help="含被标记冲突的规律")
+    consolidate_cmd = sub.add_parser("consolidate", help="L6 整理：容量/过期归档 + 重归纳 + 冲突标记")
+    consolidate_cmd.add_argument("--max-per-topology", type=int, default=50)
+    consolidate_cmd.add_argument("--max-age-days", type=float, default=90.0)
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -122,9 +127,19 @@ def main() -> None:
             result = {
                 "induced_count": len(induced) if induced is not None else None,
                 "rules": store.list_rules(
-                    scene=args.scene, min_confidence=args.min_confidence
+                    scene=args.scene, min_confidence=args.min_confidence,
+                    include_conflicted=args.include_conflicted,
                 ),
             }
+        elif args.command == "consolidate":
+            from src.memory import ConsolidationConfig
+            result = consolidate(
+                store,
+                config=ConsolidationConfig(
+                    max_per_topology=args.max_per_topology,
+                    max_age_days=args.max_age_days,
+                ),
+            )
         elif args.command == "evaluations":
             windows = store.list_evaluations(args.run_id)
             if not windows:

@@ -11,12 +11,12 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _now() -> str:
@@ -256,10 +256,20 @@ class EventStore:
 
             CREATE INDEX IF NOT EXISTS idx_rules_topo_scene
                 ON semantic_rules(topology_signature, scene, confidence DESC);
+
+            CREATE TABLE IF NOT EXISTS maintenance_locks (
+                lock_name TEXT PRIMARY KEY,
+                holder TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
             """
         )
         # v5 老库的 episodic_memories 缺 evaluation_json，就地补列。
         self._ensure_column("episodic_memories", "evaluation_json", "TEXT")
+        # v8：L6 整理软删/冲突标记（旧库就地补列，默认未归档、未冲突）。
+        self._ensure_column("episodic_memories", "archived", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("semantic_rules", "conflicted", "INTEGER NOT NULL DEFAULT 0")
         for version in range(1, SCHEMA_VERSION + 1):
             self._conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
@@ -733,8 +743,11 @@ class EventStore:
         topology_signature: str | None = None,
         scene: str | None = None,
         limit: int = 200,
+        include_archived: bool = False,
     ) -> list[dict[str, Any]]:
         clauses, params = [], []
+        if not include_archived:
+            clauses.append("archived=0")
         if topology_signature:
             clauses.append("topology_signature=?")
             params.append(topology_signature)
@@ -750,6 +763,65 @@ class EventStore:
                 params,
             ).fetchall()
         return [self._episode_record(row) for row in rows]
+
+    def archive_episodes(self, run_ids: list[str]) -> int:
+        """软删（archived=1）一批案例：不再参与检索/归纳，但保留可审计。"""
+        if not run_ids:
+            return 0
+        now = _now()
+        placeholders = ",".join("?" for _ in run_ids)
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                f"UPDATE episodic_memories SET archived=1, updated_at=? "
+                f"WHERE run_id IN ({placeholders}) AND archived=0",
+                [now, *run_ids],
+            )
+            return cursor.rowcount
+
+    def count_episodes_by_topology(self, *, include_archived: bool = False) -> dict[str, int]:
+        where = "" if include_archived else " WHERE archived=0"
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT topology_signature, COUNT(*) AS n FROM episodic_memories"
+                + where + " GROUP BY topology_signature",
+            ).fetchall()
+        return {row["topology_signature"]: int(row["n"]) for row in rows}
+
+    def mark_rule_conflicted(self, rule_id: str, conflicted: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE semantic_rules SET conflicted=?, updated_at=? WHERE rule_id=?",
+                (1 if conflicted else 0, _now(), rule_id),
+            )
+
+    def acquire_lock(self, name: str, holder: str, *, ttl_seconds: float) -> bool:
+        """获取维护锁：无人持有或已过期才成功；防 consolidation 与写入并发。"""
+        now = datetime.now(timezone.utc)
+        now_s = now.isoformat(timespec="milliseconds")
+        expires_s = (now + timedelta(seconds=max(1.0, ttl_seconds))).isoformat(timespec="milliseconds")
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT holder, expires_at FROM maintenance_locks WHERE lock_name=?", (name,)
+            ).fetchone()
+            if row is not None and row["expires_at"] > now_s and row["holder"] != holder:
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO maintenance_locks(lock_name, holder, acquired_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(lock_name) DO UPDATE SET
+                    holder=excluded.holder, acquired_at=excluded.acquired_at,
+                    expires_at=excluded.expires_at
+                """,
+                (name, holder, now_s, expires_s),
+            )
+            return True
+
+    def release_lock(self, name: str, holder: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM maintenance_locks WHERE lock_name=? AND holder=?", (name, holder)
+            )
 
     def schedule_evaluation(
         self,
@@ -921,8 +993,11 @@ class EventStore:
         topology_signature: str | None = None,
         scene: str | None = None,
         min_confidence: float = 0.0,
+        include_conflicted: bool = False,
     ) -> list[dict[str, Any]]:
         clauses, params = ["confidence>=?"], [float(min_confidence)]
+        if not include_conflicted:
+            clauses.append("conflicted=0")
         if topology_signature:
             clauses.append("topology_signature=?")
             params.append(topology_signature)
@@ -1058,6 +1133,7 @@ class EventStore:
             "metrics": load("metrics_json", {}),
             "quality_score": row["quality_score"],
             "evaluation": load("evaluation_json"),
+            "archived": bool(row["archived"]) if "archived" in row.keys() else False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1076,6 +1152,7 @@ class EventStore:
             "verdict_counts": json.loads(row["verdict_counts_json"]),
             "action_summary": json.loads(row["action_summary_json"]),
             "evidence": json.loads(row["evidence_json"]),
+            "conflicted": bool(row["conflicted"]) if "conflicted" in row.keys() else False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

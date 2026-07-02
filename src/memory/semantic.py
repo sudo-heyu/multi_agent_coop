@@ -49,7 +49,7 @@ def induce_rules(
         if len(members) < min_support:
             continue
         rule = _build_rule(topology, scene, strategy, members)
-        store.upsert_rule(rule)
+        rule["rule_id"] = store.upsert_rule(rule)
         rules.append(rule)
     rules.sort(key=lambda item: (item["confidence"], item["support"]), reverse=True)
     return rules

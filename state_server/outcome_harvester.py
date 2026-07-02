@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore
-from src.memory import harvest_evaluations, induce_rules
+from src.memory import consolidate, harvest_evaluations
 from src.state_client import get_all_states
 
 
@@ -62,15 +62,19 @@ def run(server: str, interval: float, db_path: str) -> None:
                   f"{item['window_label']}（逾期未收割）", flush=True)
         if outcome.get("error"):
             print(f"[harvester] {_stamp()} 收割失败（保持 pending）：{outcome['error']}", flush=True)
-        # 有新反馈落地就刷新 L5 规律，让规律随真实效果自动演进。
+        # 有新反馈落地就做一次整理（含 L5 归纳 + L6 容量/过期归档 + 冲突标记），
+        # 让规律随真实效果自动演进、案例库不无限膨胀。
         if outcome.get("collected"):
             store = EventStore(db_path)
             try:
-                rules = induce_rules(store)
-                if rules:
-                    print(f"[harvester] {_stamp()} 归纳 {len(rules)} 条语义规律", flush=True)
+                summary = consolidate(store)
+                if summary.get("status") == "done":
+                    print(f"[harvester] {_stamp()} 整理：规律 {summary['rules_total']} 条"
+                          f"（冲突 {len(summary['conflicted_rules'])}），归档案例 "
+                          f"{len(summary['archived_over_capacity']) + len(summary['archived_expired'])}",
+                          flush=True)
             except Exception as exc:  # noqa: BLE001
-                print(f"[harvester] {_stamp()} 规律归纳异常（忽略）：{exc}", flush=True)
+                print(f"[harvester] {_stamp()} 整理异常（忽略）：{exc}", flush=True)
             finally:
                 store.close()
         # 可被信号打断的分段睡眠，保证 stop 及时生效。

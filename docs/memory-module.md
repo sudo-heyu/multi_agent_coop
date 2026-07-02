@@ -31,6 +31,8 @@
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
+│  L6 Consolidation       带锁整理：容量/过期归档、规律冲突检测 │
+│      src/memory/consolidation.py                            │
 │  L5 Semantic Memory     跨案例归纳带证据/置信度的规律         │
 │      src/memory/semantic.py       ↑ 只用带真实反馈的案例     │
 │  L4 Outcome Evaluator   决策生效后多窗口真实效果评估          │
@@ -42,7 +44,7 @@
 │  L1 Event Store + 恢复  有序幂等事件流 / 快照 / action journal│
 │      src/persistence/{event_store,recovery}.py              │
 └────────────────────────────────────────────────────────────┘
-  规划中：L6 Consolidation（后台整理：过期/去重/冲突/锁）
+  六层已全部落地。
 ```
 
 数据库：`logs/agent_memory.sqlite3`（WAL + foreign key + 事务）。
@@ -50,11 +52,11 @@
 
 ## L1 事件存储与恢复（src/persistence/）
 
-### Schema v7 表
+### Schema v8 表
 
 | 表 | 内容 |
 |---|---|
-| `schema_migrations` | 版本号 1..7，新版本就地迁移（含 ALTER 补列） |
+| `schema_migrations` | 版本号 1..8，新版本就地迁移（含 ALTER 补列） |
 | `agent_runs` | run 状态/模式/场景/模型/当前阶段/outcome |
 | `run_events` | 严格有序事件流：event_id 主键幂等，(run_id, sequence) 唯一 |
 | `state_snapshots` | 不可变状态快照：`initial`（全量原始遥测）、`final_observed`/`final_fallback` |
@@ -64,7 +66,10 @@
 | `session_memories` | L2 摘要与游标 |
 | `episodic_memories` | L3 案例（run_id 唯一，upsert） |
 | `outcome_evaluations` | L4 评估窗口：(run_id, window_label) 唯一，due_at 驱动收割 |
-| `semantic_rules` | L5 归纳规律：(拓扑, 场景, 策略) 唯一，含证据/支持数/置信度 |
+| `semantic_rules` | L5 归纳规律：(拓扑, 场景, 策略) 唯一，含证据/支持数/置信度/conflicted |
+| `maintenance_locks` | L6 维护锁：holder + TTL，串行化 consolidation |
+
+（v8 还为 `episodic_memories` 加 `archived`、`semantic_rules` 加 `conflicted` 软删/标记列。）
 
 ### 双轨日志
 
@@ -206,9 +211,32 @@ state 可用，逾期窗口仍照常收割（稳态近似）。
 一致性…，置信度…），典型做法：ap2 CWmin=3…"。放在案例注入之前（更宏观），
 同样强制"仍须按当前最新状态重新验算"。检索记 `semantic_rules_recalled` 事件。
 
-**自动演进**：后台 harvester 每次收到新反馈就重新 `induce_rules`；`run_openclaw`
-启动补收后也归纳一次，让本轮提案读到最新规律。手动：`memory_admin.py rules
-[--induce]`。
+**自动演进**：后台 harvester 每次收到新反馈就整理一次（含归纳，见 L6）；
+`run_openclaw` 启动补收后也归纳一次，让本轮提案读到最新规律。手动：
+`memory_admin.py rules [--induce]`。
+
+## L6 Consolidation（src/memory/consolidation.py）
+
+记忆若只增不整理，案例库会无限膨胀、旧规律会误导。L6 定期做**确定性整理**，
+用维护锁串行化，避免与协商写入/后台收割并发。软删（`archived=1`）不物理删除，
+保留完整审计链。
+
+**维护锁**（`maintenance_locks` 表）：`acquire_lock`/`release_lock`，带 holder 和
+TTL；拿不到锁（他人正在整理）直接返回 `skipped`，绝不阻塞。
+
+`consolidate` 一次整理按序做：
+
+1. **容量淘汰** —— 每个拓扑存活案例超 `max_per_topology`(默认 50) 时，按
+   `(quality, created_at)` 保留 top-N，其余归档；
+2. **过期归档** —— 年龄超 `max_age_days`(默认 90) 且质量低于 `min_quality_keep`
+   (默认 0.3) 的案例归档（老且不够好的先淘汰；高质老案例保留）；
+3. **重新归纳** —— 基于存活案例（archived 自动排除）刷新 L5 规律；
+4. **冲突检测** —— 一致性低于 `conflict_consistency`(默认 0.6) 的规律标 `conflicted`
+   （证据分歧大 → 不再注入提案）；证据重新一致时清除标记，随反馈演进。
+
+归档案例自动退出 L3 相似检索与 L5 归纳；冲突规律自动退出 L5 注入（`list_rules`
+默认排除，`--include-conflicted` 可查）。整理由后台 harvester 收到新反馈时触发，
+或 `memory_admin.py consolidate` 手动执行。
 
 ## 一次协商的记忆生命周期
 
@@ -229,9 +257,9 @@ run 结束     session_end → L3 物化案例（流水线质量分）
    │
 回滚(可选)   memory_admin rollback：dry-run 预演 → --confirm 幂等下发
    │
-反馈落地     L5 归纳：同拓扑/场景/策略案例 → 带证据和置信度的规律
+反馈落地     L6 整理（带锁）：容量/过期归档 → L5 重归纳 → 冲突规律标记
    │
-下一次 run   提案注入案例(L3)+规律(L5)；恶化案例已踢出、劣质规律被阈值挡  ←──循环
+下一次 run   提案注入案例(L3)+规律(L5)；恶化案例踢出、归档案例排除、冲突规律挡  ←─循环
 ```
 
 ## 运维与查询
@@ -246,7 +274,8 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 .venv/bin/python memory_admin.py evaluations <run_id>       # 窗口结论+回滚建议
 .venv/bin/python memory_admin.py rollback <run_id>          # 预演回滚计划（dry-run）
 .venv/bin/python memory_admin.py rollback <run_id> --ap-endpoints ap1=host:port,... --confirm
-.venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5]
+.venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5] [--include-conflicted]
+.venv/bin/python memory_admin.py consolidate [--max-per-topology 50] [--max-age-days 90]
 .venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
 ```
 
@@ -266,18 +295,18 @@ run 结束     session_end → L3 物化案例（流水线质量分）
 
 ## 测试
 
-`tests/` 内 76 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v7 就地升级）、幂等
+`tests/` 内 86 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v8 就地升级）、幂等
 追加/下发、恢复边界与阻塞、Session 摘要游标与预算、案例物化/拓扑隔离/相似排序、
-评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃
-（abandon grace）、收割/放弃解耦、回滚 dry-run、幂等下发、wire 格式不二次编码；
-L5：分组归纳、support 阈值、只用有反馈案例、action_summary 中位数、upsert 幂等、
-拓扑/置信度检索。
+评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃、
+收割/放弃解耦、回滚 dry-run/幂等下发/wire 不二次编码；L5：分组归纳、support 阈值、
+只用有反馈案例、action_summary 中位数、拓扑/置信度检索；L6：容量淘汰、过期归档、
+冲突标记与清除、检索排除归档、维护锁串行化。
 
 ## 演进路线
 
-已完成 L1–L5：**L4 可靠性闭环**（后台 harvester、逾期放弃、人工审批回滚执行）+
-**L5 语义归纳**（跨案例统计规律注入提案）。下一步（见 `docs/memory-architecture.md`）：
+已完成 L1–L6 六层：**L4 可靠性闭环** + **L5 语义归纳** + **L6 带锁整理**。
+记忆结构完整。后续为质量与可观测性打磨（见 `docs/memory-architecture.md`）：
 
-1. **L6 Consolidation**：带锁、门控、冲突检测和过期管理的后台整理；
-2. 评估因果对照与参数校准；
-3. 记忆可观测性（Dashboard 集成）。
+1. 评估因果对照与硬编码参数（相似度权重/分类阈值/质量公式）的数据校准；
+2. 记忆可观测性（Dashboard 集成：案例数、质量分布、卡住/归档窗口、冲突规律）；
+3. 跨拓扑泛化、Session Memory 模型化摘要（开放研究项）。
