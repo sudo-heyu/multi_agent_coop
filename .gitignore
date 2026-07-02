@@ -18,3 +18,4 @@ logs/
 .claude/settings.local.json
 
 .DS_Store
+openclaw/workspaces/*/proposal*.json
