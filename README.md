@@ -211,7 +211,7 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 同一事件还会双写到 `logs/agent_memory.sqlite3`，按 run 保存有序事件和状态快照。可用
 `.venv/bin/python memory_admin.py incomplete` 查看异常中断运行，或用
-`.venv/bin/python memory_admin.py show <run_id>` 回放。executor 下发已使用持久化 action journal 和幂等 key：成功动作不会重复发送，明确失败最多尝试两次，网络不确定结果会阻塞恢复，必须核对 AP `/status` 后执行 `memory_admin.py resolve-action`。详见 `docs/memory-architecture.md`。
+`.venv/bin/python memory_admin.py show <run_id>` 回放。executor 下发已使用持久化 action journal 和幂等 key：成功动作不会重复发送，明确失败最多尝试两次，网络不确定结果会阻塞恢复，必须核对 AP `/status` 后执行 `memory_admin.py resolve-action`。记忆模块完整说明见 `docs/memory-module.md`，演进历史见 `docs/memory-architecture.md`。
 
 异常退出且 checkpoint 安全时，可执行 `.venv/bin/python run_openclaw.py --resume-run <run_id>`。恢复会跳过已完成的广播、提案和投票，只继续未完成边界；若 AP 参数、业务优先级或邻居拓扑已变化，启动器拒绝恢复并要求创建新协商。
 
