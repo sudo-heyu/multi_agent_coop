@@ -319,7 +319,7 @@ def main():
     ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
     ap.add_argument("--mode", choices=["mock", "real"], default="mock",
                     help="mock 使用预设场景持续喂数；real 只接受三台真实 AP reporter 上报")
-    ap.add_argument("--scene", choices=["sr", "edca", "joint"], default="joint")
+    ap.add_argument("--scene", choices=sorted(MOCK_SCENES), default="joint")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
     ap.add_argument("--no-feeder", action="store_true",
@@ -390,6 +390,7 @@ def main():
         ap.error(f"--eval-windows 非法: {exc}")
 
     scene = MOCK_SCENES[args.scene]
+    os.environ["MULTIAP_SCENE"] = args.scene
     print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
 
     executor_endpoints = _load_executor_endpoints(args.ap_config, args.ap_endpoints)
@@ -473,6 +474,7 @@ def main():
             mode=args.mode,
             resume=bool(resume_checkpoint),
         )
+        initial_ap_state = None
         if resume_checkpoint:
             logger.session_resume({
                 "boundary": resume_checkpoint.boundary,
@@ -508,6 +510,7 @@ def main():
             executor_endpoints=executor_endpoints,
             resume_projection=resume_projection,
             evaluation_windows=eval_windows,
+            initial_state=initial_ap_state,
         )
     else:
         _require_openclaw_config(require_qwen80b=args.require_qwen80b)

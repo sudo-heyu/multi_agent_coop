@@ -124,6 +124,7 @@ class Session:
     def __init__(self) -> None:
         self.transcript: list[dict] = []          # [{"speaker","content"}]
         self.ap_state: dict = {}                   # 已 apply_profile 的全网状态（含内部字段）
+        self.private_slas: dict = {}                # 只在对应 AP 回合可见
         self.proposer: str | None = None
         self.proposal: dict | None = None
         self.strategy: str | None = None
@@ -159,7 +160,13 @@ def session() -> Session:
 def reset_session(ap_state: dict | None = None) -> dict:
     global _SESSION
     _SESSION = Session()
-    _SESSION.ap_state = apply_profile(ap_state if ap_state is not None else get_all_states(STATE_SERVER))
+    raw_state = ap_state if ap_state is not None else get_all_states(STATE_SERVER)
+    _SESSION.private_slas = {
+        ap: dict(row["private_sla"])
+        for ap, row in raw_state.items()
+        if isinstance(row, dict) and isinstance(row.get("private_sla"), dict)
+    }
+    _SESSION.ap_state = apply_profile(raw_state)
     return {"ok": True, "ap_states": agent_view(_SESSION.ap_state),
             "ap_ids": AP_IDS, "next": "对 ap1→ap2→ap3 依次调用 broadcast"}
 
@@ -790,8 +797,16 @@ def propose_instruction(
         "如果记录中已有历史提案和拒绝原因，你的提案必须明确回应各方此前提出的约束顾虑，"
         "而不是重复一个已被否决的方案。协商历史越长，越需要向各方约束的交集靠拢。\n\n"
     )
+    private_sla = _SESSION.private_slas.get(proposer_id)
+    private_hint = (
+        "【你的私有 SLA/底线（其他 AP 不可见）】\n"
+        + json.dumps(private_sla, ensure_ascii=False, indent=2)
+        + "\n提案不得明知使自己的底线失守；必要时可披露最少信息以换取折中。\n\n"
+        if private_sla else ""
+    )
     return (
         f"你（{proposer_id.upper()}）是本轮的提案方，请发起参数调整提案。\n\n"
+        f"{private_hint}"
         f"{history_hint}"
         f"{tool_path_hint}"
         f"{rule_hint}"
@@ -839,7 +854,16 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
     else:
         stall_hint = ""
     proposal_json = json.dumps(proposal, ensure_ascii=False, indent=2)
+    private_sla = _SESSION.private_slas.get(voter_id)
+    private_hint = (
+        "【你的私有 SLA/不可退让底线（其他 AP 不可见）】\n"
+        + json.dumps(private_sla, ensure_ascii=False, indent=2)
+        + "\n若提案预计使任一底线失守，必须反对并给出反提案；可披露必要的约束，"
+          "但不要披露其他 AP 不知道的无关信息。\n\n"
+        if private_sla else ""
+    )
     return (
+        f"{private_hint}"
         "【第一步】请完整阅读上方对话记录，梳理此前所有提案及每次拒绝的原因。\n\n"
         f"【第二步】验算 {proposer_id.upper()} 的最新提案（提案#{proposal_num}）中针对你自己（{voter_id.upper()}）的参数。\n\n"
         f"最新提案参数：\n{proposal_json}\n\n"
@@ -1394,7 +1418,10 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
         if streaming_broadcast:
             _tool_callback = None
         try:
-            with ThreadPoolExecutor(max_workers=len(AP_IDS)) as ex:
+            broadcast_workers = max(1, min(
+                len(AP_IDS), int(os.environ.get("MULTIAP_BROADCAST_WORKERS", len(AP_IDS)))
+            ))
+            with ThreadPoolExecutor(max_workers=broadcast_workers) as ex:
                 futures = {
                     ap: ex.submit(_run_agent_turn, ap, 1, "broadcast", bcast_inst[ap])
                     for ap in AP_IDS

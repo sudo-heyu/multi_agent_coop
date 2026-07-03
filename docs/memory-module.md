@@ -1,353 +1,408 @@
-# 记忆模块（Memory Module）现状说明
+# 记忆模块使用与设计说明
 
-> 本文档描述当前已实现的记忆子系统（截至 2026-07，schema v6）。
-> 演进历史与后续路线见 `docs/memory-architecture.md`。
+本文说明 Multi-AP 协商系统如何记住一次对话、如何积累历史经验，以及管理员如何
+查看、恢复和清理这些记忆。
 
-多 AP 协商系统的记忆模块让 LLM Agent 的每次协商**可持久、可恢复、可积累、可校验**：
-运行事件全部落 SQLite，长会话上下文确定性压缩，协商结束自动沉淀为案例，
-决策执行后按时间窗口采集真实效果并反哺案例质量。全链路无 LLM 参与，
-纯确定性 Python，可单测。
+## 先说结论
 
-## 设计红线
+系统同时具备短期记忆和长期记忆：
 
-这些约束贯穿所有记忆层，后续迭代不得破坏：
+| 记忆 | 通俗理解 | 解决的问题 | 保存位置 |
+|---|---|---|---|
+| 会话记忆 | 当前这次会议的会议纪要 | 对话太长时，Agent 仍能记住前文 | `session_memories` |
+| 案例记忆 | 过去每次协商的案例档案 | 下次遇到相似情况，可以参考以前怎么处理 | `episodic_memories` |
+| 语义记忆 | 从多个案例中总结出的经验规律 | 不只记住单个案例，还能判断某类策略通常是否有效 | `semantic_rules` |
 
-1. **记忆只作参考，实时状态与确定性 Validator 永远优先。** 历史案例（L3）和归纳
-   规律（L5）注入提案提示时都明确标注"仅作参考，必须按当前最新状态重新调用工具
-   验算"；任何决策最终都要过物理约束 Validator。
-2. **确定性。** 摘要、特征编码、相似度、效果分类全部是纯函数，同输入必同输出；
-   不引入后台模型摘要（未来若加，必须保留确定性降级路径）。
-3. **幂等。** 事件按 event_id 幂等追加；评估窗口按 (run, window) 幂等登记；执行
-   下发按 idempotency_key 幂等；质量修订从流水线基础分重算，重复评估不叠加。
-4. **副作用保守，人在回路。** 网络结果不确定的下发标 `unknown` 并阻塞自动恢复，
-   需人工核对 AP `/status` 后 `resolve-action`；效果恶化默认只产出回滚**建议与参数
-   计划**，绝不自动执行——管理员显式 `--confirm` 审批后才经同一套幂等 action journal
-   下发（`memory_admin.py rollback`）。
-5. **评估读全量原始遥测，agent 读白名单视图。** `apply_profile` 白名单限制 LLM
-   视野（只见 `throughput_mbps_user` 等协商字段）；Outcome 评估必须绕开白名单读
-   iperf 吞吐/延迟/丢包，否则覆盖率不足会误判 inconclusive（实跑踩过的坑）。
-
-## 分层总览
+此外，系统还会保存完整事件、状态快照和执行记录，用于故障恢复和审计。所有持久化
+数据默认写入：
 
 ```text
-┌────────────────────────────────────────────────────────────┐
-│  L6 Consolidation       带锁整理：容量/过期归档、规律冲突检测 │
-│      src/memory/consolidation.py                            │
-│  L5 Semantic Memory     跨案例归纳带证据/置信度的规律         │
-│      src/memory/semantic.py       ↑ 只用带真实反馈的案例     │
-│  L4 Outcome Evaluator   决策生效后多窗口真实效果评估          │
-│      src/memory/outcome.py        ↓ 质量修订/回滚建议        │
-│  L3 Episodic Memory     一次协商 = 一个案例；相似检索注入提案  │
-│      src/memory/episodic.py                                 │
-│  L2 Session Memory      单次长会话的确定性增量摘要 + 上下文预算│
-│      src/memory/session_memory.py                           │
-│  L1 Event Store + 恢复  有序幂等事件流 / 快照 / action journal│
-│      src/persistence/{event_store,recovery}.py              │
-└────────────────────────────────────────────────────────────┘
-  六层已全部落地。
+logs/agent_memory.sqlite3
 ```
 
-数据库：`logs/agent_memory.sqlite3`（WAL + foreign key + 事务）。
-环境变量：`MULTIAP_EVENT_DB` 换路径，`MULTIAP_EVENT_STORE=0` 仅调试时禁用。
+一句话概括整个闭环：
 
-## L1 事件存储与恢复（src/persistence/）
+```text
+记下过程 → 压缩长对话 → 保存成功案例 → 观察实际效果
+    → 调整案例可信度 → 总结规律 → 下次协商时参考
+```
 
-### Schema v8 表
+## 一次协商中，记忆是怎样工作的
 
-| 表 | 内容 |
+假设系统正在处理一次信道拥塞：
+
+1. **协商开始**：保存当前 AP 状态，作为后续比较的基线。
+2. **Agent 讨论**：完整发言写入事件日志。对话过长时，早期内容被整理成简短摘要，
+   最近几轮仍保留原文。
+3. **准备提案**：系统查找“拓扑相同、负载和干扰相似”的历史案例，并读取已有经验
+   规律，最多各取 3 条放进提案上下文。
+4. **验证与执行**：提案仍必须读取最新状态并经过 Validator；历史经验不能直接替代
+   实时数据或绕过校验。
+5. **协商结束**：本次环境、决策、验证结果和执行结果被保存为一个新案例。
+6. **延迟观察**：在多个时间窗口重新读取吞吐、时延和丢包，判断实际效果是改善、
+   恶化、基本不变，还是数据不足。
+7. **反馈学习**：改善案例提高可信度；恶化案例降权并退出推荐池；多个案例积累后，
+   系统归纳出更稳定的经验规律。
+
+流程图：
+
+```text
+开始协商
+   │
+   ├─ 保存初始状态和完整事件
+   │
+   ├─ 对话过长？── 是 ──> 摘要早期发言，保留最近原文
+   │
+   ├─ 提案前检索历史案例和经验规律
+   │                  │
+   │                  └─ 只作参考，仍需读取实时状态并重新验算
+   │
+   ├─ Validator 通过 ──> 幂等下发到 AP
+   │
+   ├─ 结束时保存一个完整案例
+   │
+   └─ 多窗口观察效果
+          ├─ 改善：提高案例质量
+          ├─ 恶化：降低质量，生成回滚建议
+          └─ 多个案例：归纳或更新经验规律
+```
+
+## 三种真正给 Agent 使用的记忆
+
+### 1. 会话记忆：记住当前协商说过什么
+
+会话记忆只服务于**当前这一次协商**。
+
+当对话未超过上下文预算时，Agent 看到原始对话。超过预算后，系统把较早发言转换为
+结构化摘要，例如：
+
+```text
+- turn=2 speaker=ap1 kind=broadcast: AP1 当前重传率较高……
+- turn=5 speaker=ap2 kind=proposal: 参数JSON={...}
+- turn=7 speaker=VALIDATOR kind=validator: CWmin 不满足约束……
+```
+
+处理原则：
+
+- 默认保留最近 6 条发言原文；
+- 每个 Agent 回合的上下文默认最多 14,000 字符；
+- 提案参数和 Validator 证据优先保留；
+- 摘要使用确定性 Python 逻辑，不调用额外模型；
+- 只压缩给模型看的上下文，SQLite 和 JSONL 中的完整原文不会丢失；
+- 摘要和处理游标会持久化，中断恢复后不会从头重复摘要。
+
+对应实现：`src/memory/session_memory.py`。
+
+### 2. 案例记忆：记住以前发生过什么
+
+每次协商结束后，系统自动生成一份案例档案，内容包括：
+
+- 初始 AP 状态和邻居拓扑；
+- 当时选择的策略和最终参数；
+- Validator 是否通过；
+- executor 是否成功下发；
+- 执行后的状态和效果评估；
+- 案例质量分。
+
+案例质量分在 `[0, 1]` 范围内，分为“流水线基础分”和“实际效果修正”两步计算。
+
+第一步根据本次协商流程是否完整可靠计算基础分：
+
+| 条件 | 加分 |
+|---|---:|
+| 协商结果为 `success` | `+0.50` |
+| Validator 验证通过 | `+0.25` |
+| 存在 executor 记录且全部下发成功 | `+0.15` |
+| 没有 executor 记录 | `+0.05` |
+| 存在执行后的观测状态 | `+0.10` |
+
+```text
+基础质量分 = 协商结果分 + Validator 分 + 执行分 + 观测分
+基础质量分最高为 1.0
+```
+
+如果存在 executor 记录但有任何一次下发失败，执行项记 `0` 分，不再按“没有
+executor”计 `0.05` 分。例如，mock 模式下协商成功、验证通过、没有 executor、
+存在观测状态时，基础质量分为 `0.50 + 0.25 + 0.05 + 0.10 = 0.90`。
+
+第二步在效果评估窗口产生最终结论后修正质量分。设基础质量分为 `Q`，效果评估的
+最终置信度为 `C`：
+
+```text
+improved：最终质量分 = min(1.0, Q + 0.15 × C)
+degraded：最终质量分 = min(Q, 0.20)
+neutral / inconclusive：最终质量分 = Q
+```
+
+例如，基础质量分为 `0.80`、最终结论为 `improved`、最终置信度为 `0.60` 时，
+最终质量分为 `0.80 + 0.15 × 0.60 = 0.89`。如果最终结论为 `degraded`，即使
+协商、验证和下发流程全部成功，最终质量分也最高只有 `0.20`，低于默认案例召回
+阈值 `0.50`，因此不会作为优质历史案例注入后续提案。
+
+下次协商检索案例时，先要求**拓扑完全一致**，再比较以下内容：
+
+| 相似因素 | 权重 | 直观含义 |
+|---|---:|---|
+| 干扰关系 | 30% | 邻居 RSSI 是否接近 |
+| 当前负载 | 25% | 信道占用和重传率是否接近 |
+| 业务优先级 | 15% | high / medium / low 是否相似 |
+| 当前参数 | 20% | 功率、CWmin、CWmax、AIFSN 是否接近 |
+| STA 信号 | 10% | STA RSSI 是否接近 |
+
+最多向提案上下文注入 3 个质量分不低于 0.5 的案例。不同拓扑的案例不会混用，
+已归档和实际效果恶化的案例不会作为优质经验推荐。
+
+对应实现：`src/memory/episodic.py`。
+
+### 3. 语义记忆：总结“通常什么方法有效”
+
+单个案例可能是偶然结果。语义记忆会把多个有实际效果反馈的案例按“拓扑、场景、
+策略”分组，归纳出规律，例如：
+
+```text
+在拓扑 A 的 EDCA 场景中，co_edca 在 3 个已评估案例中通常带来改善；
+典型参数为 ap2 CWmin=3；一致性 100%，置信度 1.0。
+```
+
+形成规律需要满足：
+
+- 至少有 2 个结论明确的案例；
+- 只使用已经完成效果评估的案例；
+- 规律保留证据 run_id，可追溯到原始案例；
+- 置信度不低于 0.5 才会注入提案；
+- 证据互相矛盾时标记为 `conflicted`，停止注入。
+
+规律的**一致性**表示支持主导结论的案例比例。设同一分组内有 `N` 个结论明确的
+案例，其中出现次数最多的结论（`improved`、`neutral` 或 `degraded`）有 `D` 个，则：
+
+```text
+一致性 consistency = D / N
+```
+
+规律的**置信度**同时考虑一致性和证据数量。当前实现把 3 个案例视为证据数量充分，
+不足 3 个时按比例折减，超过 3 个后数量系数不再增加：
+
+```text
+置信度 confidence = consistency × min(1, N / 3)
+```
+
+例如，2 个案例均为 `improved` 时，一致性为 `2/2 = 1.0`，置信度为
+`1.0 × 2/3 = 0.6667`；3 个案例中 2 个为 `improved`、1 个为 `neutral` 时，
+一致性为 `2/3 = 0.6667`，置信度也是 `0.6667 × 1 = 0.6667`。计算结果保留
+4 位小数。案例自身效果评估里的 `final_confidence` 当前只作为证据元数据保存，
+不参与上述规律置信度计算。
+
+对应实现：`src/memory/semantic.py`。
+
+## 系统怎样判断一个方案是否真的有效
+
+协商成功不等于网络真的改善。因此，决策下发后还会登记多个观察窗口：
+
+| 模式 | 默认观察时间 |
 |---|---|
-| `schema_migrations` | 版本号 1..8，新版本就地迁移（含 ALTER 补列） |
-| `agent_runs` | run 状态/模式/场景/模型/当前阶段/outcome |
-| `run_events` | 严格有序事件流：event_id 主键幂等，(run_id, sequence) 唯一 |
-| `state_snapshots` | 不可变状态快照：`initial`（全量原始遥测）、`final_observed`/`final_fallback` |
-| `run_steps` | 可恢复步骤：状态机 + retry_budget + attempts |
-| `action_journal` | 外部副作用：idempotency_key 唯一；pending→running→succeeded/failed/unknown |
-| `negotiation_projections` | 最新安全协商边界投影（transcript/proposal/votes/retry/游标） |
-| `session_memories` | L2 摘要与游标 |
-| `episodic_memories` | L3 案例（run_id 唯一，upsert） |
-| `outcome_evaluations` | L4 评估窗口：(run_id, window_label) 唯一，due_at 驱动收割 |
-| `semantic_rules` | L5 归纳规律：(拓扑, 场景, 策略) 唯一，含证据/支持数/置信度/conflicted |
-| `maintenance_locks` | L6 维护锁：holder + TTL，串行化 consolidation |
+| mock | 10 秒、30 秒 |
+| real | 60 秒、300 秒、900 秒 |
 
-（v8 还为 `episodic_memories` 加 `archived`、`semantic_rules` 加 `conflicted` 软删/标记列。）
+窗口到期后，系统比较协商前后的：
 
-### 双轨日志
+- 吞吐量：越高越好；
+- 时延：越低越好；
+- 丢包率：越低越好。
 
-`SessionLogger`（src/logger.py）先写事件存储、再写 JSONL；每行 JSONL 携带
-`event_id` + `sequence`，两种格式可对账。JSONL 供 Dashboard/人读，SQLite 供
-恢复/记忆/检索。
+高优先级业务的权重高于低优先级业务。最终结论有四种：
 
-### 恢复（--resume-run）
+| 结论 | 含义 |
+|---|---|
+| `improved` | 综合得分明显改善 |
+| `degraded` | 综合得分明显恶化 |
+| `neutral` | 变化不明显 |
+| `inconclusive` | 有效指标不足，不能判断 |
 
-`build_checkpoint` 从事件流投影出保守 checkpoint：
+系统不会因为一个瞬时采样就轻易认定有效。多个窗口持续同向时，结论置信度较高；
+窗口之间方向摇摆时，置信度会降低。
 
-- **安全边界**：`broadcast_complete` / `proposal_ready` / `vote_progress` /
-  `counter_proposal_ready`，恢复跳过已完成的广播、提案、投票；
-- **可恢复条件**：run 未完成 ∧ 无 running/unknown 副作用 ∧ 投影 safe_to_resume；
-- **环境兼容检查**：恢复前读最新 AP 状态，可调参数/业务优先级/邻居拓扑变化即拒绝
-  （QoS 数值自然波动不阻塞）；
-- **幂等下发**：executor `/apply` 走 action journal——成功动作复用缓存结果不重发；
-  明确失败最多 2 次尝试；网络不确定标 `unknown`，必须人工
-  `memory_admin.py resolve-action` 后才能继续恢复。
+反馈会反向修改案例质量：
 
-## L2 Session Memory（src/memory/session_memory.py）
+- `improved`：按置信度提高质量分；
+- `degraded`：质量分最高只能为 0.2，因此不会再次作为优质案例注入；
+- 高置信度恶化：生成恢复到协商前参数的回滚建议；
+- 回滚只生成建议，不会自动执行，必须由管理员显式确认。
 
-解决单次协商 transcript 超长问题。只压缩**注入模型的上下文**，原始事件和完整
-transcript 仍完整保存在 SQLite/JSONL。
+对应实现：`src/memory/outcome.py` 和 `src/memory/rollback.py`。
 
-- `summarized_turns` 游标保证同一发言只摘要一次（增量、幂等）；
-- 旧发言确定性分类为 `broadcast / proposal / vote / validator / message`；
-  proposal 保留参数 JSON 前 500 字符，其余取正文前 500 字符；
-- 摘要条目超 48 条时压缩：优先保留最近 24 条 validator/proposal 证据 + 最近 24 条；
-- 最近 `--context-recent-turns`（默认 6）条发言保留原文；
-- 每回合上下文硬上限 `--context-budget-chars`（默认 14000，下限 2000）字符，
-  超限时保尾部（最新内容优先）；
-- 每次摘要更新经 `SessionLogger.save_session_memory` 持久化，并合并进恢复投影，
-  恢复后的 run 延续同一份摘要。
+## 故障恢复和安全边界
 
-## L3 Episodic Memory（src/memory/episodic.py）
+记忆模块也承担运行恢复职责。系统持续记录：
 
-**物化**：`session_end` 时自动从事件流提取一个案例（`materialize_episode`）：
-初始状态、拓扑签名、领域特征、最终决策、Validator 结果、executor 响应、最终观测
-及吞吐/延迟/丢包前后差值、流水线质量分。按 run_id upsert，失败只记
-`episodic_memory_failed` 事件不影响主流程。
+- 有序事件和状态快照；
+- 已完成的广播、提案和投票；
+- 当前安全 checkpoint；
+- executor 下发动作及其结果。
 
-**拓扑签名**：`sha256(sorted[(ap, sorted(邻居列表))])` 前 20 位十六进制。检索先按
-签名**严格过滤**——不同拓扑的经验绝不跨用。
-
-**特征与相似度**（纯函数 `feature_similarity`，逐字段归一后加权）：
-
-| 分量 | 权重 | 字段与归一尺度 |
-|---|---|---|
-| 干扰 interference | 0.30 | 邻居 RSSI 链路逐条比对（25 dB 尺度；链路集合不同直接 0 分） |
-| 负载 load | 0.25 | 信道占用比 + 重传率（1.0 尺度） |
-| 优先级 priority | 0.15 | traffic_priority 映射 low=0 / medium=0.5 / high=1 |
-| 参数 parameters | 0.20 | tx_power(23) / CWmin(1023) / CWmax(1023) / AIFSN(15) |
-| STA 信号 sta | 0.10 | sta_rssi（40 dB 尺度） |
-
-**流水线质量分**（`pipeline_quality`，满分 1.0）：
-成功 outcome +0.5；Validator 通过 +0.25；executor 全部成功 +0.15（无执行 +0.05）；
-有真实观测 +0.10。此为基础分，L4 评估会在其上修订。
-
-**注入**：提案阶段（恢复到投票边界时跳过）检索最多 3 个 `quality ≥ 0.5` 的同拓扑
-案例，按 (相似度, 质量) 降序注入提案提示，每条含相似度/质量/策略/结果/决策 JSON/
-执行后评估结论（实际改善/恶化/无明显变化），并强制要求重新读最新状态、重新工具验算。
-检索本身也记 `episodic_memory_recalled` 事件，可审计。
-
-## L4 Outcome Evaluator（src/memory/outcome.py）
-
-回答"决策下发后**真实世界到底变好了没有**"，并让答案反哺案例库。
-
-**登记**：协商成功（Validator 通过、决策生效）时按窗口登记 pending 评估，
-(run, window) 幂等。窗口 `--eval-windows`：mock 默认 `10,30`s，real 默认
-`60,300,900`s，`off` 关闭；coordinator 兼容路径经 `MULTIAP_EVAL_WINDOWS` 透传。
-**基线优先取 run 的 `initial` 快照**（全量原始遥测），传入状态仅兜底。
-
-**收割（惰性、不阻塞、可重试）**，四条路径共用 `harvest_evaluations`
-（= 尽力 `collect_due_evaluations` + `abandon_stale_evaluations`）：
-
-1. **后台常驻 harvester**（`state_server/outcome_harvester.py`，由 `serve.sh` 拉起，
-   默认每 30s）——real 模式长窗口（可达 15 分钟）不再依赖后续协商即可自动结算，
-   是 L4 在真实部署下可靠的前提；
-2. mock 保活循环内每 2s 结算到期窗口并实时打印 verdict；
-3. 下次 `run_openclaw.py` 启动时补收上一轮到期窗口（本轮提案立即用上带反馈的案例）；
-4. `memory_admin.py evaluate --server <url>` 手动结算。
-
-状态获取失败（state server 离线/数据过期）窗口保持 pending，之后任一路径重试；
-但逾期太久（`due_at` 后超过 `max(窗口×4, 1 小时)`）仍收不到有效状态的窗口会被标
-`abandoned`，避免孤儿窗口永久 pending。收割与放弃**解耦**：即便收割因 state 离线
-抛错，放弃逻辑仍执行。注意 abandon 是"拿不到数据"的兜底，不是"逾期即弃"——只要
-state 可用，逾期窗口仍照常收割（稳态近似）。
-
-**打分与分类**（`evaluate_deltas` + `classify`）：
-
-- 单指标得分截断 [-1,1]：吞吐 iperf/user 相对变化；延迟相对变化取反；
-  丢包用绝对百分点 /5.0 归一（基线近 0 时相对值会爆炸）；
-- 每 AP 取指标均值，再按业务优先级加权聚合（high=1.0 / medium=0.6 / low=0.3）——
-  协商目标就是高优先级收益最大化，低优先级"让出信道"的小幅退化不该判恶化；
-- 聚合得分 ≥ +0.05 → `improved`；≤ -0.05 → `degraded`；其间 `neutral`；
-  指标覆盖率 < 50% → `inconclusive`；
-- 置信度 = 覆盖率 × min(1, |得分|/0.15)。
-
-**因果强化（跨窗口一致性）**：单窗口变化未必是决策造成的（流量自然涨落也会
-产生 delta），但自然波动不会在多个时间窗口持续同向。`summarize_run_evaluations`
-统计各窗口方向：全部同向 → 一致性 1.0，置信度不折损；方向摇摆（既有改善又有
-恶化）→ 一致性 = 主导方向占比，**按比例压低最终置信度**。这样单窗口噪声不会
-误判、也不会触发回滚——只有多窗口持续同向的变化才被当作可信的因果效应。平票时
-保守取 improved（不回滚）。
-
-**回写**（`apply_evaluation_to_episode`）：最终 verdict 取主导方向里最接近稳态的
-窗口。质量修订从流水线基础分重算（幂等）：
-
-- `improved` → base + 0.15 × 置信度（封顶 1.0）；
-- `degraded` → 封顶 **0.2**，低于注入阈值 0.5，恶化方案退出提案参考池；
-- `degraded` 且置信度 ≥ 0.5 → `needs_rollback=true` 并生成 `rollback_plan`
-  （只含决策实际改过的字段、恢复到协商前值）。
-
-**回滚执行通道**（`src/memory/rollback.py`，`memory_admin.py rollback <run_id>`）：
-默认 dry-run 只回显计划不发请求；管理员核对后加 `--confirm --ap-endpoints ...` 才
-下发。下发走 action journal 幂等（成功不重发、`unknown` 阻塞待人工核对），且
-`rollback_plan` 的值本就是 executor `/apply` 的 wire 格式（CW 为指数、tx_power 为
-实际 dBm），直接下发**不做二次编码**（与决策下发的 `encode_params_edca` 路径不同）。
-
-**参数校准**：分类阈值（improve/degrade/min_coverage/rollback_confidence/满置信
-得分）都可经环境变量覆盖（`MULTIAP_IMPROVE_THRESHOLD` 等），默认值经真实运行
-验证。`memory_admin.py calibrate` 扫历史评估，报告 score 分位分布、verdict 计数、
-跨窗口摇摆率，并给出启发式提示（如"X% 落在中性带，阈值可能偏宽"）。没有 ground
-truth，不自动定"最优"阈值——由人看真实数据表现后调整。
-
-**实测样例**（mock EDCA，run `0badeaed`）：协商 94s 成功 → 窗口 t+10s/t+30s 均判
-"实际改善"（置信度 0.95/0.91）——高优先级直播 AP 延迟 312→185ms、吞吐 +24%，
-低优先级 AP 小幅让出——案例质量 0.8 → 0.937。
-
-## L5 Semantic Memory（src/memory/semantic.py）
-
-把 L4 攒下的真实反馈**跨案例归纳成规律**：回答"这种拓扑/场景下采用某策略倾向
-产生什么效果、典型做法是什么"。规律比单案例更抽象、更可靠（有统计支撑）。
-
-**红线**：只用经过 L4 评估、结论有定论（improved/neutral/degraded）的案例归纳；
-无 L4 反馈或 inconclusive 的案例一律排除——否则归纳的是"跑完了的方案"而非
-"有效的方案"。全过程确定性、无 LLM。
-
-**归纳**（`induce_rules`，幂等 upsert 入 `semantic_rules` 表）：
-
-- 分组键 `(拓扑签名, 场景, 策略)`——只有同拓扑同场景同策略的案例才可比；
-- 每组 `support`（有定论案例数）≥ `MIN_SUPPORT`(2) 才成规律，避免单例噪声；
-- `dominant_verdict` = 占比最高的结论；`consistency` = 其占比；
-- `confidence = consistency × min(1, support/FULL_SUPPORT)`，`FULL_SUPPORT=3`
-  （本系统案例稀缺，3 个方向一致即视为满支撑，consistency 与阈值再双重把关）；
-- `action_summary` = 主导结论案例决策的逐 AP 逐参数中位数（"典型做法"）；
-- `evidence` = 参与案例的 run_id + 各自 verdict（可回溯）。
-
-**注入**：提案阶段 `find_matching_rules` 按当前拓扑检索 `confidence ≥ 0.5` 的规律，
-最多注入 3 条，渲染为"策略=co_edca，N 个带真实反馈案例中倾向改善（分布…，
-一致性…，置信度…），典型做法：ap2 CWmin=3…"。放在案例注入之前（更宏观），
-同样强制"仍须按当前最新状态重新验算"。检索记 `semantic_rules_recalled` 事件。
-
-**自动演进**：后台 harvester 每次收到新反馈就整理一次（含归纳，见 L6）；
-`run_openclaw` 启动补收后也归纳一次，让本轮提案读到最新规律。手动：
-`memory_admin.py rules [--induce]`。
-
-## L6 Consolidation（src/memory/consolidation.py）
-
-记忆若只增不整理，案例库会无限膨胀、旧规律会误导。L6 定期做**确定性整理**，
-用维护锁串行化，避免与协商写入/后台收割并发。软删（`archived=1`）不物理删除，
-保留完整审计链。
-
-**维护锁**（`maintenance_locks` 表）：`acquire_lock`/`release_lock`，带 holder 和
-TTL；拿不到锁（他人正在整理）直接返回 `skipped`，绝不阻塞。
-
-`consolidate` 一次整理按序做：
-
-1. **容量淘汰** —— 每个拓扑存活案例超 `max_per_topology`(默认 50) 时，按
-   `(quality, created_at)` 保留 top-N，其余归档；
-2. **过期归档** —— 年龄超 `max_age_days`(默认 90) 且质量低于 `min_quality_keep`
-   (默认 0.3) 的案例归档（老且不够好的先淘汰；高质老案例保留）；
-3. **重新归纳** —— 基于存活案例（archived 自动排除）刷新 L5 规律；
-4. **冲突检测** —— 一致性低于 `conflict_consistency`(默认 0.6) 的规律标 `conflicted`
-   （证据分歧大 → 不再注入提案）；证据重新一致时清除标记，随反馈演进。
-
-归档案例自动退出 L3 相似检索与 L5 归纳；冲突规律自动退出 L5 注入（`list_rules`
-默认排除，`--include-conflicted` 可查）。整理由后台 harvester 收到新反馈时触发，
-或 `memory_admin.py consolidate` 手动执行。
-
-## 评估质量与校准
-
-见 L4 章节的"因果强化（跨窗口一致性）"与"参数校准"：多窗口持续同向才算可信
-因果效应，摇摆窗口压低置信度；分类阈值经环境变量可覆盖，`memory_admin.py
-calibrate` 给出真实数据下的分布诊断供人工校准。这两项让 L4 的结论从"单点观测"
-升级为"有因果强度和可校准阈值的判断"。
-
-## 可观测性（src/memory/observability.py）
-
-`memory_health(store)` 把六层记忆的关键指标聚合成一个只读快照：runs 完成度、
-案例存活/归档数与质量分布、按 verdict 分桶与恶化占比、评估窗口 pending/collected/
-abandoned、规律生效/冲突数与平均置信度、拓扑数与单拓扑存活上限。两种入口：
-
-- **命令行**：`memory_admin.py health`（JSON）；
-- **Dashboard**：常驻 Dashboard 新增 `/memory` 页面（每 15s 自动刷新的健康度卡片）
-  与 `/memory/health` JSON 端点。
-
-关键信号一眼可见：pending 堆积（收割器是否掉线）、abandoned 增长（state server
-长期离线）、degraded 占比偏高（决策质量下滑）、conflicted 规律增多（环境在变、
-旧规律失效）——把此前只散落在 SQLite 里的记忆状态变成可监控面板。
-
-## 一次协商的记忆生命周期
-
-```text
-run 开始     session_start → agent_runs + initial 快照（全量遥测）
-   │
-广播/提案    transcript 超预算 → L2 增量摘要（session_memories）
-   │         提案前 → L3 检索同拓扑案例注入（≤3 个，quality≥0.5）
-   │         每个安全边界 → negotiation_projections checkpoint
-   │
-投票/决策    Validator 验算 → 通过则 executor 下发（action journal 幂等）
-   │         成功 → L4 登记评估窗口（基线=initial 快照）
-   │
-run 结束     session_end → L3 物化案例（流水线质量分）
-   │
-窗口到期     后台 harvester/启动补收/手动 → 收割 verdict、逾期则放弃
-   │         → 修订案例质量（±）→ degraded 生成回滚建议
-   │
-回滚(可选)   memory_admin rollback：dry-run 预演 → --confirm 幂等下发
-   │
-反馈落地     L6 整理（带锁）：容量/过期归档 → L5 重归纳 → 冲突规律标记
-   │
-下一次 run   提案注入案例(L3)+规律(L5)；恶化案例踢出、归档案例排除、冲突规律挡  ←─循环
-```
-
-## 运维与查询
+异常退出后，可执行：
 
 ```bash
-.venv/bin/python memory_admin.py incomplete                 # 未完成 run
-.venv/bin/python memory_admin.py show <run_id>              # checkpoint+事件+快照+动作
-.venv/bin/python memory_admin.py resolve-action <id> --status succeeded --note "..."
-.venv/bin/python memory_admin.py episodes [--scene edca] [--limit 20]
-.venv/bin/python memory_admin.py similar <run_id> [--limit 5] [--min-quality 0.5]
-.venv/bin/python memory_admin.py evaluate --server http://localhost:5001 [--run <id>]
-.venv/bin/python memory_admin.py evaluations <run_id>       # 窗口结论+回滚建议
-.venv/bin/python memory_admin.py rollback <run_id>          # 预演回滚计划（dry-run）
-.venv/bin/python memory_admin.py rollback <run_id> --ap-endpoints ap1=host:port,... --confirm
-.venv/bin/python memory_admin.py rules [--induce] [--scene edca] [--min-confidence 0.5] [--include-conflicted]
-.venv/bin/python memory_admin.py consolidate [--max-per-topology 50] [--max-age-days 90]
-.venv/bin/python memory_admin.py calibrate                  # 评估阈值校准诊断
-.venv/bin/python memory_admin.py health                     # 记忆健康度快照
-.venv/bin/python run_openclaw.py --resume-run <run_id>      # 从安全边界恢复
+.venv/bin/python run_openclaw.py --resume-run <run_id>
 ```
 
-Dashboard 健康度：`http://localhost:5050/memory`（常驻 Dashboard 起后可访问）。
+恢复只会从已确认的安全边界继续，并跳过已完成步骤。以下情况会拒绝自动恢复：
 
-后台收割器随常驻服务启动：`bash openclaw/serve.sh start` 会拉起 `outcome_harvester`，
-`serve.sh status` 显示其状态。
+- AP 参数、业务优先级或邻居拓扑已经改变；
+- 外部下发动作仍处于 `running` 或结果不确定的 `unknown`；
+- 当前事件投影没有安全恢复点。
 
-## 配置汇总
+executor 调用使用幂等 key。已经成功的动作不会重复发送；明确失败最多尝试两次；
+网络超时导致结果不确定时，必须先人工检查 AP 的 `/status`，然后标记真实结果：
 
-| 配置 | 默认 | 作用 |
-|---|---|---|
-| `MULTIAP_EVENT_DB` | `logs/agent_memory.sqlite3` | 数据库路径 |
-| `MULTIAP_EVENT_STORE` | `1` | 置 0 禁用事件存储（仅调试） |
-| `--context-budget-chars` | 14000 | 每回合注入上下文字符预算（≥2000） |
-| `--context-recent-turns` | 6 | 保留原文的最近发言数（≥2） |
-| `--eval-windows` / `MULTIAP_EVAL_WINDOWS` | mock=`10,30` real=`60,300,900` | 评估窗口秒数，`off` 关闭 |
-| `MULTIAP_HARVEST_INTERVAL` | 30 | 后台 harvester 两次收割间隔秒数 |
-| `MULTIAP_IMPROVE_THRESHOLD` / `MULTIAP_DEGRADE_THRESHOLD` | 0.05 / -0.05 | 评估分类阈值（校准用） |
-| `MULTIAP_MIN_COVERAGE` / `MULTIAP_ROLLBACK_CONFIDENCE` | 0.5 / 0.5 | 覆盖率下限 / 回滚置信门槛 |
+```bash
+.venv/bin/python memory_admin.py resolve-action <action_id> \
+  --status succeeded --note "已核对 AP 状态"
+```
 
-## 测试
+对应实现：`src/persistence/event_store.py` 和 `src/persistence/recovery.py`。
 
-`tests/` 内 86 个确定性用例覆盖记忆全链路：事件存储迁移（v1→v8 就地升级）、幂等
-追加/下发、恢复边界与阻塞、Session 摘要游标与预算、案例物化/拓扑隔离/相似排序、
-评估调度幂等、分类阈值、优先级加权、按期收割、质量修订幂等；L4 可靠性：逾期放弃、
-收割/放弃解耦、回滚 dry-run/幂等下发/wire 不二次编码；L5：分组归纳、support 阈值、
-只用有反馈案例、action_summary 中位数、拓扑/置信度检索；L6：容量淘汰、过期归档、
-冲突标记与清除、检索排除归档、维护锁串行化；评估质量：跨窗口一致性因果强化
-（摇摆压低置信、平票不回滚）、阈值环境变量覆盖、校准诊断报告；可观测性：健康度
-聚合、Dashboard `/memory` 页面与空库处理。
+## 记忆如何防止越积越乱
 
-## 演进路线
+后台整理模块会定期维护案例和规律：
 
-已完成 L1–L6 六层 + **因果强化与阈值校准** + **可观测性**。记忆结构完整、
-可信度打磨到位、状态可监控。剩余为开放研究项（见 `docs/memory-architecture.md`）：
+1. 每种拓扑默认最多保留 50 个高质量案例；
+2. 超过 90 天且质量低于 0.3 的案例被归档；
+3. 基于仍然有效的案例重新归纳语义规律；
+4. 证据一致性低于 0.6 的规律标记为冲突。
 
-1. 跨拓扑泛化（当前新拓扑冷启动，签名严格隔离）；
-2. Session Memory 模型化摘要（当前为确定性截断，预留了替换位）。
+归档采用软删除：数据仍保留以便审计，但不再参与检索和归纳。整理过程带维护锁，
+不会与另一个整理任务同时修改数据。
+
+对应实现：`src/memory/consolidation.py`。
+
+## 数据实际保存在哪里
+
+默认数据库是 `logs/agent_memory.sqlite3`，采用 SQLite WAL、外键和事务。主要数据表：
+
+| 表 | 保存内容 |
+|---|---|
+| `agent_runs` | 每次运行的状态、场景、阶段和最终结果 |
+| `run_events` | 严格有序的完整事件流 |
+| `state_snapshots` | 初始和最终 AP 状态快照 |
+| `run_steps` | 可恢复步骤及重试状态 |
+| `action_journal` | executor 等外部副作用及幂等状态 |
+| `negotiation_projections` | 最近的安全协商 checkpoint |
+| `session_memories` | 当前会话摘要和摘要游标 |
+| `episodic_memories` | 历史协商案例 |
+| `outcome_evaluations` | 各观察窗口的效果结论 |
+| `semantic_rules` | 跨案例归纳的经验规律 |
+| `maintenance_locks` | 后台整理任务的互斥锁 |
+
+`SessionLogger` 同时写 SQLite 和 JSONL：SQLite 用于恢复、检索和统计，JSONL 用于
+Dashboard 展示和人工阅读。两边都携带 `event_id` 和 `sequence`，可以对账。
+
+## 常用查看和维护命令
+
+### 查看整体健康状况
+
+```bash
+.venv/bin/python memory_admin.py health
+```
+
+重点关注：
+
+- `evaluations.pending` 持续增加：后台收割器可能没有运行；
+- `evaluations.abandoned` 增加：state server 可能长期离线或数据过期；
+- `episodes.degraded_ratio` 较高：近期决策质量可能下降；
+- `rules.conflicted` 增加：环境可能变化，历史规律不再稳定。
+
+Dashboard 页面：`http://localhost:5050/memory`。
+
+### 查询运行、案例和规律
+
+```bash
+.venv/bin/python memory_admin.py incomplete
+.venv/bin/python memory_admin.py show <run_id>
+.venv/bin/python memory_admin.py episodes --limit 20
+.venv/bin/python memory_admin.py similar <run_id> --min-quality 0.5
+.venv/bin/python memory_admin.py evaluations <run_id>
+.venv/bin/python memory_admin.py rules --min-confidence 0.5
+```
+
+### 手动评估和整理
+
+```bash
+.venv/bin/python memory_admin.py evaluate --server http://localhost:5001
+.venv/bin/python memory_admin.py rules --induce
+.venv/bin/python memory_admin.py consolidate
+.venv/bin/python memory_admin.py calibrate
+```
+
+后台评估器由常驻服务启动：
+
+```bash
+bash openclaw/serve.sh start
+bash openclaw/serve.sh status
+```
+
+### 审批回滚
+
+先预览，不发送请求：
+
+```bash
+.venv/bin/python memory_admin.py rollback <run_id>
+```
+
+核对计划后显式执行：
+
+```bash
+.venv/bin/python memory_admin.py rollback <run_id> \
+  --ap-endpoints ap1=host:port,ap2=host:port,ap3=host:port --confirm
+```
+
+## 常用配置
+
+| 配置 | 默认值 | 作用 |
+|---|---:|---|
+| `MULTIAP_EVENT_DB` | `logs/agent_memory.sqlite3` | 修改数据库路径 |
+| `MULTIAP_EVENT_STORE` | `1` | 设为 `0` 可关闭事件存储，仅建议调试使用 |
+| `--context-budget-chars` | `14000` | 单回合上下文字符上限，不能低于 2000 |
+| `--context-recent-turns` | `6` | 最近保留原文的发言数，不能低于 2 |
+| `--eval-windows` | mock=`10,30`；real=`60,300,900` | 效果观察窗口；`off` 表示关闭 |
+| `MULTIAP_HARVEST_INTERVAL` | `30` | 后台评估器轮询间隔，单位为秒 |
+| `MULTIAP_IMPROVE_THRESHOLD` | `0.05` | 判定改善的得分阈值 |
+| `MULTIAP_DEGRADE_THRESHOLD` | `-0.05` | 判定恶化的得分阈值 |
+| `MULTIAP_MIN_COVERAGE` | `0.5` | 最低有效指标覆盖率 |
+| `MULTIAP_ROLLBACK_CONFIDENCE` | `0.5` | 生成回滚建议的最低置信度 |
+
+## 不可突破的安全原则
+
+无论记忆积累了多少案例，都必须遵守以下规则：
+
+1. **实时状态优先**：历史案例只供参考，不能替代最新 AP 状态。
+2. **Validator 优先**：历史上成功的参数，本次也必须重新验算。
+3. **默认不自动回滚**：恶化只生成建议，管理员确认后才能下发。
+4. **不确定副作用不重试**：网络结果未知时先人工核对，避免重复配置 AP。
+5. **完整数据可审计**：摘要不会删除原始事件，归档不会物理删除案例。
+6. **确定性和幂等**：摘要、检索、评估和整理同输入应得到同结果；重复执行不应产生
+   重复副作用。
+
+## 代码入口与测试
+
+| 功能 | 代码位置 |
+|---|---|
+| 会话摘要 | `src/memory/session_memory.py` |
+| 案例生成与检索 | `src/memory/episodic.py` |
+| 效果评估 | `src/memory/outcome.py` |
+| 回滚建议与执行 | `src/memory/rollback.py` |
+| 规律归纳 | `src/memory/semantic.py` |
+| 后台整理 | `src/memory/consolidation.py` |
+| 健康度统计 | `src/memory/observability.py` |
+| SQLite 存储 | `src/persistence/event_store.py` |
+| 中断恢复 | `src/persistence/recovery.py` |
+| 管理命令 | `memory_admin.py` |
+
+测试位于 `tests/`，覆盖数据库迁移、事件幂等、会话摘要、案例隔离与排序、效果评估、
+回滚、规律归纳、后台整理、恢复边界和健康度统计。
+
+当前仍有两个明确限制：
+
+- 案例按拓扑签名严格隔离，新拓扑无法直接复用其他拓扑经验；
+- 会话摘要目前是确定性规则摘要，不是模型生成的自然语言总结。
+
+后续研究方向见 `docs/memory-architecture.md`。

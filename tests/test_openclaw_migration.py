@@ -61,7 +61,8 @@ class OpenClawMigrationTests(unittest.TestCase):
         profiled = orch.apply_profile({"apx": {}})
 
         self.assertEqual(profiled["apx"]["business_type"], "未声明业务类型")
-        for scene in MOCK_SCENES.values():
+        for name in ("sr", "edca", "joint"):
+            scene = MOCK_SCENES[name]
             self.assertEqual(scene["ap1"]["business_type"], "后台下载")
             self.assertEqual(scene["ap2"]["business_type"], "直播")
             self.assertEqual(scene["ap3"]["business_type"], "后台下载")

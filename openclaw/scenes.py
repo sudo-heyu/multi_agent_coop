@@ -295,10 +295,40 @@ MOCK_SCENE_JOINT = {
     },
 }
 
+# 场景四：两个同优先级实时业务争抢同一竞争机会。私有 SLA 不进入 agent_view，
+# 仅在对应 AP 的提案/投票回合注入；性能模型会对多个 AP 同时激进施加碰撞惩罚。
+MOCK_SCENE_CONTENTION = {
+    "ap1": {**MOCK_SCENE_EDCA["ap2"], "service_name": "video_call_a",
+            "business_type": "视频会议", "traffic_priority": "high",
+            "throughput_mbps_iperf": 16.0, "latency_ms": 95.0,
+            "private_sla": {"min_throughput_mbps": 15.0, "max_latency_ms": 80.0}},
+    "ap2": {**MOCK_SCENE_EDCA["ap2"], "service_name": "video_call_b",
+            "business_type": "视频会议", "traffic_priority": "high",
+            "throughput_mbps_iperf": 16.0, "latency_ms": 95.0,
+            "private_sla": {"min_throughput_mbps": 15.0, "max_latency_ms": 80.0}},
+    "ap3": {**MOCK_SCENE_EDCA["ap3"], "service_name": "best_effort",
+            "traffic_priority": "low",
+            "private_sla": {"min_throughput_mbps": 12.0, "max_latency_ms": 220.0}},
+}
+
+# 场景五：AP3 表面为低优先级后台业务，但有未公开的完成期限所对应的吞吐底线。
+MOCK_SCENE_HIDDEN_SLA = {
+    "ap1": {**MOCK_SCENE_EDCA["ap2"], "service_name": "interactive_video",
+            "private_sla": {"min_throughput_mbps": 14.0, "max_latency_ms": 100.0}},
+    "ap2": {**MOCK_SCENE_EDCA["ap1"], "service_name": "best_effort",
+            "private_sla": {"min_throughput_mbps": 10.0, "max_latency_ms": 250.0}},
+    "ap3": {**MOCK_SCENE_EDCA["ap3"], "service_name": "deadline_backup",
+            "business_type": "限时备份", "traffic_priority": "low",
+            "private_sla": {"min_throughput_mbps": 18.0, "max_latency_ms": 180.0,
+                            "deadline_minutes": 20}},
+}
+
 MOCK_SCENES = {
     "sr":    MOCK_SCENE_SR,
     "edca":  MOCK_SCENE_EDCA,
     "joint": MOCK_SCENE_JOINT,
+    "contention": MOCK_SCENE_CONTENTION,
+    "hidden_sla": MOCK_SCENE_HIDDEN_SLA,
 }
 
 # 业务优先级 → 用户流量接入类别（AC）：high=语音 VO，medium=尽力而为 BE，low=后台 BK

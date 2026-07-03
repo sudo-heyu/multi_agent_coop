@@ -40,6 +40,31 @@ class MockTelemetryFeederTests(unittest.TestCase):
                 before[ap_id]["latency_ms"],
             )
 
+    def test_all_aggressive_enters_negative_sum_region(self):
+        feeder = MockTelemetryFeeder(
+            "http://localhost:5001", copy.deepcopy(MOCK_SCENES["contention"])
+        )
+        before = copy.deepcopy(feeder._perf_target)
+        all_aggressive = {
+            ap: {"CWmin": 7, "CWmax": 15, "AIFSN": 2} for ap in ("ap1", "ap2", "ap3")
+        }
+        feeder.apply_decision(all_aggressive)
+        self.assertTrue(all(
+            feeder._perf_target[ap]["throughput_mbps_user"] < before[ap]["throughput_mbps_user"]
+            for ap in ("ap1", "ap2", "ap3")
+        ))
+
+    def test_all_high_power_has_interference_cost(self):
+        feeder = MockTelemetryFeeder(
+            "http://localhost:5001", copy.deepcopy(MOCK_SCENES["joint"])
+        )
+        before = copy.deepcopy(feeder._perf_target)
+        feeder.apply_decision({ap: {"tx_power_dbm": 20} for ap in ("ap1", "ap2", "ap3")})
+        self.assertTrue(all(
+            feeder._perf_target[ap]["throughput_mbps_user"] < before[ap]["throughput_mbps_user"]
+            for ap in ("ap1", "ap2", "ap3")
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

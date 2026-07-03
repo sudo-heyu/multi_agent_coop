@@ -259,10 +259,46 @@ def evaluate_deltas(
         weighted_sum += weight * ap_score
         weight_total += weight
     coverage = metric_count / expected_count if expected_count else 0.0
-    score = weighted_sum / weight_total if weight_total else 0.0
+    performance_score = weighted_sum / weight_total if weight_total else 0.0
+    sla_rows: dict[str, Any] = {}
+    satisfaction_values: list[float] = []
+    for ap in aps:
+        sla = baseline[ap].get("private_sla")
+        if not isinstance(sla, dict):
+            continue
+        after = observed[ap]
+        throughput = _num(after.get("throughput_mbps_user"))
+        latency = _num(after.get("latency_ms"))
+        min_tp = _num(sla.get("min_throughput_mbps"))
+        max_latency = _num(sla.get("max_latency_ms"))
+        ratios = []
+        if min_tp and throughput is not None:
+            ratios.append(throughput / min_tp)
+        if max_latency and latency is not None and latency > 0:
+            ratios.append(max_latency / latency)
+        if not ratios:
+            continue
+        satisfaction = min(ratios)
+        satisfaction_values.append(satisfaction)
+        sla_rows[ap] = {
+            "satisfied": satisfaction >= 1.0,
+            "satisfaction_ratio": round(satisfaction, 6),
+        }
+    fairness = 1.0
+    if satisfaction_values:
+        denom = len(satisfaction_values) * sum(v * v for v in satisfaction_values)
+        fairness = (sum(satisfaction_values) ** 2 / denom) if denom else 0.0
+        sla_score = sum(max(-1.0, min(1.0, v - 1.0)) for v in satisfaction_values) / len(satisfaction_values)
+        # 有私有约束时，质量同时衡量性能、底线满足度和 Jain 公平性。
+        score = 0.5 * performance_score + 0.35 * sla_score + 0.15 * (fairness - 1.0)
+    else:
+        score = performance_score
     return {
         "per_ap": per_ap,
         "score": round(score, 6),
+        "performance_score": round(performance_score, 6),
+        "sla": {"per_ap": sla_rows, "all_satisfied": bool(sla_rows) and all(
+            row["satisfied"] for row in sla_rows.values()), "fairness_jain": round(fairness, 6)},
         "coverage": round(coverage, 6),
     }
 

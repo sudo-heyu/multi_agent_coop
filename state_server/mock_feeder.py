@@ -58,44 +58,53 @@ class MockTelemetryFeeder:
 
     # ── 协商后注入决策 ──────────────────────────────────────────────────
     def apply_decision(self, decision: dict) -> None:
-        """注入最终 MAC 参数，并把性能目标朝改善方向移动。"""
+        """注入最终 MAC 参数，并按共享信道竞争结果重算性能目标。"""
         if not decision:
             return
         with self._lock:
+            baseline = copy.deepcopy(self._perf_target)
             for ap in AP_IDS:
                 params = decision.get(ap) or decision.get(ap.upper()) or {}
                 for key, cast in (
                     ("tx_power_dbm", float), ("cwmin", int),
                     ("cwmax", int), ("aifsn", int),
                 ):
-                    if params.get(key) is not None:
+                    raw_value = params.get(key)
+                    if raw_value is None:
+                        raw_value = params.get({"cwmin": "CWmin", "cwmax": "CWmax", "aifsn": "AIFSN"}.get(key, key))
+                    if raw_value is not None:
                         try:
-                            value = cast(params[key])
+                            value = cast(raw_value)
                             # 决策为实际 CW 值；喂回的“上报数据”与真实上报一致用指数 n。
                             if key in ("cwmin", "cwmax"):
                                 value = cw_to_ecw(value)
                             self._state[ap][key] = value
                         except (TypeError, ValueError):
                             pass
-                # 协商后预期：高优先级/直播业务收益最大；低优先级后台下载让出信道机会。
-                t = self._perf_target[ap]
-                priority = str(self._state[ap].get("traffic_priority", "medium")).lower()
-                business = str(self._state[ap].get("business_type", ""))
-                if priority == "high" or business == "直播":
-                    t["throughput_mbps_iperf"] *= 1.22
-                    t["throughput_mbps_user"] *= 1.22
-                    t["latency_ms"] *= 0.60
-                    t["packet_loss_pct"] *= 0.45
-                elif priority == "low":
-                    t["throughput_mbps_iperf"] *= 0.94
-                    t["throughput_mbps_user"] *= 0.94
-                    t["latency_ms"] *= 1.12
-                    t["packet_loss_pct"] *= 1.10
-                else:
-                    t["throughput_mbps_iperf"] *= 1.08
-                    t["throughput_mbps_user"] *= 1.08
-                    t["latency_ms"] *= 0.85
-                    t["packet_loss_pct"] *= 0.75
+            # 接入权重越大代表越激进；多个 AP 同时使用小 CW/AIFS 会进入负和区。
+            weights = {}
+            aggressive = 0
+            high_power = 0
+            for ap in AP_IDS:
+                row = self._state[ap]
+                cw = 2 ** int(row.get("cwmin", 3)) - 1
+                aifs = int(row.get("aifsn", 2))
+                weights[ap] = 1.0 / ((cw + 1) * max(aifs, 1))
+                aggressive += int(cw <= 7 and aifs <= 2)
+                high_power += int(float(row.get("tx_power_dbm", 10.0)) >= 18.0)
+            collision_factor = {0: 1.0, 1: 1.0, 2: 0.72, 3: 0.42}[aggressive]
+            interference_factor = {0: 1.0, 1: 1.0, 2: 0.85, 3: 0.65}[high_power]
+            total_weight = sum(weights.values()) or 1.0
+            for ap in AP_IDS:
+                share_ratio = (weights[ap] / total_weight) / (1.0 / len(AP_IDS))
+                service_factor = max(0.30, min(
+                    1.75, collision_factor * interference_factor * (0.45 + 1.65 * share_ratio)
+                ))
+                t, b = self._perf_target[ap], baseline[ap]
+                t["throughput_mbps_iperf"] = b["throughput_mbps_iperf"] * service_factor
+                t["throughput_mbps_user"] = b["throughput_mbps_user"] * service_factor
+                t["latency_ms"] = b["latency_ms"] / service_factor
+                t["packet_loss_pct"] = b["packet_loss_pct"] / service_factor
 
     # ── 内部 ───────────────────────────────────────────────────────────
     def _loop(self) -> None:

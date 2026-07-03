@@ -189,14 +189,34 @@ def rank_sr_candidates(candidates: dict, objective: str = "balanced") -> dict:
     return _guard(lambda: _sr.rank_candidates(_full_state(), candidates or {}, objective))
 
 
+def _normalize_edca_proposal(proposed_edca: dict | str | None) -> dict:
+    """Accept both native objects and JSON strings emitted by some tool models."""
+    if proposed_edca is None:
+        return {}
+    if isinstance(proposed_edca, dict):
+        return proposed_edca
+    if isinstance(proposed_edca, str):
+        try:
+            decoded = json.loads(proposed_edca)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"proposed_edca 不是合法 JSON: {exc.msg}") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("proposed_edca JSON 顶层必须是对象")
+        return decoded
+    raise TypeError("proposed_edca 必须是对象或 JSON 字符串")
+
+
 @mcp.tool()
-def validate_edca_proposal(proposed_edca: dict | None = None) -> dict:
+def validate_edca_proposal(proposed_edca: dict | str | None = None) -> dict:
     """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin）
     + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
     并评估拥塞匹配度。traffic_priority 不是 AP 固定身份；同优先级时不要强行制造梯度。
-    proposed_edca 形如 {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。"""
+    proposed_edca 可传对象或该对象的 JSON 字符串，形如
+    {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。"""
     def _run() -> dict:
-        proposed = proposed_edca or _edca_from_proposal(_current_proposal())
+        proposed = _normalize_edca_proposal(proposed_edca)
+        if not proposed:
+            proposed = _edca_from_proposal(_current_proposal())
         if not proposed:
             return {"error": "需要 proposed_edca 参数，例如 "
                              '{"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}'}
