@@ -73,9 +73,13 @@ def register_attempt(store: Any, goal_id: str, run_id: str) -> dict[str, Any] | 
     existing = store.get_goal_attempt_by_run(run_id)
     if existing is not None and existing["goal_id"] == goal_id:
         return existing
+    goal = store.get_goal(goal_id)
+    attribution = build_attribution(store, goal) if goal is not None else {}
     attempts = store.list_goal_attempts(goal_id)
     parent = attempts[-1]["attempt_id"] if attempts else None
-    return store.add_goal_attempt(goal_id, run_id, parent_attempt_id=parent)
+    return store.add_goal_attempt(
+        goal_id, run_id, parent_attempt_id=parent, attribution=attribution,
+    )
 
 
 def metric_value(state: dict[str, Any], target: dict[str, Any]) -> float | None:
@@ -177,3 +181,175 @@ def goal_overview(store: Any, goal_id: str) -> dict[str, Any] | None:
     if goal is None:
         return None
     return {**goal, "attempts": store.list_goal_attempts(goal_id)}
+
+
+# ---- 阶段6：迭代链归因 / 停机准则 / 目标提示注入 ----
+
+def build_attribution(store: Any, goal: dict[str, Any]) -> dict[str, Any]:
+    """基于上一次 attempt 的确定性归因（I2）：上次动作 → 观测 → 分类。
+
+    分类规则（纯比较，不依赖 LLM）：
+    - achieved：上次进度已达标；
+    - no_data：上次观测缺目标指标；
+    - improved_but_insufficient：gap 比上上次收窄但未达标（方向对，力度不够）；
+    - worsened：gap 比上上次扩大（方向错了）；
+    - no_effect：gap 未变化；
+    - first_probe：这是第一次有观测的尝试，无参照。
+    """
+    attempts = store.list_goal_attempts(goal["goal_id"])
+    if not attempts:
+        return {}
+    parent = attempts[-1]
+    episode = store.get_episode(run_id=parent["run_id"])
+    action = (episode or {}).get("decision")
+    progress = parent.get("progress") or {}
+    gap, met = progress.get("gap"), progress.get("met")
+    if met is True:
+        classification = "achieved"
+    elif progress.get("value") is None:
+        classification = "no_data"
+    else:
+        reference_gap = None
+        for earlier in reversed(attempts[:-1]):
+            earlier_gap = (earlier.get("progress") or {}).get("gap")
+            if earlier_gap is not None:
+                reference_gap = float(earlier_gap)
+                break
+        if reference_gap is None:
+            classification = "first_probe"
+        elif float(gap) < reference_gap:
+            classification = "improved_but_insufficient"
+        elif float(gap) > reference_gap:
+            classification = "worsened"
+        else:
+            classification = "no_effect"
+    return {
+        "previous_run_id": parent["run_id"],
+        "previous_attempt_id": parent["attempt_id"],
+        "previous_action": action,
+        "observed_progress": progress,
+        "classification": classification,
+    }
+
+
+_CLASSIFICATION_HINTS = {
+    "achieved": "上次已达标，本次仅需保持，不要过度调整。",
+    "no_data": "上次观测缺目标指标，先确认数据来源，再做最小改动。",
+    "improved_but_insufficient": "上次方向正确但力度不够：沿同方向加大调整幅度，"
+                                 "不要原样重复上次参数。",
+    "worsened": "上次调整使目标指标恶化：必须改变方向或换策略，禁止重复上次动作。",
+    "no_effect": "上次调整对目标指标无影响：该参数可能不是瓶颈，换一个假设"
+                 "（不同参数或不同策略）。",
+    "first_probe": "首次有观测的尝试，无参照：提出保守的最小改动假设。",
+}
+
+
+def attribution_prompt(goal: dict[str, Any], attempt: dict[str, Any]) -> str:
+    """把目标与归因渲染为提案提示块（I3）。"""
+    import json as _json_mod
+    lines = [
+        f"【迭代目标】{goal['metric']}（第 {attempt['sequence']}/"
+        f"{goal['budget_attempts']} 次尝试）。"
+        "本轮提案必须显式说明预计如何推动该指标达标。"
+    ]
+    attribution = attempt.get("attribution") or {}
+    if attribution:
+        progress = attribution.get("observed_progress") or {}
+        lines.append(
+            "上次尝试归因："
+            f"动作={_json_mod.dumps(attribution.get('previous_action'), ensure_ascii=False)}，"
+            f"观测值={progress.get('value')}（距达标 gap={progress.get('gap')}），"
+            f"归因分类={attribution.get('classification')}。"
+        )
+        hint = _CLASSIFICATION_HINTS.get(str(attribution.get("classification")))
+        if hint:
+            lines.append(f"要求：{hint}")
+    return "\n".join(lines)
+
+
+def build_goal_context(
+    store: Any, goal: dict[str, Any], attempt: dict[str, Any],
+) -> dict[str, Any]:
+    """供 structured_relay 注入的目标上下文（含提示文本）。"""
+    return {
+        "goal_id": goal["goal_id"], "metric": goal["metric"],
+        "attempt_id": attempt["attempt_id"], "sequence": attempt["sequence"],
+        "budget_attempts": goal["budget_attempts"],
+        "prompt": attribution_prompt(goal, attempt),
+    }
+
+
+def detect_oscillation(decisions: list[dict[str, Any] | None]) -> bool:
+    """参数振荡（I4）：同一参数在最近三次尝试里 A→B→A 来回改。"""
+    series: dict[tuple[str, str], list[Any]] = {}
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        for ap, params in decision.items():
+            if not isinstance(params, dict):
+                continue
+            for field, value in params.items():
+                if isinstance(value, (int, float)):
+                    series.setdefault((ap, field), []).append(float(value))
+    for values in series.values():
+        for i in range(len(values) - 2):
+            a, b, c = values[i], values[i + 1], values[i + 2]
+            if a == c and a != b:
+                return True
+    return False
+
+
+def refresh_goal_after_evaluation(store: Any, run_id: str) -> dict[str, Any] | None:
+    """评估窗口结算后回填目标进度并执行停机准则（I4）。
+
+    - achieved：最近两个已结算窗口均达标（达标且在下一窗口保持）；
+    - blocked(参数振荡)：最近三次尝试同一参数来回改；
+    - blocked(预算耗尽)：attempt 数达预算且仍未达标。
+    任何路径都不自动追加轮次、不自动回滚（红线 10）。
+    """
+    if not enabled():
+        return None
+    attempt = store.get_goal_attempt_by_run(run_id)
+    if attempt is None:
+        return None
+    goal = store.get_goal(attempt["goal_id"])
+    if goal is None or goal["status"] != "active":
+        return None
+    windows = [
+        item for item in store.list_evaluations(run_id)
+        if item.get("status") == "collected" and isinstance(item.get("observed"), dict)
+    ]
+    window_progress = [score_goal_progress(goal, item["observed"]) for item in windows]
+    scored = [p for p in window_progress if p.get("met") is not None]
+    if scored:
+        progress = {**scored[-1], "windows_scored": len(scored)}
+        store.update_goal_attempt(attempt["attempt_id"], progress=progress)
+    # 停机准则 1：达标且在下一窗口保持。
+    if len(scored) >= 2 and scored[-1]["met"] and scored[-2]["met"]:
+        store.update_goal_status(
+            goal["goal_id"], "achieved",
+            reason=f"attempt #{attempt['sequence']} 连续两个评估窗口达标",
+        )
+        return {"goal_status": "achieved", "progress": scored[-1]}
+    attempts = store.list_goal_attempts(goal["goal_id"])
+    # 停机准则 2：参数振荡。
+    recent_decisions = [
+        (store.get_episode(run_id=item["run_id"]) or {}).get("decision")
+        for item in attempts[-3:]
+    ]
+    if len(attempts) >= 3 and detect_oscillation(recent_decisions):
+        store.update_goal_status(
+            goal["goal_id"], "blocked",
+            reason="参数振荡：同一参数在最近尝试中来回改，环境可能非平稳，需人工介入",
+        )
+        return {"goal_status": "blocked", "reason": "oscillation"}
+    # 停机准则 3：预算耗尽。
+    terminal = [item for item in attempts if item["status"] in {"completed", "failed"}]
+    if len(terminal) >= goal["budget_attempts"]:
+        store.update_goal_status(
+            goal["goal_id"], "blocked",
+            reason=f"预算耗尽：{goal['budget_attempts']} 次尝试后仍未达标",
+        )
+        return {"goal_status": "blocked", "reason": "budget_exhausted"}
+    latest = scored[-1] if scored else None
+    return {"goal_status": "active", "progress": latest}

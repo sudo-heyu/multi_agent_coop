@@ -8,8 +8,10 @@ from unittest.mock import patch
 os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from src.memory.goals import (
-    auto_create_goal, create_goal, get_active_goal, goal_overview, metric_value,
-    record_attempt_result, register_attempt, score_goal_progress, validate_target,
+    attribution_prompt, auto_create_goal, build_goal_context, create_goal,
+    detect_oscillation, get_active_goal, goal_overview, metric_value,
+    record_attempt_result, refresh_goal_after_evaluation, register_attempt,
+    score_goal_progress, validate_target,
 )
 from src.persistence import EventStore
 
@@ -152,6 +154,182 @@ class AutoTriggerTests(unittest.TestCase):
         self._collected_window("w2", 0.10)  # 达标窗口
         self._collected_window("w3", 0.28)
         self.assertIsNone(auto_create_goal(self.store, target=TARGET, windows=3))
+
+
+class IterationChainTests(unittest.TestCase):
+    """I2 归因链、I3 提示注入、I4 停机准则。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.store = EventStore(Path(self._td.name) / "chain.sqlite3")
+
+    def tearDown(self):
+        self.store.close()
+        self._td.cleanup()
+
+    def _episode(self, run_id, decision):
+        import copy
+        from openclaw.scenes import MOCK_SCENES
+        from src.memory import materialize_episode
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        self.store.start_run(run_id, mode="mock", scene="edca", model="openclaw")
+        self.store.append_event(
+            run_id, "session_start",
+            {"model": "openclaw", "scene": "edca", "ap_state": state},
+        )
+        self.store.record_snapshot(run_id, label="initial", source="s", state=state)
+        self.store.append_event(
+            run_id, "final_decision", {"decision": decision, "raw_response": "{}"},
+        )
+        self.store.append_event(
+            run_id, "validation_result",
+            {"approved": True, "strategy": "co_edca", "summary": "ok"},
+        )
+        self.store.append_event(run_id, "session_end", {"outcome": "success", "total_rounds": 1})
+        self.store.complete_run(run_id, "success")
+        materialize_episode(self.store, run_id)
+
+    def _window(self, run_id, label, retries):
+        due = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        record, _ = self.store.schedule_evaluation(
+            run_id, window_label=label, window_seconds=10.0, due_at=due,
+            baseline={"ap2": {"tx_retries_ratio": 0.30}},
+        )
+        self.store.finish_evaluation(
+            record["evaluation_id"], status="collected",
+            observed={"ap2": {"tx_retries_ratio": retries}},
+            verdict="neutral", confidence=0.8,
+        )
+
+    def test_attribution_chain_classifications(self):
+        goal = create_goal(self.store, target=TARGET)
+        first = register_attempt(self.store, goal["goal_id"], "run-1")
+        self.assertEqual(first["attribution"], {})
+        self._episode("run-1", {"ap2": {"CWmin": 15}})
+        self.store.update_goal_attempt(
+            first["attempt_id"],
+            progress={"metric": goal["metric"], "value": 0.30, "met": False, "gap": 0.15},
+            status="completed",
+        )
+        second = register_attempt(self.store, goal["goal_id"], "run-2")
+        attribution = second["attribution"]
+        self.assertEqual(attribution["previous_run_id"], "run-1")
+        self.assertEqual(attribution["classification"], "first_probe")
+        self.assertEqual(attribution["previous_action"], {"ap2": {"CWmin": 15}})
+
+        self._episode("run-2", {"ap2": {"CWmin": 7}})
+        self.store.update_goal_attempt(
+            second["attempt_id"],
+            progress={"metric": goal["metric"], "value": 0.20, "met": False, "gap": 0.05},
+            status="completed",
+        )
+        third = register_attempt(self.store, goal["goal_id"], "run-3")
+        self.assertEqual(third["attribution"]["classification"], "improved_but_insufficient")
+
+        self.store.update_goal_attempt(
+            third["attempt_id"],
+            progress={"metric": goal["metric"], "value": 0.40, "met": False, "gap": 0.25},
+            status="completed",
+        )
+        fourth = register_attempt(self.store, goal["goal_id"], "run-4")
+        self.assertEqual(fourth["attribution"]["classification"], "worsened")
+
+    def test_attribution_prompt_and_goal_context(self):
+        goal = create_goal(self.store, target=TARGET)
+        first = register_attempt(self.store, goal["goal_id"], "run-1")
+        self.store.update_goal_attempt(
+            first["attempt_id"],
+            progress={"metric": goal["metric"], "value": 0.40, "met": False, "gap": 0.25},
+            status="completed",
+        )
+        second = register_attempt(self.store, goal["goal_id"], "run-2")
+        text = attribution_prompt(goal, second)
+        self.assertIn("【迭代目标】ap2.tx_retries_ratio<=0.15（第 2/5 次尝试）", text)
+        self.assertIn("归因分类=first_probe", text)
+        self.assertIn("最小改动", text)
+        context = build_goal_context(self.store, goal, second)
+        self.assertEqual(context["sequence"], 2)
+        self.assertIn("迭代目标", context["prompt"])
+
+    def test_goal_context_injected_into_agent_message(self):
+        from openclaw.mcp import orchestration as orch
+        saved = orch._SESSION.goal_context
+        try:
+            orch._SESSION.goal_context = {"prompt": "【迭代目标】ap2.tx_retries_ratio<=0.15"}
+            text = orch._build_agent_message("ap1", "", "请提案")
+            self.assertIn("【迭代目标】", text)
+            # 目标块位于指令之前、正文末尾，截断时优先保留。
+            self.assertLess(text.index("【迭代目标】"), text.index("请提案"))
+            orch._SESSION.goal_context = None
+            self.assertNotIn("【迭代目标】", orch._build_agent_message("ap1", "", "请提案"))
+        finally:
+            orch._SESSION.goal_context = saved
+
+    def test_stop_achieved_when_held_two_windows(self):
+        goal = create_goal(self.store, target=TARGET)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        self._episode("run-a", {"ap2": {"CWmin": 7}})
+        self._window("run-a", "w1", 0.12)
+        self._window("run-a", "w2", 0.10)
+        outcome = refresh_goal_after_evaluation(self.store, "run-a")
+        self.assertEqual(outcome["goal_status"], "achieved")
+        self.assertEqual(self.store.get_goal(goal["goal_id"])["status"], "achieved")
+
+    def test_single_met_window_not_yet_achieved(self):
+        goal = create_goal(self.store, target=TARGET, budget_attempts=5)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        self._episode("run-a", {"ap2": {"CWmin": 7}})
+        self._window("run-a", "w1", 0.30)
+        self._window("run-a", "w2", 0.10)
+        outcome = refresh_goal_after_evaluation(self.store, "run-a")
+        self.assertEqual(outcome["goal_status"], "active")
+        attempt = self.store.get_goal_attempt_by_run("run-a")
+        self.assertTrue(attempt["progress"]["met"])
+        self.assertEqual(attempt["progress"]["windows_scored"], 2)
+
+    def test_stop_budget_exhausted(self):
+        goal = create_goal(self.store, target=TARGET, budget_attempts=1)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        self._episode("run-a", {"ap2": {"CWmin": 7}})
+        record_attempt_result(self.store, "run-a", outcome="success")
+        self._window("run-a", "w1", 0.30)
+        outcome = refresh_goal_after_evaluation(self.store, "run-a")
+        self.assertEqual(outcome["reason"], "budget_exhausted")
+        goal_after = self.store.get_goal(goal["goal_id"])
+        self.assertEqual(goal_after["status"], "blocked")
+        self.assertIn("预算耗尽", goal_after["status_reason"])
+
+    def test_stop_oscillation(self):
+        self.assertTrue(detect_oscillation([
+            {"ap1": {"CWmin": 15}}, {"ap1": {"CWmin": 31}}, {"ap1": {"CWmin": 15}},
+        ]))
+        self.assertFalse(detect_oscillation([
+            {"ap1": {"CWmin": 15}}, {"ap1": {"CWmin": 31}}, {"ap1": {"CWmin": 63}},
+        ]))
+        self.assertFalse(detect_oscillation([None, {"ap1": {"CWmin": 15}}]))
+
+        goal = create_goal(self.store, target=TARGET, budget_attempts=10)
+        for index, cwmin in enumerate((15, 31, 15), start=1):
+            run_id = f"run-{index}"
+            register_attempt(self.store, goal["goal_id"], run_id)
+            self._episode(run_id, {"ap2": {"CWmin": cwmin}})
+            record_attempt_result(self.store, run_id, outcome="success")
+        self._window("run-3", "w1", 0.30)
+        outcome = refresh_goal_after_evaluation(self.store, "run-3")
+        self.assertEqual(outcome["reason"], "oscillation")
+        goal_after = self.store.get_goal(goal["goal_id"])
+        self.assertEqual(goal_after["status"], "blocked")
+        self.assertIn("振荡", goal_after["status_reason"])
+
+    def test_refresh_disabled_by_switch(self):
+        goal = create_goal(self.store, target=TARGET)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        self._episode("run-a", {"ap2": {"CWmin": 7}})
+        self._window("run-a", "w1", 0.10)
+        self._window("run-a", "w2", 0.10)
+        with patch.dict(os.environ, {"MULTIAP_GOALS": "0"}):
+            self.assertIsNone(refresh_goal_after_evaluation(self.store, "run-a"))
+        self.assertEqual(self.store.get_goal(goal["goal_id"])["status"], "active")
 
 
 if __name__ == "__main__":

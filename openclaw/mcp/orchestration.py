@@ -140,6 +140,7 @@ class Session:
         self.recalled_episodes: list[dict] = []
         self.recalled_warnings: list[dict] = []
         self.recalled_rules: list[dict] = []
+        self.goal_context: dict | None = None      # 迭代模块：目标 + 上次归因（I3）
         self.agent_recalled_episodes: dict[str, list[dict]] = {ap: [] for ap in AP_IDS}
         self.local_transcripts: dict[str, list[dict]] = {ap: [] for ap in AP_IDS}
         self.memory_manager = SessionMemoryManager(
@@ -386,10 +387,15 @@ def _build_agent_message(
             from src.memory import format_rule
             lines.extend(f"- 规律：{format_rule(rule)}" for rule in shared_rules[:3])
         shared_block = "\n".join(lines) + "\n\n"
+    goal_block = ""
+    goal_prompt = ((_SESSION.goal_context or {}).get("prompt") or "").strip()
+    if goal_prompt:
+        goal_block = goal_prompt + "\n\n"
     total_budget = max(8_000, int(os.environ.get("MULTIAP_AGENT_TOTAL_CONTEXT_CHARS", "26000")))
-    # Low → high priority ordering; tail truncation preserves current task, public facts,
-    # agent-local memory, then warnings. Shared positive experience is discarded first.
-    return f"{shared_block}{warning_block}{local_block}{conversation}{instruction}"[-total_budget:]
+    # Low → high priority ordering; tail truncation preserves current task, goal
+    # attribution, public facts, agent-local memory, then warnings. Shared positive
+    # experience is discarded first.
+    return f"{shared_block}{warning_block}{local_block}{conversation}{goal_block}{instruction}"[-total_budget:]
 
 
 def _stream_agent_session(
@@ -1631,7 +1637,8 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                      initial_state: dict | None = None,
                      resume_projection: dict | None = None,
                      evaluation_windows: tuple[float, ...] | None = None,
-                     memory_callback: Callable[[str | None, SessionMemory, str], None] | None = None) -> dict:
+                     memory_callback: Callable[[str | None, SessionMemory, str], None] | None = None,
+                     goal_context: dict | None = None) -> dict:
     global _tool_callback
 
     def emit(phase, who, reply):
@@ -1649,6 +1656,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
             for agent in AP_IDS:
                 s.sync_agent_workspace(agent)
     s.memory_callback = memory_callback
+    s.goal_context = goal_context
 
     if logger is not None and not resume_projection:
         from src.memory.workspace import try_save_long_term_memory

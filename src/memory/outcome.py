@@ -473,6 +473,9 @@ def apply_evaluation_to_episode(
     summary["memory_reconciliation"] = reconcile_memory_reliance(
         store, run_id, summary.get("final_verdict")
     )
+    # I4：若本 run 属于某个目标 attempt，回填目标进度并执行停机准则。
+    from .goals import refresh_goal_after_evaluation
+    summary["goal_progress"] = refresh_goal_after_evaluation(store, run_id)
     from .workspace import AGENT_IDS, should_sync_for_store, try_save_long_term_memory
     if should_sync_for_store(store.path):
         for agent_id in AGENT_IDS:

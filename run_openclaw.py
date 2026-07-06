@@ -516,12 +516,16 @@ def main():
                 **(resume_checkpoint.projection or {}),
                 "boundary": resume_checkpoint.boundary,
             }
+        goal_context = None
         if goal is not None:
-            # I1：本次协商 run 登记为目标的下一次 attempt（恢复路径幂等复用）。
-            from src.memory.goals import register_attempt
+            # I1：本次协商 run 登记为目标的下一次 attempt（恢复路径幂等复用）；
+            # I3：attempt 携带上次归因，作为目标上下文注入本轮提案。
+            from src.memory.goals import build_goal_context, register_attempt
             goal_store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
             try:
                 attempt = register_attempt(goal_store, goal["goal_id"], str(logger.session_id))
+                if attempt is not None:
+                    goal_context = build_goal_context(goal_store, goal, attempt)
             finally:
                 goal_store.close()
             if attempt is not None:
@@ -540,6 +544,7 @@ def main():
             resume_projection=resume_projection,
             evaluation_windows=eval_windows,
             initial_state=initial_ap_state,
+            goal_context=goal_context,
         )
     else:
         _require_openclaw_config(require_qwen80b=args.require_qwen80b)
