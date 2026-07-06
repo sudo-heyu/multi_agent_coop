@@ -43,7 +43,8 @@ def _normalize_proposal(proposal: dict) -> dict:
 def _infer_strategy_from_proposal(proposal: dict) -> str:
     """Detect negotiation strategy from fields present in the proposal JSON."""
     has_sr = any(
-        (isinstance(v, dict) and "tx_power_dbm" in v) or isinstance(v, (int, float))
+        (isinstance(v, dict) and ("tx_power_dbm" in v or "obss_pd_dbm" in v))
+        or isinstance(v, (int, float))
         for v in proposal.values()
         if not isinstance(v, bool)
     )

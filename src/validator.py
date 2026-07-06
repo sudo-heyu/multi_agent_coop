@@ -18,6 +18,12 @@ TX_POWER_MAX_DBM = 23.0
 TX_POWER_APPLIED_TOLERANCE_DB = 0.5
 # Co-SR 功率调整量（相对协商前功率）必须为整数 dB
 TX_POWER_DELTA_INTEGER_TOLERANCE_DB = 0.05
+# 协议级 Co-SR：OBSS_PD 门限的合法 SR 窗口与耦合约束
+OBSS_PD_MIN_DBM = -82.0
+OBSS_PD_MAX_DBM = -62.0
+OBSS_PD_APPLIED_TOLERANCE_DB = 0.5
+# 标准耦合 tx ≤ TX_POWER_MAX-(OBSS_PD-OBSS_PD_MIN) 的判定容差
+OBSS_PD_COUPLING_TOLERANCE_DB = 0.5
 
 EDCA_LIMITS = {
     "CWmin": (3, 1023),
@@ -101,6 +107,34 @@ def validate_decision(
                     elif abs(float(observed_pwr) - pwr) > TX_POWER_APPLIED_TOLERANCE_DB:
                         ap_errors.append(
                             f"tx_power_dbm 未生效：期望 {pwr} dBm，观测 {observed_pwr} dBm"
+                        )
+
+            # 协议级 Co-SR：OBSS_PD 门限（可选字段，携带则校验范围 / 耦合 / 生效）
+            obss_pd = entry.get("obss_pd_dbm")
+            if obss_pd is not None:
+                obss_pd = float(obss_pd)
+                report["proposed_params"]["obss_pd_dbm"] = obss_pd
+                if not (OBSS_PD_MIN_DBM <= obss_pd <= OBSS_PD_MAX_DBM):
+                    ap_errors.append(
+                        f"obss_pd_dbm={obss_pd} 超出 SR 合法窗口 "
+                        f"[{OBSS_PD_MIN_DBM}, {OBSS_PD_MAX_DBM}] dBm"
+                    )
+                # 标准耦合：开 SR（门限>-82）时 tx ≤ TX_POWER_MAX-(obss_pd-OBSS_PD_MIN)
+                if pwr is not None and obss_pd > OBSS_PD_MIN_DBM:
+                    tx_limit = TX_POWER_MAX_DBM - (obss_pd - OBSS_PD_MIN_DBM)
+                    if float(pwr) > tx_limit + OBSS_PD_COUPLING_TOLERANCE_DB:
+                        ap_errors.append(
+                            f"违反 SR 功率耦合：obss_pd={obss_pd} dBm 时 tx 上限 "
+                            f"{round(tx_limit, 1)} dBm，提案 tx={pwr} dBm"
+                        )
+                if observed_is_real:
+                    observed_obss = obs.get(ap_id, {}).get("obss_pd_dbm")
+                    report["observed_params"]["obss_pd_dbm"] = observed_obss
+                    if observed_obss is None:
+                        ap_errors.append("观测结果缺少 obss_pd_dbm")
+                    elif abs(float(observed_obss) - obss_pd) > OBSS_PD_APPLIED_TOLERANCE_DB:
+                        ap_errors.append(
+                            f"obss_pd_dbm 未生效：期望 {obss_pd} dBm，观测 {observed_obss} dBm"
                         )
 
             report["errors"].extend([f"{ap_id.upper()}: {e}" for e in ap_errors])

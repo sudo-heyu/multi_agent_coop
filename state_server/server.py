@@ -418,6 +418,10 @@ def post_state():
             "cwmin":           data.get("cwmin"),
             "cwmax":           data.get("cwmax"),
             "aifsn":           data.get("aifsn"),
+            # 协议级 Co-SR 观测字段（缺省来源可能没有，None 即可）
+            "obss_pd_dbm":     data.get("obss_pd_dbm"),
+            "bss_color":       data.get("bss_color"),
+            "sr_reset_count":  data.get("sr_reset_count"),
         })
         _write_trace({
             "event": "state_post",

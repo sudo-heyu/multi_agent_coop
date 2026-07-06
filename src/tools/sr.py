@@ -402,6 +402,8 @@ def _check_group_constraints(
             "proposed_power_dbm": proposed_tx,
             "sr_tx_limit_dbm":    round(sr_tx_limit, 2),
             "sr_obss_pd_dbm":     round(sr_obss_pd, 2),
+            # 与提案字段同名的别名（钳到 SR 合法窗口），便于 agent 直接填入提案
+            "obss_pd_dbm":        round(min(max(sr_obss_pd, OBSS_PD_MIN_DBM), OBSS_PD_MAX_DBM), 2),
             "cca_max_dbm":        round(max_received, 2),
             "cca_ok":             cca_ok,
             "sr_power_ok":        sr_power_ok,
@@ -509,6 +511,9 @@ def compute_feasible_ranges(ap_states: dict) -> dict:
                 - STA_RSSI_MIN_DBM,
                 3,
             ),
+            # 协议级 Co-SR：当前功率下配套的 OBSS_PD 门限提示（提案须带 obss_pd_dbm）。
+            # 选定候选功率后由 evaluate_sr_candidate 的 sr_obss_pd_dbm 给出精确值。
+            "recommended_obss_pd_dbm": _obss_pd_for_ap(ap_id, ap_states, {}),
         }
 
     # 候选提示直接给整数 dBm，确保调整量为整数 dB。
@@ -791,11 +796,31 @@ def recommend_tx_power_differentiated(ap_states: dict) -> dict:
             "recommended_dbm": optimal,
             "current_dbm":     current,
             "delta_db":        round(optimal - current, 3),
+            # 协议级 Co-SR：与 optimal 功率配套的 OBSS_PD 门限（截断到 SR 合法窗口）
+            "obss_pd_dbm":     _obss_pd_for_ap(ap_id, ap_states, powers),
             "active_constraints": _active_constraints(
                 ap_id, validation[ap_id], powers, lower, upper
             ),
         }
     return result
+
+
+def _obss_pd_for_ap(ap_id: str, ap_states: dict, proposed_powers: dict) -> float:
+    """
+    某 AP 在 proposed_powers 下配套的 OBSS_PD 门限（协议级 Co-SR）。
+
+    取该 AP 处最强 OBSS 干扰（_cca_at_ap 的 max_received），截断到 SR 合法窗口
+    [OBSS_PD_MIN, OBSS_PD_MAX]：
+      • 干扰 < -82：无需 SR，回落默认 CCA -82（不开空间复用）；
+      • -82 ~ -62：设为该干扰值，忽略更弱 OBSS 帧以并发发送；
+      • > -62：结构性不可行，钳到 -62（最大 SR 努力，另由约束检查报警）。
+    与标准耦合约束 tx ≤ TX_POWER_MAX-(OBSS_PD-OBSS_PD_MIN) 一致（ns-3 侧自动限功）。
+    """
+    max_received = _cca_at_ap(ap_id, ap_states, proposed_powers).get(
+        "max_received_dbm", OBSS_PD_MIN_DBM
+    )
+    obss_pd = min(max(max_received, OBSS_PD_MIN_DBM), OBSS_PD_MAX_DBM)
+    return round(obss_pd, 2)
 
 
 # ------------------------------------------------------------------
@@ -1051,6 +1076,11 @@ def select_concurrent_groups(ap_states: dict, min_group_size: int = 2) -> dict:
                 "non_concurrent_aps": sorted(set(ap_ids) - group),
                 "valid": evaluation["valid"],
                 "recommended_powers": evaluation["proposed_powers"],
+                # 协议级 Co-SR：与推荐功率配套的 OBSS_PD 门限（提案须一并带上）
+                "recommended_obss_pd": {
+                    ap_id: detail.get("obss_pd_dbm")
+                    for ap_id, detail in evaluation["per_ap"].items()
+                },
                 "score": score,
                 "errors": evaluation["errors"],
             })

@@ -57,11 +57,12 @@
 ```
 
 **返回字段说明**：
-- `best_group`：排序后的最佳并发组，包含 `concurrent_group` / `non_concurrent_aps` / `recommended_powers`
+- `best_group`：排序后的最佳并发组，包含 `concurrent_group` / `non_concurrent_aps` / `recommended_powers` / `recommended_obss_pd`
+- `recommended_obss_pd`：与 `recommended_powers` 配套的每 AP OBSS_PD 门限（协议级 Co-SR，须写入提案 `obss_pd_dbm`）
 - `valid_groups`：所有可行并发组
 - `all_groups`：包含不可行组及其原因
 
-**提案要求**：若采用部分并发，最终 JSON 除每个 AP 的 `tx_power_dbm` 外，还应包含：
+**提案要求**：若采用部分并发，最终 JSON 除每个 AP 的 `tx_power_dbm` / `obss_pd_dbm` 外，还应包含：
 ```json
 {"_sr": {"concurrent_group": ["ap1", "ap3"], "non_concurrent_aps": ["ap2"]}}
 ```
@@ -79,7 +80,8 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 **参数**：无（工具自动读取当前 AP 状态）
 
 **返回字段说明**：
-- `ranges`：每个 AP 的 `current_dbm` / `min_dbm` / `max_dbm` / `min_int_dbm` / `max_int_dbm` / 约束原因
+- `ranges`：每个 AP 的 `current_dbm` / `min_dbm` / `max_dbm` / `min_int_dbm` / `max_int_dbm` / `recommended_obss_pd_dbm` / 约束原因
+- `recommended_obss_pd_dbm`：协议级 Co-SR 的 OBSS_PD 门限提示（选定候选功率后由 `evaluate_sr_candidate` 的 `obss_pd_dbm` 精确给出）
 - `integer_power_required`：恒为 `true`，提醒功率调整量必须为整数 dB
 - `candidate_hints`：适合进一步评估的候选提示（已取整为整数 dBm），例如 `minimal_necessary_drop`
 - `notes`：使用区间时的注意事项
@@ -115,7 +117,7 @@ STA RSSI 安全下界和 CCA 上界。SINR 是 AP 间耦合约束，候选方案
 **返回字段说明**：
 - `valid`：候选方案整体是否合法（功率调整量非整数 dB 时为 `false`）
 - `score`：`total_power_drop_db` / `max_single_ap_drop_db` / `min_sta_rssi_margin_db` 等
-- `per_ap`：每个 AP 的 `cca_ok` / `sinr_ok` / `sta_rssi_ok` / `delta_is_integer` / `errors`
+- `per_ap`：每个 AP 的 `cca_ok` / `sinr_ok` / `sta_rssi_ok` / `delta_is_integer` / `obss_pd_dbm`（配套 OBSS_PD 门限，填入提案）/ `errors`
 
 **注意**：候选 `tx_power_dbm` 必须为整数，相对当前功率的调整量必须是整数 dB，否则 `valid=false`。
 
