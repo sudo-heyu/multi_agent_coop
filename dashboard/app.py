@@ -696,7 +696,22 @@ function render(d){
       row('已结算 collected', ev.collected, 'good') + row('已放弃 abandoned', ev.abandoned, ev.abandoned?'bad':'')) +
     card('规律 Rules', row('生效 active', ru.active, 'good') + row('冲突 conflicted', ru.conflicted, ru.conflicted?'warn':'') +
       row('平均置信度', (ru.avg_confidence!==null?ru.avg_confidence:'—')) + bars(ru.by_verdict)) +
-    card('拓扑 Topologies', row('拓扑数', d.topologies.count) + row('单拓扑最多存活', d.topologies.max_alive_per_topology));
+    card('拓扑 Topologies', row('拓扑数', d.topologies.count) + row('单拓扑最多存活', d.topologies.max_alive_per_topology)) +
+    reflectionCard(d.reflection);
+}
+function reflectionCard(rf){
+  if(!rf) return '';
+  const cal = rf.calibration || {};
+  const calRows = Object.entries(cal).filter(([k])=>k!=='unknown_trust').map(([k,v])=>{
+    const total = (v.verified||0)+(v.contradicted||0);
+    const rate = v.hit_rate===null||v.hit_rate===undefined ? '—' : (v.hit_rate*100).toFixed(0)+'%';
+    const cls = v.hit_rate===null||v.hit_rate===undefined ? '' : (v.hit_rate>=0.7?'good':(v.hit_rate>=0.4?'warn':'bad'));
+    return row('命中率 '+k, `${rate}（${total} 例）`, cls);
+  }).join('');
+  return card('反思 Reflection',
+    row('隔离区', rf.quarantined.total, rf.quarantined.total?'warn':'good') +
+    row('矛盾账本', rf.contradictions_total, rf.contradictions_total?'warn':'') +
+    calRows);
 }
 function refresh(){ fetch('/memory/health').then(r=>r.json()).then(render).catch(()=>{}); }
 refresh(); setInterval(refresh, 15000);

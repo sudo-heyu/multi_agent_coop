@@ -312,6 +312,89 @@ class RecallGatingTests(ContradictionLedgerTests):
         self.assertLess(elapsed, 0.1)
 
 
+class ReconciliationTests(ContradictionLedgerTests):
+    """R4：评估定论后闭环记账；R5：校准报告分桶命中率。"""
+
+    def _reliance_run(self, run_id, *, predicted="improved", trust=0.8, role="positive"):
+        self.store.start_run(run_id, mode="mock", scene="edca", model="openclaw")
+        self.store.append_event(run_id, "memory_reliance", {
+            "proposer": "ap1", "proposal_num": 1,
+            "entries": [{"memory_kind": "episode", "memory_key": "run-a",
+                         "role": role, "trust": trust, "predicted": predicted}],
+        })
+
+    def test_contradiction_recorded_and_idempotent(self):
+        from src.memory.reflection import reconcile_memory_reliance
+        self._reliance_run("run-new")
+        outcome = reconcile_memory_reliance(self.store, "run-new", "degraded")
+        self.assertEqual(outcome["contradicted"], 1)
+        self.assertEqual(self.store.get_episode(run_id="run-a")["contradictions"], 1)
+        # 重复收割（同窗口重算）→ 无重复副作用。
+        outcome = reconcile_memory_reliance(self.store, "run-new", "degraded")
+        self.assertEqual(outcome["contradicted"], 0)
+        self.assertEqual(self.store.get_episode(run_id="run-a")["contradictions"], 1)
+
+    def test_verified_refreshes_anchor(self):
+        from src.memory.reflection import reconcile_memory_reliance
+        self._reliance_run("run-ok")
+        outcome = reconcile_memory_reliance(self.store, "run-ok", "improved")
+        self.assertEqual(outcome["verified"], 1)
+        self.assertIsNotNone(self.store.get_episode(run_id="run-a")["last_verified_at"])
+
+    def test_warning_role_excluded_and_inconclusive_noop(self):
+        from src.memory.reflection import reconcile_memory_reliance
+        self._reliance_run("run-warn", role="warning", predicted="degraded")
+        outcome = reconcile_memory_reliance(self.store, "run-warn", "degraded")
+        self.assertEqual(outcome["processed"], 0)
+        self._reliance_run("run-inc")
+        outcome = reconcile_memory_reliance(self.store, "run-inc", "inconclusive")
+        self.assertEqual(outcome["processed"], 0)
+
+    def test_repeated_contradictions_auto_quarantine(self):
+        from src.memory.reflection import (
+            QUARANTINE_CONTRADICTIONS, reconcile_memory_reliance,
+        )
+        for index in range(QUARANTINE_CONTRADICTIONS):
+            self._reliance_run(f"run-bad-{index}")
+            reconcile_memory_reliance(self.store, f"run-bad-{index}", "degraded")
+        self.assertTrue(self.store.get_episode(run_id="run-a")["quarantined"])
+        self.assertEqual(
+            [(q["memory_kind"], q["memory_key"])
+             for q in self.store.list_quarantined_memories()],
+            [("episode", "run-a")],
+        )
+
+    def test_calibration_report_buckets(self):
+        from src.memory.reflection import calibration_report, reconcile_memory_reliance
+        self._reliance_run("run-hi", trust=0.9)
+        reconcile_memory_reliance(self.store, "run-hi", "improved")
+        self._reliance_run("run-lo", trust=0.2)
+        reconcile_memory_reliance(self.store, "run-lo", "degraded")
+        report = calibration_report(self.store)
+        self.assertEqual(report["high(>=0.7)"]["verified"], 1)
+        self.assertEqual(report["high(>=0.7)"]["hit_rate"], 1.0)
+        self.assertEqual(report["low(<0.4)"]["contradicted"], 1)
+        self.assertEqual(report["low(<0.4)"]["hit_rate"], 0.0)
+        self.assertIsNone(report["mid(0.4-0.7)"]["hit_rate"])
+
+    def test_memory_health_includes_reflection_section(self):
+        from src.memory import memory_health
+        from src.memory.reflection import reconcile_memory_reliance
+        self._reliance_run("run-h")
+        reconcile_memory_reliance(self.store, "run-h", "degraded")
+        health = memory_health(self.store)
+        self.assertEqual(health["reflection"]["contradictions_total"], 1)
+        self.assertIn("calibration", health["reflection"])
+
+    def test_reflection_disabled_skips_reconciliation(self):
+        from src.memory.reflection import reconcile_memory_reliance
+        self._reliance_run("run-off")
+        with patch.dict(os.environ, {"MULTIAP_REFLECTION": "0"}):
+            outcome = reconcile_memory_reliance(self.store, "run-off", "degraded")
+        self.assertEqual(outcome["processed"], 0)
+        self.assertEqual(self.store.get_episode(run_id="run-a")["contradictions"], 0)
+
+
 class HypothesisInjectionTests(unittest.TestCase):
     """R3：注入格式携带信任分/最近验证，记忆以待检验假设呈现。"""
 

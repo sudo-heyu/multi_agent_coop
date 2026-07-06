@@ -110,6 +110,111 @@ def should_quarantine(trust: float, contradictions: int) -> bool:
     return trust < QUARANTINE_TRUST_THRESHOLD
 
 
+def reconcile_verdicts(predicted: str | None, observed: str | None) -> str:
+    """比对注入时预测与实际 verdict：verified / contradicted / inconclusive。
+
+    只有方向相反（improved↔degraded）才算证伪；完全一致才算证实；
+    其余（含 neutral 交叉、数据不足）一律 inconclusive，不奖不罚。
+    """
+    conclusive = {"improved", "neutral", "degraded"}
+    if predicted not in conclusive or observed not in conclusive:
+        return "inconclusive"
+    if predicted == observed:
+        return "verified"
+    opposite = {"improved": "degraded", "degraded": "improved"}
+    if opposite.get(predicted) == observed:
+        return "contradicted"
+    return "inconclusive"
+
+
+def reconcile_memory_reliance(
+    store: Any, run_id: str, final_verdict: str | None,
+) -> dict[str, Any]:
+    """R4 闭环：效果评估定论后，对本次 run 依赖过的记忆逐条记账。
+
+    - 取最后一条 memory_reliance 事件（被采纳提案的依赖清单）；
+    - warning 角色不参与归因（本次动作意在规避它，效果不能归它）；
+    - 证伪 → 矛盾账本 +1，并按当前信任/矛盾数判定是否自动隔离；
+    - 证实 → 刷新 last_verified_at（时效衰减锚点前移）；
+    - 全程幂等：reconciliation 表 UNIQUE 约束保证重复收割无重复副作用。
+    """
+    outcome = {"processed": 0, "verified": 0, "contradicted": 0, "quarantined": []}
+    if not enabled() or final_verdict not in {"improved", "neutral", "degraded"}:
+        return outcome
+    reliance_events = [
+        event for event in store.load_events(run_id)
+        if event.get("event") == "memory_reliance"
+    ]
+    if not reliance_events:
+        return outcome
+    for entry in reliance_events[-1].get("entries") or []:
+        kind, key = entry.get("memory_kind"), entry.get("memory_key")
+        if not kind or not key or entry.get("role") == "warning":
+            continue
+        result = reconcile_verdicts(entry.get("predicted"), final_verdict)
+        first_time = store.record_reconciliation(
+            memory_kind=kind, memory_key=key, run_id=run_id,
+            predicted=entry.get("predicted"), observed=final_verdict,
+            result=result, trust_at_injection=entry.get("trust"),
+        )
+        outcome["processed"] += 1
+        if not first_time:
+            continue
+        if result == "contradicted":
+            store.record_contradiction(
+                memory_kind=kind, memory_key=key, run_id=run_id,
+                expected=str(entry.get("predicted")), observed=final_verdict,
+                detail={"trust_at_injection": entry.get("trust")},
+            )
+            outcome["contradicted"] += 1
+            record = store.get_memory_record(kind, key)
+            if record is not None:
+                trust = memory_trust(record)
+                if should_quarantine(trust, int(record.get("contradictions") or 0)):
+                    store.set_memory_quarantined(kind, key, True)
+                    outcome["quarantined"].append({"memory_kind": kind, "memory_key": key})
+        elif result == "verified":
+            store.mark_memory_verified(kind, key)
+            outcome["verified"] += 1
+    return outcome
+
+
+def calibration_report(store: Any) -> dict[str, Any]:
+    """R5 校准：按注入时信任分分桶统计事后证实率（hit rate）。
+
+    反思模块实用性的量化验收：高信任桶的证实率应显著高于低信任桶；
+    否则说明信任模型参数需要校准。
+    """
+    buckets = {
+        "low(<0.4)": {"range": (0.0, 0.4), "verified": 0, "contradicted": 0},
+        "mid(0.4-0.7)": {"range": (0.4, 0.7), "verified": 0, "contradicted": 0},
+        "high(>=0.7)": {"range": (0.7, 1.01), "verified": 0, "contradicted": 0},
+    }
+    unknown = {"verified": 0, "contradicted": 0}
+    for item in store.list_reconciliations(limit=100_000):
+        result = item["result"]
+        if result not in {"verified", "contradicted"}:
+            continue
+        trust = item.get("trust_at_injection")
+        if trust is None:
+            unknown[result] += 1
+            continue
+        for bucket in buckets.values():
+            low, high = bucket["range"]
+            if low <= float(trust) < high:
+                bucket[result] += 1
+                break
+    report = {}
+    for name, bucket in buckets.items():
+        conclusive = bucket["verified"] + bucket["contradicted"]
+        report[name] = {
+            "verified": bucket["verified"], "contradicted": bucket["contradicted"],
+            "hit_rate": round(bucket["verified"] / conclusive, 4) if conclusive else None,
+        }
+    report["unknown_trust"] = unknown
+    return report
+
+
 def enabled() -> bool:
     """反思门控总开关：MULTIAP_REFLECTION=0 时召回行为回退到 v15 版本。"""
     return os.environ.get("MULTIAP_REFLECTION", "1").strip().lower() not in {

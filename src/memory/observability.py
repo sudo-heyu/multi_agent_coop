@@ -92,7 +92,22 @@ def memory_health(store: EventStore) -> dict[str, Any]:
             "max_alive_per_topology": max(topo_counts.values()) if topo_counts else 0,
         },
         "agent_memory": agent_memory,
+        "reflection": _reflection_health(store),
         "services": store.list_service_heartbeats(),
+    }
+
+
+def _reflection_health(store: EventStore) -> dict[str, Any]:
+    """反思模块健康度：隔离区规模、矛盾账本量、信任分桶校准命中率（R5）。"""
+    from .reflection import calibration_report
+    quarantined = store.list_quarantined_memories()
+    return {
+        "quarantined": {
+            "total": len(quarantined),
+            "by_kind": dict(Counter(item["memory_kind"] for item in quarantined)),
+        },
+        "contradictions_total": len(store.list_contradictions(limit=1000)),
+        "calibration": calibration_report(store),
     }
 
 

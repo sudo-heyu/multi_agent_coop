@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 def _now() -> str:
@@ -302,6 +302,22 @@ class EventStore:
 
             CREATE INDEX IF NOT EXISTS idx_contradictions_memory
                 ON memory_contradictions(memory_kind, memory_key, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS memory_reconciliations (
+                reconciliation_id TEXT PRIMARY KEY,
+                memory_kind TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                predicted TEXT,
+                observed TEXT NOT NULL,
+                result TEXT NOT NULL,
+                trust_at_injection REAL,
+                recorded_at TEXT NOT NULL,
+                UNIQUE(memory_kind, memory_key, run_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reconciliations_result
+                ON memory_reconciliations(result, recorded_at DESC);
 
             CREATE TABLE IF NOT EXISTS goals (
                 goal_id TEXT PRIMARY KEY,
@@ -1234,6 +1250,73 @@ class EventStore:
             "detail": json.loads(row["detail_json"]),
             "recorded_at": row["recorded_at"],
         } for row in rows]
+
+    def record_reconciliation(
+        self, *, memory_kind: str, memory_key: str, run_id: str,
+        predicted: str | None, observed: str, result: str,
+        trust_at_injection: float | None,
+    ) -> bool:
+        """记录一次"注入时预测 vs 实际 verdict"比对（R5 校准数据集）。
+
+        幂等：同一 (kind, key, run) 只记一次；返回是否为首次记录，
+        供调用方决定是否执行记矛盾/标验证等副作用。
+        """
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO memory_reconciliations("
+                "reconciliation_id, memory_kind, memory_key, run_id, predicted,"
+                " observed, result, trust_at_injection, recorded_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, memory_kind, memory_key, run_id, predicted,
+                 observed, result,
+                 float(trust_at_injection) if trust_at_injection is not None else None,
+                 _now()),
+            )
+            return cursor.rowcount > 0
+
+    def list_reconciliations(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM memory_reconciliations ORDER BY recorded_at DESC LIMIT ?",
+                (max(1, min(int(limit), 100_000)),),
+            ).fetchall()
+        return [{
+            "memory_kind": row["memory_kind"], "memory_key": row["memory_key"],
+            "run_id": row["run_id"], "predicted": row["predicted"],
+            "observed": row["observed"], "result": row["result"],
+            "trust_at_injection": row["trust_at_injection"],
+            "recorded_at": row["recorded_at"],
+        } for row in rows]
+
+    def get_memory_record(self, memory_kind: str, memory_key: str) -> dict[str, Any] | None:
+        """按 (kind, key) 取一条记忆记录，供信任重算与隔离判定。"""
+        if memory_kind == "episode":
+            return self.get_episode(run_id=memory_key)
+        if memory_kind == "rule":
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT * FROM semantic_rules WHERE rule_id=?", (memory_key,)
+                ).fetchone()
+            return self._rule_record(row) if row else None
+        if memory_kind == "agent_episode":
+            table, where, params = self._memory_where(memory_kind, memory_key)
+            with self._lock:
+                row = self._conn.execute(
+                    f"SELECT * FROM {table} WHERE {where}", params
+                ).fetchone()
+            if row is None:
+                return None
+            return {
+                "run_id": row["run_id"], "agent_id": row["agent_id"],
+                "quality_score": row["quality_score"],
+                "evaluation": json.loads(row["evaluation_json"])
+                if row["evaluation_json"] else None,
+                "last_verified_at": row["last_verified_at"],
+                "contradictions": int(row["contradictions"]),
+                "quarantined": bool(row["quarantined"]),
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            }
+        raise ValueError(f"未知 memory_kind: {memory_kind!r}")
 
     def list_quarantined_memories(self) -> list[dict[str, Any]]:
         """隔离区清单（跨三类记忆），供 memory_admin 审计与再验证。"""

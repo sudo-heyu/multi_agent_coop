@@ -468,6 +468,11 @@ def apply_evaluation_to_episode(
             run_id, agent_id, evaluation=local_summary, quality_score=local_quality,
         )
     _update_case_narrative(store, run_id, episode, summary, quality_vector)
+    # R4：定论后对本次 run 依赖过的记忆逐条比对预测与实际，记矛盾/刷新验证锚点。
+    from .reflection import reconcile_memory_reliance
+    summary["memory_reconciliation"] = reconcile_memory_reliance(
+        store, run_id, summary.get("final_verdict")
+    )
     from .workspace import AGENT_IDS, should_sync_for_store, try_save_long_term_memory
     if should_sync_for_store(store.path):
         for agent_id in AGENT_IDS:
