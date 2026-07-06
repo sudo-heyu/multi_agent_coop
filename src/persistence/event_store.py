@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def _now() -> str:
@@ -288,6 +288,52 @@ class EventStore:
             CREATE INDEX IF NOT EXISTS idx_rules_topo_scene
                 ON semantic_rules(topology_signature, scene, confidence DESC);
 
+            CREATE TABLE IF NOT EXISTS memory_contradictions (
+                contradiction_id TEXT PRIMARY KEY,
+                memory_kind TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                expected TEXT NOT NULL,
+                observed TEXT NOT NULL,
+                detail_json TEXT NOT NULL DEFAULT '{}',
+                recorded_at TEXT NOT NULL,
+                UNIQUE(memory_kind, memory_key, run_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_contradictions_memory
+                ON memory_contradictions(memory_kind, memory_key, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS goals (
+                goal_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                metric TEXT NOT NULL,
+                target_json TEXT NOT NULL,
+                baseline_json TEXT NOT NULL DEFAULT '{}',
+                budget_attempts INTEGER NOT NULL,
+                deadline TEXT,
+                status TEXT NOT NULL,
+                status_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_goals_status
+                ON goals(status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS goal_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+                run_id TEXT NOT NULL,
+                parent_attempt_id TEXT,
+                sequence INTEGER NOT NULL,
+                attribution_json TEXT NOT NULL DEFAULT '{}',
+                progress_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(goal_id, sequence)
+            );
+
             CREATE TABLE IF NOT EXISTS maintenance_locks (
                 lock_name TEXT PRIMARY KEY,
                 holder TEXT NOT NULL,
@@ -329,6 +375,11 @@ class EventStore:
         self._ensure_column("episodic_memories", "case_narrative_model", "TEXT")
         self._ensure_column("episodic_memories", "case_narrative_evidence_hash", "TEXT")
         self._ensure_column("episodic_memories", "case_narrative_status", "TEXT")
+        # v16：反思模块信任字段（矛盾计数缓存 + 隔离标记 + 最近验证时间）。
+        for table in ("episodic_memories", "agent_episodic_memories", "semantic_rules"):
+            self._ensure_column(table, "last_verified_at", "TEXT")
+            self._ensure_column(table, "contradictions", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(table, "quarantined", "INTEGER NOT NULL DEFAULT 0")
         for version in range(1, SCHEMA_VERSION + 1):
             self._conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
@@ -1033,6 +1084,9 @@ class EventStore:
             "outcome": row["outcome"], "quality_score": row["quality_score"],
             "evaluation": json.loads(row["evaluation_json"])
             if row["evaluation_json"] else None,
+            "last_verified_at": row["last_verified_at"],
+            "contradictions": int(row["contradictions"]),
+            "quarantined": bool(row["quarantined"]),
             "created_at": row["created_at"], "updated_at": row["updated_at"],
         } for row in rows]
 
@@ -1085,6 +1139,122 @@ class EventStore:
                 + where + " GROUP BY topology_signature",
             ).fetchall()
         return {row["topology_signature"]: int(row["n"]) for row in rows}
+
+    # ---- 反思模块：矛盾账本 / 验证时间 / 隔离区（v16） ----
+    # memory_kind → (表, 定位方式)。agent_episode 的 memory_key 形如
+    # "<run_id>:<agent_id>"，从右侧拆分（agent_id 不含冒号）。
+    def _memory_where(self, memory_kind: str, memory_key: str) -> tuple[str, str, list[Any]]:
+        if memory_kind == "episode":
+            return "episodic_memories", "run_id=?", [memory_key]
+        if memory_kind == "rule":
+            return "semantic_rules", "rule_id=?", [memory_key]
+        if memory_kind == "agent_episode":
+            run_id, _, agent_id = memory_key.rpartition(":")
+            if not run_id:
+                raise ValueError(f"agent_episode memory_key 需为 '<run_id>:<agent_id>'：{memory_key!r}")
+            return "agent_episodic_memories", "run_id=? AND agent_id=?", [run_id, agent_id.lower()]
+        raise ValueError(f"未知 memory_kind: {memory_kind!r}")
+
+    def record_contradiction(
+        self, *, memory_kind: str, memory_key: str, run_id: str,
+        expected: str, observed: str, detail: dict[str, Any] | None = None,
+    ) -> int | None:
+        """记一笔矛盾账并同步递增记忆行上的矛盾计数缓存。
+
+        幂等：同一 (memory_kind, memory_key, run_id) 只记一次；重复记账返回 None，
+        首次记账返回该记忆最新矛盾计数。账本行不删除，可审计。
+        """
+        table, where, params = self._memory_where(memory_kind, memory_key)
+        now = _now()
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO memory_contradictions("
+                "contradiction_id, memory_kind, memory_key, run_id, expected, observed,"
+                " detail_json, recorded_at) VALUES (?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, memory_kind, memory_key, run_id,
+                 expected, observed, _json(detail or {}), now),
+            )
+            if cursor.rowcount == 0:
+                return None
+            self._conn.execute(
+                f"UPDATE {table} SET contradictions=contradictions+1, updated_at=? WHERE {where}",
+                [now, *params],
+            )
+            row = self._conn.execute(
+                f"SELECT contradictions FROM {table} WHERE {where}", params
+            ).fetchone()
+        return int(row["contradictions"]) if row else 0
+
+    def mark_memory_verified(
+        self, memory_kind: str, memory_key: str, *, verified_at: str | None = None,
+    ) -> None:
+        """记录记忆最近一次被真实反馈证实的时间（时效衰减的锚点）。"""
+        table, where, params = self._memory_where(memory_kind, memory_key)
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE {table} SET last_verified_at=?, updated_at=? WHERE {where}",
+                [verified_at or now, now, *params],
+            )
+
+    def set_memory_quarantined(
+        self, memory_kind: str, memory_key: str, quarantined: bool,
+    ) -> None:
+        """隔离/解除隔离：只影响召回注入，不物理删除（反思红线）。"""
+        table, where, params = self._memory_where(memory_kind, memory_key)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE {table} SET quarantined=?, updated_at=? WHERE {where}",
+                [1 if quarantined else 0, _now(), *params],
+            )
+
+    def list_contradictions(
+        self, *, memory_kind: str | None = None, memory_key: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses, params = [], []
+        if memory_kind:
+            clauses.append("memory_kind=?")
+            params.append(memory_kind)
+        if memory_key:
+            clauses.append("memory_key=?")
+            params.append(memory_key)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(int(limit), 1000)))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM memory_contradictions" + where
+                + " ORDER BY recorded_at DESC LIMIT ?", params,
+            ).fetchall()
+        return [{
+            "contradiction_id": row["contradiction_id"],
+            "memory_kind": row["memory_kind"], "memory_key": row["memory_key"],
+            "run_id": row["run_id"], "expected": row["expected"],
+            "observed": row["observed"],
+            "detail": json.loads(row["detail_json"]),
+            "recorded_at": row["recorded_at"],
+        } for row in rows]
+
+    def list_quarantined_memories(self) -> list[dict[str, Any]]:
+        """隔离区清单（跨三类记忆），供 memory_admin 审计与再验证。"""
+        items: list[dict[str, Any]] = []
+        with self._lock:
+            for kind, table, key_sql in (
+                ("episode", "episodic_memories", "run_id"),
+                ("agent_episode", "agent_episodic_memories", "run_id || ':' || agent_id"),
+                ("rule", "semantic_rules", "rule_id"),
+            ):
+                rows = self._conn.execute(
+                    f"SELECT {key_sql} AS memory_key, contradictions, last_verified_at,"
+                    f" updated_at FROM {table} WHERE quarantined=1"
+                ).fetchall()
+                items.extend({
+                    "memory_kind": kind, "memory_key": row["memory_key"],
+                    "contradictions": int(row["contradictions"]),
+                    "last_verified_at": row["last_verified_at"],
+                    "updated_at": row["updated_at"],
+                } for row in rows)
+        return items
 
     def mark_rule_conflicted(self, rule_id: str, conflicted: bool) -> None:
         with self._lock, self._conn:
@@ -1551,6 +1721,9 @@ class EventStore:
             "case_narrative_status": row["case_narrative_status"] if "case_narrative_status" in row.keys() else None,
             "evaluation": load("evaluation_json"),
             "archived": bool(row["archived"]) if "archived" in row.keys() else False,
+            "last_verified_at": row["last_verified_at"] if "last_verified_at" in row.keys() else None,
+            "contradictions": int(row["contradictions"]) if "contradictions" in row.keys() else 0,
+            "quarantined": bool(row["quarantined"]) if "quarantined" in row.keys() else False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1578,6 +1751,9 @@ class EventStore:
             "llm_generated_at": row["llm_generated_at"] if "llm_generated_at" in row.keys() else None,
             "conflicted": bool(row["conflicted"]) if "conflicted" in row.keys() else False,
             "active": bool(row["active"]) if "active" in row.keys() else True,
+            "last_verified_at": row["last_verified_at"] if "last_verified_at" in row.keys() else None,
+            "contradictions": int(row["contradictions"]) if "contradictions" in row.keys() else 0,
+            "quarantined": bool(row["quarantined"]) if "quarantined" in row.keys() else False,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
