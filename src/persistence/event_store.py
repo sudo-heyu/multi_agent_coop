@@ -1339,6 +1339,136 @@ class EventStore:
                 } for row in rows)
         return items
 
+    # ---- 迭代模块：Goal / attempt 链（v16 表，阶段5 起使用） ----
+    def create_goal(
+        self, *, metric: str, target: dict[str, Any], source: str,
+        budget_attempts: int, baseline: dict[str, Any] | None = None,
+        deadline: str | None = None,
+    ) -> dict[str, Any]:
+        goal_id = uuid.uuid4().hex
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO goals(goal_id, source, metric, target_json, baseline_json,"
+                " budget_attempts, deadline, status, status_reason, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (goal_id, source, metric, _json(target), _json(baseline or {}),
+                 int(budget_attempts), deadline, "active", None, now, now),
+            )
+        return self.get_goal(goal_id)
+
+    def get_goal(self, goal_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM goals WHERE goal_id=?", (goal_id,)
+            ).fetchone()
+        return self._goal_record(row) if row else None
+
+    def list_goals(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        clause, params = ("WHERE status=?", [status]) if status else ("", [])
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM goals {clause} ORDER BY created_at DESC", params
+            ).fetchall()
+        return [self._goal_record(row) for row in rows]
+
+    def update_goal_status(
+        self, goal_id: str, status: str, *, reason: str | None = None,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE goals SET status=?, status_reason=?, updated_at=? WHERE goal_id=?",
+                (status, reason, _now(), goal_id),
+            )
+
+    def add_goal_attempt(
+        self, goal_id: str, run_id: str, *,
+        parent_attempt_id: str | None = None,
+        attribution: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        attempt_id = uuid.uuid4().hex
+        now = _now()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) AS n FROM goal_attempts WHERE goal_id=?",
+                (goal_id,),
+            ).fetchone()
+            self._conn.execute(
+                "INSERT INTO goal_attempts(attempt_id, goal_id, run_id, parent_attempt_id,"
+                " sequence, attribution_json, progress_json, status, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (attempt_id, goal_id, run_id, parent_attempt_id, int(row["n"]) + 1,
+                 _json(attribution or {}), _json({}), "running", now, now),
+            )
+        return self.get_goal_attempt(attempt_id)
+
+    def get_goal_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM goal_attempts WHERE attempt_id=?", (attempt_id,)
+            ).fetchone()
+        return self._attempt_record(row) if row else None
+
+    def get_goal_attempt_by_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM goal_attempts WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+        return self._attempt_record(row) if row else None
+
+    def list_goal_attempts(self, goal_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM goal_attempts WHERE goal_id=? ORDER BY sequence", (goal_id,)
+            ).fetchall()
+        return [self._attempt_record(row) for row in rows]
+
+    def update_goal_attempt(
+        self, attempt_id: str, *, status: str | None = None,
+        progress: dict[str, Any] | None = None,
+        attribution: dict[str, Any] | None = None,
+    ) -> None:
+        sets, params = ["updated_at=?"], [_now()]
+        if status is not None:
+            sets.append("status=?")
+            params.append(status)
+        if progress is not None:
+            sets.append("progress_json=?")
+            params.append(_json(progress))
+        if attribution is not None:
+            sets.append("attribution_json=?")
+            params.append(_json(attribution))
+        params.append(attempt_id)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE goal_attempts SET {', '.join(sets)} WHERE attempt_id=?", params
+            )
+
+    @staticmethod
+    def _goal_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "goal_id": row["goal_id"], "source": row["source"],
+            "metric": row["metric"], "target": json.loads(row["target_json"]),
+            "baseline": json.loads(row["baseline_json"]),
+            "budget_attempts": int(row["budget_attempts"]),
+            "deadline": row["deadline"], "status": row["status"],
+            "status_reason": row["status_reason"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+
+    @staticmethod
+    def _attempt_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "attempt_id": row["attempt_id"], "goal_id": row["goal_id"],
+            "run_id": row["run_id"], "parent_attempt_id": row["parent_attempt_id"],
+            "sequence": int(row["sequence"]),
+            "attribution": json.loads(row["attribution_json"]),
+            "progress": json.loads(row["progress_json"]),
+            "status": row["status"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+
     def mark_rule_conflicted(self, rule_id: str, conflicted: bool) -> None:
         with self._lock, self._conn:
             self._conn.execute(

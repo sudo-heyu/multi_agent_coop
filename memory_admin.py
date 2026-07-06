@@ -83,6 +83,31 @@ def main() -> None:
     contradictions_cmd.add_argument("--kind", choices=["episode", "agent_episode", "rule"])
     contradictions_cmd.add_argument("--key")
     contradictions_cmd.add_argument("--limit", type=int, default=100)
+    goal = sub.add_parser("goal", help="迭代目标：创建/查看/放弃/确定性自动触发")
+    goal_sub = goal.add_subparsers(dest="goal_command", required=True)
+    goal_create = goal_sub.add_parser("create", help="创建目标（单活跃目标）")
+    goal_create.add_argument("--ap", required=True, help="目标指标所属 AP，如 ap2")
+    goal_create.add_argument("--metric", required=True, help="指标字段名，如 tx_retries_ratio")
+    goal_create.add_argument("--op", required=True, choices=["<=", ">=", "<", ">"])
+    goal_create.add_argument("--value", type=float, required=True)
+    goal_create.add_argument("--budget", type=int, default=5, help="最大 attempt 次数")
+    goal_create.add_argument("--deadline", default=None, help="可选 ISO 截止时间")
+    goal_list = goal_sub.add_parser("list", help="列出目标")
+    goal_list.add_argument("--status", choices=["active", "achieved", "blocked", "abandoned"])
+    goal_show = goal_sub.add_parser("show", help="目标 + 完整 attempt 链")
+    goal_show.add_argument("goal_id")
+    goal_abandon = goal_sub.add_parser("abandon", help="放弃目标")
+    goal_abandon.add_argument("goal_id")
+    goal_abandon.add_argument("--reason", default="管理员放弃")
+    goal_trigger = goal_sub.add_parser(
+        "trigger", help="确定性自动触发：指标连续 N 个已结算窗口越界则建目标",
+    )
+    goal_trigger.add_argument("--ap", required=True)
+    goal_trigger.add_argument("--metric", required=True)
+    goal_trigger.add_argument("--op", required=True, choices=["<=", ">=", "<", ">"])
+    goal_trigger.add_argument("--value", type=float, required=True)
+    goal_trigger.add_argument("--windows", type=int, default=3)
+    goal_trigger.add_argument("--budget", type=int, default=5)
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -193,6 +218,34 @@ def main() -> None:
             result = store.list_contradictions(
                 memory_kind=args.kind, memory_key=args.key, limit=args.limit,
             )
+        elif args.command == "goal":
+            from src.memory.goals import auto_create_goal, create_goal, goal_overview
+            if args.goal_command == "create":
+                result = create_goal(
+                    store,
+                    target={"ap": args.ap, "metric": args.metric,
+                            "op": args.op, "value": args.value},
+                    source="admin", budget_attempts=args.budget,
+                    deadline=args.deadline,
+                )
+            elif args.goal_command == "list":
+                result = store.list_goals(status=args.status)
+            elif args.goal_command == "show":
+                result = goal_overview(store, args.goal_id)
+                if result is None:
+                    raise SystemExit(f"goal not found: {args.goal_id}")
+            elif args.goal_command == "abandon":
+                store.update_goal_status(args.goal_id, "abandoned", reason=args.reason)
+                result = store.get_goal(args.goal_id)
+            else:
+                created = auto_create_goal(
+                    store,
+                    target={"ap": args.ap, "metric": args.metric,
+                            "op": args.op, "value": args.value},
+                    windows=args.windows, budget_attempts=args.budget,
+                )
+                result = created or {"created": False,
+                                     "reason": "未满足触发条件（活跃目标已存在/窗口不足/未连续越界）"}
         elif args.command == "calibrate":
             result = evaluation_diagnostics(store)
         elif args.command == "health":

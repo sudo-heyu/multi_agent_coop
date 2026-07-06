@@ -355,6 +355,9 @@ def main():
     ap.add_argument("--eval-windows", default="",
                     help="决策生效后的效果评估窗口秒数，逗号分隔（如 60,300,900）；"
                          "默认 mock=10,30 / real=60,300,900；传 off 关闭")
+    ap.add_argument("--goal", default="",
+                    help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
+                         "（目标经 memory_admin.py goal create 创建）")
     args = ap.parse_args()
     if args.context_budget_chars < 2000:
         ap.error("--context-budget-chars 不能小于 2000")
@@ -362,6 +365,21 @@ def main():
         ap.error("--context-recent-turns 不能小于 2")
     os.environ["MULTIAP_CONTEXT_BUDGET_CHARS"] = str(args.context_budget_chars)
     os.environ["MULTIAP_CONTEXT_RECENT_TURNS"] = str(args.context_recent_turns)
+
+    goal = None
+    if args.goal:
+        if args.use_coordinator:
+            ap.error("--goal 当前只支持默认 structured_relay 路径")
+        store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+        try:
+            goal = store.get_goal(args.goal)
+        finally:
+            store.close()
+        if goal is None:
+            ap.error(f"未找到 goal_id: {args.goal}")
+        if goal["status"] != "active":
+            ap.error(f"目标状态为 {goal['status']}（{goal.get('status_reason') or '无原因'}），"
+                     "只有 active 目标可继续迭代")
 
     resume_checkpoint = None
     if args.resume_run:
@@ -498,6 +516,17 @@ def main():
                 **(resume_checkpoint.projection or {}),
                 "boundary": resume_checkpoint.boundary,
             }
+        if goal is not None:
+            # I1：本次协商 run 登记为目标的下一次 attempt（恢复路径幂等复用）。
+            from src.memory.goals import register_attempt
+            goal_store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+            try:
+                attempt = register_attempt(goal_store, goal["goal_id"], str(logger.session_id))
+            finally:
+                goal_store.close()
+            if attempt is not None:
+                print(f"[Goal] 目标 {goal['metric']}：attempt #{attempt['sequence']}"
+                      f"（预算 {goal['budget_attempts']} 次）")
         result = orch.structured_relay(
             max_turns=args.max_steps,
             on_event=None,
@@ -543,6 +572,18 @@ def main():
         print(f"{status_label('Validator')} {dim('无可验收决策（协商未收敛或未解析出决策 JSON）')}")
 
     run_id = logger.session_id if logger is not None else None
+    if goal is not None and run_id:
+        from src.memory.goals import record_attempt_result
+        goal_store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
+        try:
+            attempt = record_attempt_result(
+                goal_store, str(run_id), outcome=result["outcome"],
+            )
+        finally:
+            goal_store.close()
+        if attempt is not None:
+            print(f"[Goal] attempt #{attempt['sequence']} 状态={attempt['status']}；"
+                  "目标进度在评估窗口结算后回填")
     pending_eval = bool(eval_windows) and result["outcome"] == "success" and run_id
     if feeder is not None and result["decision"]:
         feeder.apply_decision(result["decision"])
