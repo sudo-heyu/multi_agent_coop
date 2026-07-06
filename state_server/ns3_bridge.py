@@ -147,6 +147,15 @@ class Ns3Bridge:
 
         由 STRATEGY_KEYS 表驱动：新增一种 MAPC 只需在表里加一行，此处零改动。
         """
+        if strategy not in STRATEGY_KEYS:
+            return {
+                "ok": False,
+                "error": f"unsupported strategy: {strategy!r}",
+                "command": "",
+                "details": {},
+                "http_status": 400,
+            }
+
         parts = [f"APPLY {ap_id}"]
         details: dict[str, object] = {}
 
@@ -162,11 +171,46 @@ class Ns3Bridge:
             parts.append(f"{ns3_key}={value}")
             details[ns3_key] = value
 
+        if not details:
+            return {
+                "ok": False,
+                "error": f"no recognized params for strategy {strategy!r}",
+                "command": "",
+                "details": {},
+                "http_status": 400,
+            }
+
         cmd = " ".join(parts) + "\n"
+        poll = getattr(self.proc, "poll", None)
+        if callable(poll) and poll() is not None:
+            return {
+                "ok": False,
+                "error": "ns-3 process is not running",
+                "command": cmd.strip(),
+                "details": details,
+                "http_status": 503,
+            }
+
         with self._stdin_lock:
-            assert self.proc.stdin is not None
-            self.proc.stdin.write(cmd)
-            self.proc.stdin.flush()
+            if self.proc.stdin is None:
+                return {
+                    "ok": False,
+                    "error": "ns-3 stdin is not available",
+                    "command": cmd.strip(),
+                    "details": details,
+                    "http_status": 503,
+                }
+            try:
+                self.proc.stdin.write(cmd)
+                self.proc.stdin.flush()
+            except OSError as exc:
+                return {
+                    "ok": False,
+                    "error": f"failed to write to ns-3 stdin: {exc}",
+                    "command": cmd.strip(),
+                    "details": details,
+                    "http_status": 503,
+                }
         print(f"[bridge] 下发 → ns-3: {cmd.strip()}")
         return {"ok": True, "command": cmd.strip(), "details": details}
 
@@ -193,13 +237,15 @@ def apply_endpoint():
     if not params:
         return jsonify({"ok": False, "error": "missing params"}), 400
 
-    assert _bridge is not None
+    if _bridge is None:
+        return jsonify({"ok": False, "error": "bridge is not initialized"}), 503
     result = _bridge.apply(ap_id, strategy, params)
     result.update({"ap_id": ap_id, "session_id": session_id,
                    "applied_at": datetime.now(timezone.utc).isoformat()})
     global _last_result
     _last_result = result
-    return jsonify(result), 200 if result["ok"] else 500
+    http_status = result.pop("http_status", 200 if result["ok"] else 500)
+    return jsonify(result), http_status
 
 
 @app.route("/status", methods=["GET"])
