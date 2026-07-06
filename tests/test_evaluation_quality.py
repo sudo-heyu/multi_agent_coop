@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
+
 from openclaw.scenes import MOCK_SCENES
 from src.memory import (
     evaluation_diagnostics,

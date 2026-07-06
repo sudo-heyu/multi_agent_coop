@@ -11,7 +11,7 @@ from src.persistence import EventStore, build_checkpoint
 
 
 class EventStoreTests(unittest.TestCase):
-    def test_v1_database_migrates_through_consolidation_v8(self):
+    def test_v1_database_migrates_through_memory_v15(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "events.sqlite3"
             conn = sqlite3.connect(path)
@@ -41,11 +41,13 @@ class EventStoreTests(unittest.TestCase):
             self.assertIn("action_journal", tables)
             self.assertIn("negotiation_projections", tables)
             self.assertIn("session_memories", tables)
+            self.assertIn("agent_session_memories", tables)
             self.assertIn("episodic_memories", tables)
+            self.assertIn("agent_episodic_memories", tables)
             self.assertIn("outcome_evaluations", tables)
             self.assertIn("semantic_rules", tables)
             self.assertIn("maintenance_locks", tables)
-            self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8])
+            self.assertEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
 
     def test_ordered_append_is_idempotent_and_replayable(self):
         with tempfile.TemporaryDirectory() as td:

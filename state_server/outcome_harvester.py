@@ -16,6 +16,8 @@ import os
 import signal
 import sys
 import time
+import socket
+from datetime import timedelta
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,9 +48,28 @@ def run(server: str, interval: float, db_path: str) -> None:
     while not _STOP:
         store = EventStore(db_path)
         try:
+            stale_seconds = float(os.environ.get("MULTIAP_RUN_STALE_SECONDS", "3600"))
+            interrupted = store.interrupt_stale_runs(
+                stale_before=(datetime.now(timezone.utc) - timedelta(
+                    seconds=stale_seconds
+                )).isoformat(timespec="milliseconds")
+            )
             outcome = harvest_evaluations(store, lambda: get_all_states(server))
+            store.heartbeat_service(
+                "outcome_harvester", f"{socket.gethostname()}:{os.getpid()}",
+                details={"collected": len(outcome.get("collected", [])),
+                         "abandoned": len(outcome.get("abandoned", [])),
+                         "interrupted_runs": interrupted},
+            )
         except Exception as exc:  # noqa: BLE001 — 单轮异常不应终止常驻收割器
             print(f"[harvester] {_stamp()} 收割异常（忽略，下轮重试）：{exc}", flush=True)
+            try:
+                store.heartbeat_service(
+                    "outcome_harvester", f"{socket.gethostname()}:{os.getpid()}",
+                    status="error", details={"error": str(exc)},
+                )
+            except Exception:
+                pass
             outcome = {}
         finally:
             store.close()

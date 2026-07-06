@@ -57,6 +57,17 @@ class FakeOpenClawAP:
 
 
 class OpenClawMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self._workspace_td = tempfile.TemporaryDirectory()
+        self._workspace_patch = patch.dict(
+            os.environ, {"MULTIAP_AGENT_WORKSPACES_ROOT": self._workspace_td.name}
+        )
+        self._workspace_patch.start()
+
+    def tearDown(self):
+        self._workspace_patch.stop()
+        self._workspace_td.cleanup()
+
     def test_business_type_defaults_and_mock_scene_values(self):
         profiled = orch.apply_profile({"apx": {}})
 
@@ -400,12 +411,15 @@ class OpenClawMigrationTests(unittest.TestCase):
             for index in range(5)
         ]
 
-        text = orch.propose_instruction("ap1", "co_edca", episodes)
+        instruction = orch.propose_instruction("ap1", "co_edca", episodes)
+        text = orch._build_agent_message(
+            "ap1", "", instruction, shared_positive=episodes
+        )
 
-        self.assertIn("历史案例", text)
-        self.assertIn("必须按当前最新状态重新调用工具验算", text)
+        self.assertNotIn("历史案例", instruction)
+        self.assertIn("共享经验", text)
         self.assertIn("CWmin", text)
-        self.assertEqual(text.count("相似度="), 3)
+        self.assertEqual(text.count("- 正例："), 3)
 
     def test_structured_relay_accepts_sr_edca_joint(self):
         for scene_name, expected_strategy in (

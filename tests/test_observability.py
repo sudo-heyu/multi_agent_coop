@@ -1,8 +1,11 @@
 import copy
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
 from src.memory import induce_rules, materialize_episode, memory_health, schedule_outcome_evaluations

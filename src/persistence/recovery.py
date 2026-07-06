@@ -42,8 +42,13 @@ def build_checkpoint(store: EventStore, run_id: str) -> RunCheckpoint | None:
     incomplete = run.status != "completed" and not terminal
     projection = store.load_projection(run_id)
     session_memory = store.load_session_memory(run_id)
+    agent_memories = store.load_agent_session_memories(run_id)
     if projection and session_memory:
         projection["state"]["session_memory"] = session_memory["memory"]
+    if projection and agent_memories:
+        projection["state"]["agent_session_memories"] = {
+            agent: item["memory"] for agent, item in agent_memories.items()
+        }
     projection_safe = bool(projection and projection["safe_to_resume"])
     return RunCheckpoint(
         run=run,

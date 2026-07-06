@@ -12,12 +12,20 @@ from src.persistence import EventStore
 
 
 PRIORITY = {"low": 0.0, "medium": 0.5, "high": 1.0}
+SIGNATURE_VERSION = 2
+RADIO_FIELDS = (
+    "channel", "channel_number", "frequency_mhz", "band", "bandwidth_mhz",
+    "channel_width_mhz", "phy_mode", "standard", "bssid", "ssid",
+)
 
 
 def encode_features(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     aps = sorted(ap for ap, value in state.items() if isinstance(value, dict))
     topology = []
-    features: dict[str, Any] = {"aps": aps, "per_ap": {}, "rssi_links": {}}
+    features: dict[str, Any] = {
+        "signature_version": SIGNATURE_VERSION,
+        "aps": aps, "per_ap": {}, "rssi_links": {}, "radio": {},
+    }
     for ap in aps:
         row = state[ap]
         neighbors = row.get("neighbor_rssi_dbm") or {}
@@ -31,11 +39,26 @@ def encode_features(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "aifsn": _num(row.get("AIFSN", row.get("aifsn"))),
             "priority": PRIORITY.get(str(row.get("traffic_priority", "medium")).lower(), 0.5),
             "sta_rssi": _num(row.get("sta_rssi_dbm")),
+            "station_count": _num(row.get("station_count", row.get("sta_count"))),
+        }
+        features["radio"][ap] = {
+            field: row.get(field) for field in RADIO_FIELDS if row.get(field) is not None
         }
         for peer, rssi in sorted(neighbors.items()):
             features["rssi_links"][f"{ap}>{peer}"] = _num(rssi)
-    signature = hashlib.sha256(
-        json.dumps(topology, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # topology_signature 只表达稳定的结构身份；易变的信道、带宽、负载和参数进入
+    # features 参与软相似度。这样既隔离不同拓扑，又不会因一次换信道彻底失忆。
+    signature_payload = {"v": SIGNATURE_VERSION, "aps": aps, "links": topology}
+    signature = "v2:" + hashlib.sha256(
+        json.dumps(signature_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    deployment_payload = {
+        "topology": signature_payload,
+        "radio": features["radio"],
+    }
+    features["deployment_signature"] = "v2:" + hashlib.sha256(
+        json.dumps(deployment_payload, ensure_ascii=False, sort_keys=True,
+                   separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
     return signature, features
 
@@ -83,10 +106,55 @@ def materialize_episode(store: EventStore, run_id: str) -> dict[str, Any] | None
         "observed_state": observed,
         "metrics": metrics,
         "quality_score": _quality(outcome, validation, executions, observed),
+        "lifecycle": "awaiting_evaluation",
+        "feature_schema_version": SIGNATURE_VERSION,
+        "evaluation_policy_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }
+    episode["quality_vector"] = {
+        "pipeline_reliability": episode["quality_score"],
+        "outcome_confidence": 0.0,
+        "metric_coverage": 0.0,
+        "causal_confidence": 0.0,
+    }
+    episode["episode_fingerprint"] = hashlib.sha256(json.dumps({
+        "topology": topology_signature, "scene": episode["scene"],
+        "strategy": strategy, "features": features, "decision": decision,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:24]
     episode["episode_id"] = store.save_episode(episode)
+    for agent_id in features["aps"]:
+        store.save_agent_episode({
+            "run_id": run_id, "agent_id": agent_id,
+            "topology_signature": topology_signature,
+            "scene": episode["scene"], "strategy": strategy,
+            "local_state": initial_state.get(agent_id) or {},
+            "local_decision": (decision or {}).get(agent_id)
+            if isinstance(decision, dict) else None,
+            "outcome": outcome, "quality_score": episode["quality_score"],
+            "evaluation": episode.get("evaluation"),
+            "created_at": episode["created_at"],
+        })
     return episode
+
+
+def find_agent_episodes(
+    store: EventStore, agent_id: str, state: dict[str, Any], *,
+    limit: int = 3, min_quality: float = 0.5,
+    require_evaluation: bool = True,
+) -> list[dict[str, Any]]:
+    """Recall durable cases scoped to one agent and the current topology."""
+    topology, _ = encode_features(state)
+    candidates = store.list_agent_episodes(
+        agent_id, topology_signature=topology,
+        min_quality=min_quality, limit=max(limit, 20),
+    )
+    if require_evaluation:
+        candidates = [
+            item for item in candidates
+            if (item.get("evaluation") or {}).get("final_verdict")
+            in {"improved", "neutral", "degraded"}
+        ]
+    return candidates[:max(1, min(int(limit), 20))]
 
 
 def find_similar_episodes(
@@ -96,17 +164,68 @@ def find_similar_episodes(
     limit: int = 5,
     min_quality: float = 0.0,
     exclude_run_id: str | None = None,
+    require_evaluation: bool = False,
 ) -> list[dict[str, Any]]:
     topology, query = encode_features(state)
-    candidates = store.list_episodes(topology_signature=topology, limit=500)
+    # 同时扫描旧 v1 案例，允许在线升级后继续召回；结构不兼容的候选会在下方剔除。
+    exact = store.list_episodes(topology_signature=topology, limit=1000)
+    all_candidates = store.list_episodes(limit=1000)
+    candidates = list({item["run_id"]: item for item in (*exact, *all_candidates)}.values())
     ranked = []
     for episode in candidates:
         if episode["run_id"] == exclude_run_id or episode["quality_score"] < min_quality:
             continue
+        evaluation = episode.get("evaluation") or {}
+        if require_evaluation and evaluation.get("final_verdict") not in {
+            "improved", "neutral", "degraded"
+        }:
+            continue
+        if not _compatible_structure(query, episode["features"]):
+            continue
         similarity, components = feature_similarity(query, episode["features"])
-        ranked.append({**episode, "similarity": similarity, "similarity_components": components})
-    ranked.sort(key=lambda item: (item["similarity"], item["quality_score"]), reverse=True)
+        feedback_confidence = float(evaluation.get("final_confidence") or 0.0)
+        retrieval_score = (
+            0.75 * similarity + 0.20 * float(episode["quality_score"])
+            + 0.05 * feedback_confidence
+        )
+        ranked.append({**episode, "similarity": similarity,
+                       "similarity_components": components,
+                       "retrieval_score": round(retrieval_score, 6)})
+    ranked.sort(key=lambda item: (item["retrieval_score"], item["similarity"]), reverse=True)
     return ranked[: max(1, min(int(limit), 20))]
+
+
+def find_episode_memory(
+    store: EventStore, state: dict[str, Any], *, positive_limit: int = 3,
+    warning_limit: int = 2, exclude_run_id: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Retrieve deduplicated positive exemplars and negative warnings separately."""
+    candidates = find_similar_episodes(
+        store, state, limit=20, min_quality=0.0,
+        exclude_run_id=exclude_run_id, require_evaluation=True,
+    )
+    seen: set[str] = set()
+    positive, warnings = [], []
+    for item in candidates:
+        fingerprint = item.get("episode_fingerprint") or item["run_id"]
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        verdict = (item.get("evaluation") or {}).get("final_verdict")
+        if verdict == "degraded" and len(warnings) < warning_limit:
+            warnings.append(item)
+        elif verdict == "improved" and len(positive) < positive_limit:
+            positive.append(item)
+    return {"positive": positive, "warnings": warnings}
+
+
+def _compatible_structure(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """跨签名版本的硬门控：AP 集合和有向邻接边必须一致。"""
+    return (
+        set(left.get("aps") or ()) == set(right.get("aps") or ())
+        and set((left.get("rssi_links") or {}).keys())
+        == set((right.get("rssi_links") or {}).keys())
+    )
 
 
 def feature_similarity(left: dict[str, Any], right: dict[str, Any]) -> tuple[float, dict[str, float]]:
@@ -117,8 +236,12 @@ def feature_similarity(left: dict[str, Any], right: dict[str, Any]) -> tuple[flo
         left, right, ("tx_power", "cwmin", "cwmax", "aifsn"), (23.0, 1023.0, 1023.0, 15.0)
     )
     sta = _per_ap_similarity(left, right, ("sta_rssi",), (40.0,))
-    components = {"interference": rssi, "load": load, "priority": priority, "parameters": params, "sta": sta}
-    score = 0.30 * rssi + 0.25 * load + 0.15 * priority + 0.20 * params + 0.10 * sta
+    stations = _per_ap_similarity(left, right, ("station_count",), (30.0,))
+    radio = _radio_similarity(left.get("radio", {}), right.get("radio", {}))
+    components = {"interference": rssi, "load": load, "priority": priority,
+                  "parameters": params, "sta": sta, "stations": stations, "radio": radio}
+    score = (0.25 * rssi + 0.22 * load + 0.13 * priority + 0.15 * params
+             + 0.08 * sta + 0.07 * stations + 0.10 * radio)
     return round(score, 6), {key: round(value, 6) for key, value in components.items()}
 
 
@@ -137,6 +260,25 @@ def _mapping_similarity(left, right, scale) -> float:
     if set(left) != set(right) or not keys:
         return 0.0
     return sum(_scalar_similarity(left[key], right[key], scale) for key in keys) / len(keys)
+
+
+def _radio_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    aps = sorted(set(left) & set(right))
+    scores = []
+    numeric_scales = {"frequency_mhz": 160.0, "bandwidth_mhz": 80.0,
+                      "channel_width_mhz": 80.0, "channel": 16.0,
+                      "channel_number": 16.0}
+    for ap in aps:
+        fields = set(left.get(ap, {})) | set(right.get(ap, {}))
+        for field in fields:
+            a, b = left.get(ap, {}).get(field), right.get(ap, {}).get(field)
+            if a is None or b is None:
+                continue  # 未知字段不奖励，也不惩罚旧 schema 案例。
+            if field in numeric_scales:
+                scores.append(_scalar_similarity(_num(a), _num(b), numeric_scales[field]))
+            else:
+                scores.append(1.0 if str(a).lower() == str(b).lower() else 0.0)
+    return sum(scores) / len(scores) if scores else 0.5
 
 
 def _scalar_similarity(left, right, scale) -> float:

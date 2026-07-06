@@ -1,9 +1,12 @@
 import copy
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
 from src.memory import (
@@ -103,6 +106,42 @@ class L4ReliabilityTests(unittest.TestCase):
         self.assertEqual([i["window_label"] for i in outcome["collected"]], ["t+900s"])
         self.assertEqual(outcome["abandoned"], [])
 
+    def test_due_window_can_only_be_claimed_by_one_harvester(self):
+        self._run("run-claim")
+        schedule_outcome_evaluations(
+            self.store, "run-claim", self.baseline, (10.0,), now=self.t0
+        )
+        due = (self.t0 + timedelta(seconds=11)).isoformat(timespec="milliseconds")
+        first = self.store.claim_due_evaluations(due_before=due, claimant="worker-1")
+        second = self.store.claim_due_evaluations(due_before=due, claimant="worker-2")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        self.store.release_evaluation_claims(
+            [first[0]["evaluation_id"]], "worker-1"
+        )
+        self.assertEqual(
+            len(self.store.claim_due_evaluations(due_before=due, claimant="worker-2")), 1
+        )
+
+    def test_later_negotiation_marks_older_window_confounded(self):
+        self._run("older")
+        schedule_outcome_evaluations(
+            self.store, "older", self.baseline, (60.0,), now=self.t0
+        )
+        self._run("newer")
+        # Test fixtures use wall-clock completed_at; make the evaluation creation precede it.
+        with self.store._lock, self.store._conn:
+            self.store._conn.execute(
+                "UPDATE outcome_evaluations SET created_at=? WHERE run_id='older'",
+                ((self.t0 - timedelta(seconds=1)).isoformat(timespec="milliseconds"),),
+            )
+        result = harvest_evaluations(
+            self.store, lambda: copy.deepcopy(self.baseline),
+            now=datetime.now(timezone.utc) + timedelta(seconds=61),
+        )
+        self.assertEqual(result["collected"][0]["verdict"], "inconclusive")
+        self.assertTrue(result["collected"][0]["deltas"]["confounded"])
+
     # ── 回滚执行通道 ─────────────────────────────────────────────────
 
     def _degraded_episode(self, run_id):
@@ -120,6 +159,26 @@ class L4ReliabilityTests(unittest.TestCase):
         self.assertEqual(ep["evaluation"]["final_verdict"], "degraded")
         self.assertTrue(ep["evaluation"]["needs_rollback"])
         self.assertIn("rollback_plan", ep["evaluation"])
+        self.assertEqual(ep["lifecycle"], "warning")
+        self.assertGreater(ep["quality_vector"]["metric_coverage"], 0)
+        self.assertIn(ep["case_narrative_status"], {"disabled", "failed", "ready"})
+        local = self.store.list_agent_episodes("ap1", min_quality=0.0)
+        self.assertEqual(local[0]["evaluation"]["final_verdict"], "degraded")
+        self.assertEqual(local[0]["quality_score"], ep["quality_score"])
+
+    def test_missing_local_metrics_never_inherit_global_verdict(self):
+        self._run("run-local-missing")
+        schedule_outcome_evaluations(
+            self.store, "run-local-missing", self.baseline, (10.0,), now=self.t0
+        )
+        observed = copy.deepcopy(self.baseline)
+        observed.pop("ap3")
+        harvest_evaluations(
+            self.store, lambda: observed, now=self.t0 + timedelta(seconds=11)
+        )
+        ap3 = self.store.list_agent_episodes("ap3", min_quality=0.0)[0]
+        self.assertEqual(ap3["evaluation"]["final_verdict"], "inconclusive")
+        self.assertIn("禁止继承全局评价", ap3["evaluation"]["reason"])
 
     def test_dry_run_sends_nothing_and_returns_plan(self):
         self._degraded_episode("run-dry")

@@ -1,7 +1,11 @@
 import copy
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
+
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
 from src.memory import find_matching_rules, format_rule, induce_rules, materialize_episode
@@ -119,14 +123,20 @@ class SemanticMemoryTests(unittest.TestCase):
         self._episode("r2", "improved", self._edca(7))
         induce_rules(self.store)
         # 同拓扑高置信 → 命中
-        hit = find_matching_rules(self.store, self.baseline, min_confidence=0.3)
+        hit = find_matching_rules(
+            self.store, self.baseline, min_confidence=0.3, actionable_min_support=2
+        )
         self.assertEqual(len(hit), 1)
         # 阈值高于该规律置信度（0.6667）→ 不命中
-        self.assertEqual(find_matching_rules(self.store, self.baseline, min_confidence=0.9), [])
+        self.assertEqual(find_matching_rules(
+            self.store, self.baseline, min_confidence=0.9, actionable_min_support=2
+        ), [])
         # 不同拓扑 → 不命中
         other = copy.deepcopy(self.baseline)
         other["ap1"]["neighbor_rssi_dbm"].pop("ap3")
-        self.assertEqual(find_matching_rules(self.store, other, min_confidence=0.3), [])
+        self.assertEqual(find_matching_rules(
+            self.store, other, min_confidence=0.3, actionable_min_support=2
+        ), [])
 
     def test_format_rule_is_readable(self):
         self._episode("r1", "improved", self._edca(15))
@@ -134,6 +144,24 @@ class SemanticMemoryTests(unittest.TestCase):
         text = format_rule(induce_rules(self.store)[0])
         self.assertIn("倾向改善", text)
         self.assertIn("典型做法", text)
+
+    def test_tie_is_not_optimistically_classified_as_improved(self):
+        self._episode("good", "improved", self._edca(7))
+        self._episode("bad", "degraded", self._edca(63))
+        self.assertEqual(induce_rules(self.store)[0]["dominant_verdict"], "degraded")
+
+    def test_background_llm_summary_is_persisted_but_not_required(self):
+        self._episode("r1", "improved", self._edca(15))
+        self._episode("r2", "improved", self._edca(7))
+        with patch("src.memory.llm_backend.enabled", return_value=True), patch(
+            "src.memory.llm_backend.summarize", return_value="适用于同类负载；降低竞争窗口后改善。"
+        ):
+            induce_rules(self.store, use_llm=True)
+        rule = self.store.list_rules()[0]
+        self.assertIn("同类负载", rule["llm_summary"])
+        self.assertEqual(rule["llm_status"], "ready")
+        self.assertTrue(rule["llm_evidence_hash"])
+        self.assertTrue(format_rule(rule).startswith("语义总结："))
 
 
 if __name__ == "__main__":

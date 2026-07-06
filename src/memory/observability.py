@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import statistics
+from pathlib import Path
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -32,12 +33,33 @@ def memory_health(store: EventStore) -> dict[str, Any]:
     rules = store.list_rules(include_conflicted=True)
     active_rules = [r for r in rules if not r.get("conflicted")]
     rule_verdicts = Counter(r["dominant_verdict"] for r in active_rules)
+    llm_status = Counter(r.get("llm_status") or "legacy" for r in rules)
     avg_conf = (
         round(statistics.mean(r["confidence"] for r in active_rules), 4)
         if active_rules else None
     )
 
     topo_counts = store.count_episodes_by_topology()
+    now = datetime.now(timezone.utc)
+    overdue_pending = sum(
+        1 for item in evaluations
+        if item["status"] == "pending" and datetime.fromisoformat(item["due_at"]) < now
+    )
+    agent_memory = {}
+    session_counts = store.agent_session_memory_counts()
+    from .workspace import AGENT_IDS, workspace
+    for agent in AGENT_IDS:
+        cases = store.list_agent_episodes(agent, min_quality=0.0, limit=100)
+        memory_file = workspace(agent) / "MEMORY.md"
+        session_file = workspace(agent) / "memory" / "current-session.json"
+        agent_memory[agent] = {
+            "episodes": len(cases),
+            "session_memories": session_counts.get(agent, 0),
+            "evaluated": sum(1 for e in cases if (e.get("evaluation") or {}).get("final_verdict")),
+            "workspace_memory_exists": memory_file.exists(),
+            "workspace_session_exists": session_file.exists(),
+            "workspace_memory_bytes": memory_file.stat().st_size if memory_file.exists() else 0,
+        }
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -55,6 +77,7 @@ def memory_health(store: EventStore) -> dict[str, Any]:
             "collected": eval_status.get("collected", 0),
             "abandoned": eval_status.get("abandoned", 0),
             "failed": eval_status.get("failed", 0),
+            "overdue_pending": overdue_pending,
         },
         "rules": {
             "total": len(rules),
@@ -62,11 +85,14 @@ def memory_health(store: EventStore) -> dict[str, Any]:
             "conflicted": len(rules) - len(active_rules),
             "avg_confidence": avg_conf,
             "by_verdict": dict(rule_verdicts),
+            "llm_status": dict(llm_status),
         },
         "topologies": {
             "count": len(topo_counts),
             "max_alive_per_topology": max(topo_counts.values()) if topo_counts else 0,
         },
+        "agent_memory": agent_memory,
+        "services": store.list_service_heartbeats(),
     }
 
 

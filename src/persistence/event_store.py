@@ -7,6 +7,7 @@ control-plane layer used for recovery, memory extraction and later replay.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import threading
 import uuid
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 15
 
 
 def _now() -> str:
@@ -190,6 +191,18 @@ class EventStore:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS agent_session_memories (
+                run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+                agent_id TEXT NOT NULL,
+                memory_version INTEGER NOT NULL,
+                summarized_turns INTEGER NOT NULL,
+                budget_chars INTEGER NOT NULL,
+                summary_text TEXT NOT NULL,
+                memory_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(run_id, agent_id)
+            );
+
             CREATE TABLE IF NOT EXISTS episodic_memories (
                 episode_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(run_id) ON DELETE CASCADE,
@@ -209,6 +222,24 @@ class EventStore:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS agent_episodic_memories (
+                run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+                agent_id TEXT NOT NULL,
+                topology_signature TEXT NOT NULL,
+                scene TEXT,
+                strategy TEXT,
+                local_state_json TEXT NOT NULL,
+                local_decision_json TEXT,
+                outcome TEXT NOT NULL,
+                quality_score REAL NOT NULL,
+                evaluation_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(run_id, agent_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_episodes_recall
+                ON agent_episodic_memories(agent_id, topology_signature, quality_score DESC);
 
             CREATE INDEX IF NOT EXISTS idx_episodes_scene_strategy_quality
                 ON episodic_memories(scene, strategy, quality_score DESC);
@@ -263,6 +294,14 @@ class EventStore:
                 acquired_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS service_heartbeats (
+                service_name TEXT PRIMARY KEY,
+                holder TEXT NOT NULL,
+                status TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         # v5 老库的 episodic_memories 缺 evaluation_json，就地补列。
@@ -270,12 +309,84 @@ class EventStore:
         # v8：L6 整理软删/冲突标记（旧库就地补列，默认未归档、未冲突）。
         self._ensure_column("episodic_memories", "archived", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("semantic_rules", "conflicted", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("semantic_rules", "llm_summary", "TEXT")
+        self._ensure_column("semantic_rules", "llm_model", "TEXT")
+        self._ensure_column("semantic_rules", "active", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("semantic_rules", "llm_evidence_hash", "TEXT")
+        self._ensure_column("semantic_rules", "llm_prompt_version", "INTEGER")
+        self._ensure_column("semantic_rules", "llm_status", "TEXT")
+        self._ensure_column("semantic_rules", "llm_error", "TEXT")
+        self._ensure_column("semantic_rules", "llm_generated_at", "TEXT")
+        self._ensure_column("outcome_evaluations", "claimed_at", "TEXT")
+        self._ensure_column("outcome_evaluations", "claimant", "TEXT")
+        self._ensure_column("agent_session_memories", "memory_revision", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("episodic_memories", "lifecycle", "TEXT NOT NULL DEFAULT 'draft'")
+        self._ensure_column("episodic_memories", "quality_vector_json", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_column("episodic_memories", "episode_fingerprint", "TEXT")
+        self._ensure_column("episodic_memories", "feature_schema_version", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("episodic_memories", "evaluation_policy_version", "INTEGER NOT NULL DEFAULT 1")
+        self._ensure_column("episodic_memories", "case_narrative", "TEXT")
+        self._ensure_column("episodic_memories", "case_narrative_model", "TEXT")
+        self._ensure_column("episodic_memories", "case_narrative_evidence_hash", "TEXT")
+        self._ensure_column("episodic_memories", "case_narrative_status", "TEXT")
         for version in range(1, SCHEMA_VERSION + 1):
             self._conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (version, _now()),
             )
         self._conn.commit()
+        self._backfill_agent_episodes()
+        self._backfill_episode_metadata()
+
+    def _backfill_agent_episodes(self) -> None:
+        """Materialize per-agent rows for episodes created before schema v12."""
+        rows = self._conn.execute(
+            "SELECT * FROM episodic_memories WHERE run_id NOT IN "
+            "(SELECT DISTINCT run_id FROM agent_episodic_memories)"
+        ).fetchall()
+        for row in rows:
+            initial = json.loads(row["initial_state_json"])
+            decision = json.loads(row["decision_json"]) if row["decision_json"] else {}
+            evaluation = json.loads(row["evaluation_json"]) if row["evaluation_json"] else None
+            for agent_id, local_state in initial.items():
+                if not isinstance(local_state, dict):
+                    continue
+                self.save_agent_episode({
+                    "run_id": row["run_id"], "agent_id": agent_id,
+                    "topology_signature": row["topology_signature"], "scene": row["scene"],
+                    "strategy": row["strategy"], "local_state": local_state,
+                    "local_decision": decision.get(agent_id) if isinstance(decision, dict) else None,
+                    "outcome": row["outcome"], "quality_score": row["quality_score"],
+                    "evaluation": evaluation, "created_at": row["created_at"],
+                })
+
+    def _backfill_episode_metadata(self) -> None:
+        rows = self._conn.execute(
+            "SELECT run_id,topology_signature,scene,strategy,feature_json,decision_json,"
+            "quality_score,evaluation_json FROM episodic_memories "
+            "WHERE episode_fingerprint IS NULL OR quality_vector_json='{}'"
+        ).fetchall()
+        for row in rows:
+            evaluation = json.loads(row["evaluation_json"]) if row["evaluation_json"] else {}
+            verdict = evaluation.get("final_verdict")
+            lifecycle = {"improved": "trusted", "degraded": "warning",
+                         "inconclusive": "inconclusive", "neutral": "evaluated"}.get(
+                             verdict, "awaiting_evaluation"
+                         )
+            fingerprint = hashlib.sha256(_json({
+                "topology": row["topology_signature"], "scene": row["scene"],
+                "strategy": row["strategy"], "features": json.loads(row["feature_json"]),
+                "decision": json.loads(row["decision_json"]) if row["decision_json"] else None,
+            }).encode()).hexdigest()[:24]
+            vector = {"pipeline_reliability": float(row["quality_score"]),
+                      "outcome_confidence": float(evaluation.get("final_confidence") or 0.0),
+                      "metric_coverage": 0.0, "causal_confidence": 0.0}
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "UPDATE episodic_memories SET episode_fingerprint=?, quality_vector_json=?, "
+                    "lifecycle=? WHERE run_id=?",
+                    (fingerprint, _json(vector), lifecycle, row["run_id"]),
+                )
 
     def _ensure_column(self, table: str, column: str, ddl: str) -> None:
         columns = {
@@ -678,6 +789,101 @@ class EventStore:
             "updated_at": row["updated_at"],
         }
 
+    def save_agent_session_memory(
+        self, run_id: str, agent_id: str, *, memory: dict[str, Any],
+        summary_text: str, budget_chars: int,
+    ) -> None:
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO agent_session_memories(
+                    run_id, agent_id, memory_version, summarized_turns,
+                    budget_chars, summary_text, memory_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, agent_id) DO UPDATE SET
+                    memory_version=excluded.memory_version,
+                    summarized_turns=excluded.summarized_turns,
+                    budget_chars=excluded.budget_chars,
+                    summary_text=excluded.summary_text,
+                    memory_json=excluded.memory_json,
+                    memory_revision=agent_session_memories.memory_revision + 1,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    run_id, str(agent_id).lower(), int(memory.get("version") or 1),
+                    int(memory.get("summarized_turns") or 0), int(budget_chars),
+                    summary_text, _json(memory), now,
+                ),
+            )
+
+    def load_agent_session_memories(self, run_id: str) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agent_session_memories WHERE run_id=? ORDER BY agent_id",
+                (run_id,),
+            ).fetchall()
+        return {
+            row["agent_id"]: {
+                "run_id": row["run_id"], "agent_id": row["agent_id"],
+                "memory_version": row["memory_version"],
+                "summarized_turns": row["summarized_turns"],
+                "budget_chars": row["budget_chars"],
+                "summary_text": row["summary_text"],
+                "memory": json.loads(row["memory_json"]),
+                "updated_at": row["updated_at"],
+                "memory_revision": row["memory_revision"],
+            }
+            for row in rows
+        }
+
+    def agent_session_memory_counts(self) -> dict[str, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT agent_id,COUNT(*) n FROM agent_session_memories GROUP BY agent_id"
+            ).fetchall()
+        return {row["agent_id"]: int(row["n"]) for row in rows}
+
+    def update_agent_episode_evaluation(
+        self, run_id: str, agent_id: str, *, evaluation: dict[str, Any],
+        quality_score: float,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE agent_episodic_memories SET evaluation_json=?, quality_score=?, "
+                "updated_at=? WHERE run_id=? AND agent_id=?",
+                (_json(evaluation), float(quality_score), _now(), run_id, agent_id.lower()),
+            )
+
+    def heartbeat_service(
+        self, service_name: str, holder: str, *, status: str = "ok",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO service_heartbeats(service_name,holder,status,details_json,updated_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(service_name) DO UPDATE SET holder=excluded.holder,"
+                "status=excluded.status,details_json=excluded.details_json,updated_at=excluded.updated_at",
+                (service_name, holder, status, _json(details or {}), _now()),
+            )
+
+    def list_service_heartbeats(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM service_heartbeats").fetchall()
+        return [{"service_name": r["service_name"], "holder": r["holder"],
+                 "status": r["status"], "details": json.loads(r["details_json"]),
+                 "updated_at": r["updated_at"]} for r in rows]
+
+    def interrupt_stale_runs(self, *, stale_before: str) -> int:
+        now = _now()
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                "UPDATE agent_runs SET status='interrupted', outcome='interrupted', "
+                "updated_at=?, completed_at=? WHERE status='running' AND updated_at<?",
+                (now, now, stale_before),
+            )
+            return cursor.rowcount
+
     def save_episode(self, episode: dict[str, Any]) -> str:
         episode_id = str(episode.get("episode_id") or uuid.uuid4().hex)
         now = _now()
@@ -689,8 +895,10 @@ class EventStore:
                     topology_signature, feature_json, initial_state_json,
                     decision_json, validation_json, execution_json,
                     observed_state_json, metrics_json, quality_score,
+                    lifecycle, quality_vector_json, episode_fingerprint,
+                    feature_schema_version, evaluation_policy_version,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     scene=excluded.scene,
                     strategy=excluded.strategy,
@@ -704,6 +912,11 @@ class EventStore:
                     observed_state_json=excluded.observed_state_json,
                     metrics_json=excluded.metrics_json,
                     quality_score=excluded.quality_score,
+                    lifecycle=excluded.lifecycle,
+                    quality_vector_json=excluded.quality_vector_json,
+                    episode_fingerprint=excluded.episode_fingerprint,
+                    feature_schema_version=excluded.feature_schema_version,
+                    evaluation_policy_version=excluded.evaluation_policy_version,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -721,6 +934,11 @@ class EventStore:
                     _json(episode["observed_state"]) if episode.get("observed_state") is not None else None,
                     _json(episode.get("metrics") or {}),
                     float(episode.get("quality_score") or 0.0),
+                    episode.get("lifecycle") or "awaiting_evaluation",
+                    _json(episode.get("quality_vector") or {}),
+                    episode.get("episode_fingerprint"),
+                    int(episode.get("feature_schema_version") or 1),
+                    int(episode.get("evaluation_policy_version") or 1),
                     episode.get("created_at") or now,
                     now,
                 ),
@@ -736,6 +954,65 @@ class EventStore:
                 f"SELECT * FROM episodic_memories WHERE {column}=?", (value,)
             ).fetchone()
         return self._episode_record(row) if row is not None else None
+
+    def save_agent_episode(self, episode: dict[str, Any]) -> None:
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO agent_episodic_memories(
+                    run_id, agent_id, topology_signature, scene, strategy,
+                    local_state_json, local_decision_json, outcome, quality_score,
+                    evaluation_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, agent_id) DO UPDATE SET
+                    topology_signature=excluded.topology_signature,
+                    scene=excluded.scene, strategy=excluded.strategy,
+                    local_state_json=excluded.local_state_json,
+                    local_decision_json=excluded.local_decision_json,
+                    outcome=excluded.outcome, quality_score=excluded.quality_score,
+                    evaluation_json=excluded.evaluation_json, updated_at=excluded.updated_at
+                """,
+                (
+                    episode["run_id"], episode["agent_id"], episode["topology_signature"],
+                    episode.get("scene"), episode.get("strategy"),
+                    _json(episode.get("local_state") or {}),
+                    _json(episode["local_decision"])
+                    if episode.get("local_decision") is not None else None,
+                    episode["outcome"], float(episode.get("quality_score") or 0.0),
+                    _json(episode["evaluation"])
+                    if episode.get("evaluation") is not None else None,
+                    episode.get("created_at") or now, now,
+                ),
+            )
+
+    def list_agent_episodes(
+        self, agent_id: str, *, topology_signature: str | None = None,
+        min_quality: float = 0.0, limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        clauses = ["agent_id=?", "quality_score>=?"]
+        params: list[Any] = [agent_id.lower(), float(min_quality)]
+        if topology_signature:
+            clauses.append("topology_signature=?")
+            params.append(topology_signature)
+        params.append(max(1, min(int(limit), 100)))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agent_episodic_memories WHERE " + " AND ".join(clauses)
+                + " ORDER BY quality_score DESC, created_at DESC LIMIT ?", params,
+            ).fetchall()
+        return [{
+            "run_id": row["run_id"], "agent_id": row["agent_id"],
+            "topology_signature": row["topology_signature"], "scene": row["scene"],
+            "strategy": row["strategy"],
+            "local_state": json.loads(row["local_state_json"]),
+            "local_decision": json.loads(row["local_decision_json"])
+            if row["local_decision_json"] else None,
+            "outcome": row["outcome"], "quality_score": row["quality_score"],
+            "evaluation": json.loads(row["evaluation_json"])
+            if row["evaluation_json"] else None,
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        } for row in rows]
 
     def list_episodes(
         self,
@@ -755,7 +1032,7 @@ class EventStore:
             clauses.append("scene=?")
             params.append(scene)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        params.append(max(1, min(int(limit), 1000)))
+        params.append(max(1, min(int(limit), 100_000)))
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM episodic_memories" + where
@@ -793,6 +1070,18 @@ class EventStore:
                 "UPDATE semantic_rules SET conflicted=?, updated_at=? WHERE rule_id=?",
                 (1 if conflicted else 0, _now(), rule_id),
             )
+
+    def activate_only_rules(self, rule_ids: list[str]) -> None:
+        """使本轮未重新归纳出的旧规律失效，避免归档证据继续影响召回。"""
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE semantic_rules SET active=0, updated_at=?", (now,))
+            if rule_ids:
+                placeholders = ",".join("?" for _ in rule_ids)
+                self._conn.execute(
+                    f"UPDATE semantic_rules SET active=1, updated_at=? WHERE rule_id IN ({placeholders})",
+                    [now, *rule_ids],
+                )
 
     def acquire_lock(self, name: str, holder: str, *, ttl_seconds: float) -> bool:
         """获取维护锁：无人持有或已过期才成功；防 consolidation 与写入并发。"""
@@ -886,6 +1175,54 @@ class EventStore:
             ).fetchall()
         return [self._evaluation_record(row) for row in rows]
 
+    def claim_due_evaluations(
+        self, *, due_before: str, claimant: str, run_id: str | None = None,
+        lease_seconds: float = 300.0,
+    ) -> list[dict[str, Any]]:
+        """Atomically claim due windows so concurrent harvesters cannot collect twice."""
+        now = datetime.now(timezone.utc)
+        stale = (now - timedelta(seconds=max(1.0, lease_seconds))).isoformat(
+            timespec="milliseconds"
+        )
+        now_s = now.isoformat(timespec="milliseconds")
+        run_clause = " AND run_id=?" if run_id else ""
+        params: list[Any] = [due_before, stale]
+        if run_id:
+            params.append(run_id)
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT evaluation_id FROM outcome_evaluations "
+                "WHERE due_at<=? AND (status='pending' OR "
+                "(status='processing' AND claimed_at<?))" + run_clause,
+                params,
+            ).fetchall()
+            ids = [row["evaluation_id"] for row in rows]
+            if not ids:
+                return []
+            placeholders = ",".join("?" for _ in ids)
+            self._conn.execute(
+                f"UPDATE outcome_evaluations SET status='processing', claimed_at=?, "
+                f"claimant=?, updated_at=? WHERE evaluation_id IN ({placeholders})",
+                [now_s, claimant, now_s, *ids],
+            )
+            claimed = self._conn.execute(
+                f"SELECT * FROM outcome_evaluations WHERE evaluation_id IN ({placeholders}) "
+                "ORDER BY due_at ASC, window_label ASC", ids,
+            ).fetchall()
+        return [self._evaluation_record(row) for row in claimed]
+
+    def release_evaluation_claims(self, evaluation_ids: list[str], claimant: str) -> None:
+        if not evaluation_ids:
+            return
+        placeholders = ",".join("?" for _ in evaluation_ids)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE outcome_evaluations SET status='pending', claimed_at=NULL, "
+                f"claimant=NULL, updated_at=? WHERE claimant=? AND status='processing' "
+                f"AND evaluation_id IN ({placeholders})",
+                [_now(), claimant, *evaluation_ids],
+            )
+
     def finish_evaluation(
         self,
         evaluation_id: str,
@@ -932,18 +1269,32 @@ class EventStore:
         run_id: str,
         *,
         evaluation: dict[str, Any],
-        quality_score: float,
+        quality_score: float, quality_vector: dict[str, Any] | None = None,
+        lifecycle: str | None = None,
     ) -> bool:
         now = _now()
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 """
                 UPDATE episodic_memories SET evaluation_json=?, quality_score=?,
-                    updated_at=? WHERE run_id=?
+                    quality_vector_json=?, lifecycle=?, updated_at=? WHERE run_id=?
                 """,
-                (_json(evaluation), float(quality_score), now, run_id),
+                (_json(evaluation), float(quality_score), _json(quality_vector or {}),
+                 lifecycle or "evaluated", now, run_id),
             )
             return cursor.rowcount > 0
+
+    def update_episode_narrative(
+        self, run_id: str, *, narrative: str | None, model: str | None,
+        evidence_hash: str, status: str,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE episodic_memories SET case_narrative=?, case_narrative_model=?, "
+                "case_narrative_evidence_hash=?, case_narrative_status=?, updated_at=? "
+                "WHERE run_id=?",
+                (narrative, model, evidence_hash, status, _now(), run_id),
+            )
 
     def upsert_rule(self, rule: dict[str, Any]) -> str:
         """按 (topology, scene, strategy) upsert 一条归纳规律，保留 created_at。"""
@@ -964,8 +1315,10 @@ class EventStore:
                 INSERT INTO semantic_rules(
                     rule_id, topology_signature, scene, strategy, dominant_verdict,
                     support, consistency, confidence, verdict_counts_json,
-                    action_summary_json, evidence_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    action_summary_json, evidence_json, llm_summary, llm_model,
+                    llm_evidence_hash, llm_prompt_version, llm_status, llm_error,
+                    llm_generated_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rule_id) DO UPDATE SET
                     dominant_verdict=excluded.dominant_verdict,
                     support=excluded.support,
@@ -974,6 +1327,13 @@ class EventStore:
                     verdict_counts_json=excluded.verdict_counts_json,
                     action_summary_json=excluded.action_summary_json,
                     evidence_json=excluded.evidence_json,
+                    llm_summary=excluded.llm_summary,
+                    llm_model=excluded.llm_model,
+                    llm_evidence_hash=excluded.llm_evidence_hash,
+                    llm_prompt_version=excluded.llm_prompt_version,
+                    llm_status=excluded.llm_status,
+                    llm_error=excluded.llm_error,
+                    llm_generated_at=excluded.llm_generated_at,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -982,7 +1342,10 @@ class EventStore:
                     int(rule["support"]), float(rule["consistency"]),
                     float(rule["confidence"]), _json(rule.get("verdict_counts") or {}),
                     _json(rule.get("action_summary") or {}),
-                    _json(rule.get("evidence") or []), created_at, now,
+                    _json(rule.get("evidence") or []), rule.get("llm_summary"),
+                    rule.get("llm_model"), rule.get("llm_evidence_hash"),
+                    rule.get("llm_prompt_version"), rule.get("llm_status"),
+                    rule.get("llm_error"), rule.get("llm_generated_at"), created_at, now,
                 ),
             )
         return rule_id
@@ -995,7 +1358,7 @@ class EventStore:
         min_confidence: float = 0.0,
         include_conflicted: bool = False,
     ) -> list[dict[str, Any]]:
-        clauses, params = ["confidence>=?"], [float(min_confidence)]
+        clauses, params = ["confidence>=?", "active=1"], [float(min_confidence)]
         if not include_conflicted:
             clauses.append("conflicted=0")
         if topology_signature:
@@ -1025,6 +1388,18 @@ class EventStore:
             ).fetchone()
         return self._run_record(row) if row is not None else None
 
+    def has_completed_run_between(
+        self, *, after: str, before: str, exclude_run_id: str
+    ) -> bool:
+        """Return whether another completed negotiation can confound an outcome window."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM agent_runs WHERE run_id<>? AND completed_at>? "
+                "AND completed_at<=? LIMIT 1",
+                (exclude_run_id, after, before),
+            ).fetchone()
+        return row is not None
+
     def run_counts(self) -> dict[str, int]:
         with self._lock:
             rows = self._conn.execute(
@@ -1033,7 +1408,8 @@ class EventStore:
         counts = {row["status"]: int(row["n"]) for row in rows}
         total = sum(counts.values())
         completed = counts.get("completed", 0)
-        return {"total": total, "completed": completed, "incomplete": total - completed}
+        return {"total": total, "completed": completed, "incomplete": total - completed,
+                **counts}
 
     def list_incomplete_runs(self) -> list[RunRecord]:
         with self._lock:
@@ -1142,6 +1518,15 @@ class EventStore:
             "observed_state": load("observed_state_json"),
             "metrics": load("metrics_json", {}),
             "quality_score": row["quality_score"],
+            "quality_vector": load("quality_vector_json", {}),
+            "lifecycle": row["lifecycle"] if "lifecycle" in row.keys() else "evaluated",
+            "episode_fingerprint": row["episode_fingerprint"] if "episode_fingerprint" in row.keys() else None,
+            "feature_schema_version": row["feature_schema_version"] if "feature_schema_version" in row.keys() else 1,
+            "evaluation_policy_version": row["evaluation_policy_version"] if "evaluation_policy_version" in row.keys() else 1,
+            "case_narrative": row["case_narrative"] if "case_narrative" in row.keys() else None,
+            "case_narrative_model": row["case_narrative_model"] if "case_narrative_model" in row.keys() else None,
+            "case_narrative_evidence_hash": row["case_narrative_evidence_hash"] if "case_narrative_evidence_hash" in row.keys() else None,
+            "case_narrative_status": row["case_narrative_status"] if "case_narrative_status" in row.keys() else None,
             "evaluation": load("evaluation_json"),
             "archived": bool(row["archived"]) if "archived" in row.keys() else False,
             "created_at": row["created_at"],
@@ -1162,7 +1547,15 @@ class EventStore:
             "verdict_counts": json.loads(row["verdict_counts_json"]),
             "action_summary": json.loads(row["action_summary_json"]),
             "evidence": json.loads(row["evidence_json"]),
+            "llm_summary": row["llm_summary"] if "llm_summary" in row.keys() else None,
+            "llm_model": row["llm_model"] if "llm_model" in row.keys() else None,
+            "llm_evidence_hash": row["llm_evidence_hash"] if "llm_evidence_hash" in row.keys() else None,
+            "llm_prompt_version": row["llm_prompt_version"] if "llm_prompt_version" in row.keys() else None,
+            "llm_status": row["llm_status"] if "llm_status" in row.keys() else None,
+            "llm_error": row["llm_error"] if "llm_error" in row.keys() else None,
+            "llm_generated_at": row["llm_generated_at"] if "llm_generated_at" in row.keys() else None,
             "conflicted": bool(row["conflicted"]) if "conflicted" in row.keys() else False,
+            "active": bool(row["active"]) if "active" in row.keys() else True,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

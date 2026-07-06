@@ -11,6 +11,9 @@ from __future__ import annotations
 import math
 import os
 import statistics
+import uuid
+import hashlib
+import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -162,16 +165,37 @@ def collect_due_evaluations(
 ) -> list[dict[str, Any]]:
     """收割所有到期的 pending 窗口并回写 episode；状态获取失败则保持 pending 可重试。"""
     now = now or datetime.now(timezone.utc)
-    due = store.list_evaluations(
-        run_id,
-        status="pending",
+    claimant = uuid.uuid4().hex
+    due = store.claim_due_evaluations(
+        run_id=run_id, claimant=claimant,
         due_before=now.isoformat(timespec="milliseconds"),
     )
     if not due:
         return []
-    observed = state_getter()
+    try:
+        observed = state_getter()
+    except Exception:
+        store.release_evaluation_claims(
+            [item["evaluation_id"] for item in due], claimant
+        )
+        raise
     collected = []
     for evaluation in due:
+        if store.has_completed_run_between(
+            after=evaluation["created_at"],
+            before=now.isoformat(timespec="milliseconds"),
+            exclude_run_id=evaluation["run_id"],
+        ):
+            collected.append(
+                store.finish_evaluation(
+                    evaluation["evaluation_id"], status="collected",
+                    observed=observed,
+                    deltas={"coverage": 0.0, "score": 0.0, "confounded": True},
+                    verdict="inconclusive", confidence=0.0,
+                    error="评估窗口内存在另一已完成协商，无法隔离本次动作效果",
+                )
+            )
+            continue
         deltas = evaluate_deltas(evaluation["baseline"], observed)
         verdict, confidence = classify(deltas)
         collected.append(
@@ -402,8 +426,132 @@ def apply_evaluation_to_episode(
         )
     # 从 episode 内容重算流水线基础分再修订，保证重复评估幂等。
     quality = revise_quality(pipeline_quality(episode), summary)
-    store.update_episode_evaluation(run_id, evaluation=summary, quality_score=quality)
+    collected = [e for e in store.list_evaluations(run_id) if e.get("status") == "collected"]
+    coverages = [float((e.get("deltas") or {}).get("coverage") or 0.0) for e in collected]
+    quality_vector = {
+        "pipeline_reliability": pipeline_quality(episode),
+        "outcome_confidence": float(summary.get("final_confidence") or 0.0),
+        "metric_coverage": round(statistics.mean(coverages), 4) if coverages else 0.0,
+        "causal_confidence": round(
+            float(summary.get("final_confidence") or 0.0)
+            * float(summary.get("cross_window_consistency") or 0.0), 4
+        ),
+    }
+    lifecycle = (
+        "trusted" if summary["final_verdict"] == "improved"
+        else "warning" if summary["final_verdict"] == "degraded"
+        else "inconclusive" if summary["final_verdict"] == "inconclusive"
+        else "evaluated"
+    )
+    store.update_episode_evaluation(
+        run_id, evaluation=summary, quality_score=quality,
+        quality_vector=quality_vector, lifecycle=lifecycle,
+    )
+    evaluations = store.list_evaluations(run_id)
+    for agent_id in (episode.get("initial_state") or {}):
+        local_summary = summarize_agent_evaluations(evaluations, agent_id)
+        if local_summary is None:
+            local_summary = {
+                "scope": "agent", "agent_id": agent_id, "windows": [],
+                "final_verdict": "inconclusive", "final_confidence": 0.0,
+                "final_score": None, "needs_rollback": False,
+                "reason": "缺少该 AP 的局部指标，禁止继承全局评价",
+            }
+        local_summary["global_verdict"] = summary.get("final_verdict")
+        local_summary["global_local_conflict"] = (
+            local_summary["final_verdict"] in {"improved", "degraded"}
+            and summary.get("final_verdict") in {"improved", "degraded"}
+            and local_summary["final_verdict"] != summary.get("final_verdict")
+        )
+        local_quality = revise_quality(pipeline_quality(episode), local_summary)
+        store.update_agent_episode_evaluation(
+            run_id, agent_id, evaluation=local_summary, quality_score=local_quality,
+        )
+    _update_case_narrative(store, run_id, episode, summary, quality_vector)
+    from .workspace import AGENT_IDS, should_sync_for_store, try_save_long_term_memory
+    if should_sync_for_store(store.path):
+        for agent_id in AGENT_IDS:
+            try_save_long_term_memory(
+                agent_id,
+                store.list_agent_episodes(
+                    agent_id, topology_signature=episode.get("topology_signature"),
+                    min_quality=0.0, limit=20,
+                ),
+            )
     return {**summary, "quality_score": quality, "run_id": run_id}
+
+
+def _update_case_narrative(
+    store: EventStore, run_id: str, episode: dict[str, Any],
+    summary: dict[str, Any], quality_vector: dict[str, Any],
+) -> None:
+    from .llm_backend import enabled, model_name, summarize
+    evidence = {"scene": episode.get("scene"), "strategy": episode.get("strategy"),
+                "initial_state": episode.get("initial_state"),
+                "decision": episode.get("decision"), "evaluation": summary,
+                "quality_vector": quality_vector}
+    raw = json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    if not enabled():
+        store.update_episode_narrative(
+            run_id, narrative=None, model=None, evidence_hash=digest, status="disabled"
+        )
+        return
+    prompt = (
+        "把这个网络协商案例总结成不超过160字的案例记忆。必须分别说明适用条件、"
+        "本次动作、全局效果、局部风险和不可确定之处；不得把中性结果写成改善，"
+        "不得给出证据之外的参数。\n" + raw[:16000]
+    )
+    try:
+        store.update_episode_narrative(
+            run_id, narrative=summarize(prompt), model=model_name(),
+            evidence_hash=digest, status="ready",
+        )
+    except Exception:
+        store.update_episode_narrative(
+            run_id, narrative=None, model=model_name(), evidence_hash=digest, status="failed"
+        )
+
+
+def summarize_agent_evaluations(
+    evaluations: list[dict[str, Any]], agent_id: str,
+) -> dict[str, Any] | None:
+    """Derive a local verdict from one AP's metrics instead of copying global credit."""
+    windows = []
+    for item in evaluations:
+        if item.get("status") != "collected":
+            continue
+        local = ((item.get("deltas") or {}).get("per_ap") or {}).get(agent_id)
+        if not isinstance(local, dict):
+            continue
+        score = float(local.get("score") or 0.0)
+        if score >= IMPROVE_THRESHOLD:
+            verdict = "improved"
+        elif score <= DEGRADE_THRESHOLD:
+            verdict = "degraded"
+        else:
+            verdict = "neutral"
+        metric_count = len(local.get("metrics") or {})
+        coverage = min(1.0, metric_count / len(_METRICS))
+        confidence = coverage * min(1.0, abs(score) / _FULL_CONFIDENCE_SCORE)
+        windows.append({"window": item["window_label"], "verdict": verdict,
+                        "score": score, "confidence": round(confidence, 4)})
+    if not windows:
+        return None
+    directional = [w for w in windows if w["verdict"] in {"improved", "degraded"}]
+    if directional:
+        counts = Counter(w["verdict"] for w in directional)
+        dominant = "degraded" if counts["degraded"] >= counts["improved"] else "improved"
+        consistency = counts[dominant] / len(directional)
+        final = [w for w in directional if w["verdict"] == dominant][-1]
+        confidence = round(final["confidence"] * consistency, 4)
+    else:
+        dominant, consistency, final = "neutral", 1.0, windows[-1]
+        confidence = final["confidence"]
+    return {"scope": "agent", "agent_id": agent_id, "windows": windows,
+            "cross_window_consistency": round(consistency, 4),
+            "final_verdict": dominant, "final_confidence": confidence,
+            "final_score": final["score"], "needs_rollback": False}
 
 
 def build_rollback_plan(

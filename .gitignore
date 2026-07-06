@@ -19,3 +19,7 @@ logs/
 
 .DS_Store
 openclaw/workspaces/*/proposal*.json
+openclaw/workspaces/*/MEMORY.md
+openclaw/workspaces/*/memory/current-session.json
+openclaw/workspaces/*/memory/current-session.md
+openclaw/workspaces/*/memory/sessions/

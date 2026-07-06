@@ -1,8 +1,11 @@
 import copy
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
 from src.memory import (
@@ -109,7 +112,9 @@ class ConsolidationTests(unittest.TestCase):
         self._episode("g3", "improved", 0.85, cwmin=11)
         result = consolidate(self.store, config=ConsolidationConfig(conflict_consistency=0.6))
         self.assertEqual(result["conflicted_rules"], [])
-        self.assertEqual(len(find_matching_rules(self.store, self.baseline, min_confidence=0.5)), 1)
+        self.assertEqual(len(find_matching_rules(
+            self.store, self.baseline, min_confidence=0.5, actionable_min_support=2
+        )), 1)
 
     def test_conflict_flag_clears_when_evidence_realigns(self):
         self._episode("c1", "improved", 0.9, cwmin=15)

@@ -2,7 +2,8 @@
 
 from .session_memory import SessionMemory, SessionMemoryManager
 from .episodic import (
-    encode_features, find_similar_episodes, materialize_episode, pipeline_quality,
+    encode_features, find_agent_episodes, find_episode_memory, find_similar_episodes, materialize_episode,
+    pipeline_quality,
 )
 from .outcome import (
     DEFAULT_WINDOWS,
@@ -25,8 +26,8 @@ from .consolidation import ConsolidationConfig, consolidate
 from .observability import memory_health
 
 __all__ = [
-    "SessionMemory", "SessionMemoryManager", "encode_features",
-    "find_similar_episodes", "materialize_episode", "pipeline_quality",
+    "SessionMemory", "SessionMemoryManager", "encode_features", "find_agent_episodes",
+    "find_similar_episodes", "find_episode_memory", "materialize_episode", "pipeline_quality",
     "DEFAULT_WINDOWS", "abandon_stale_evaluations", "apply_evaluation_to_episode",
     "build_rollback_plan", "classify", "collect_due_evaluations", "evaluate_deltas",
     "evaluation_diagnostics", "harvest_evaluations", "parse_windows",

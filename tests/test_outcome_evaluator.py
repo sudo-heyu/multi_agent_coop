@@ -1,8 +1,11 @@
 import copy
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
 from src.memory import (
@@ -15,6 +18,7 @@ from src.memory import (
     parse_windows,
     schedule_outcome_evaluations,
 )
+from src.memory.outcome import summarize_agent_evaluations
 from src.persistence import EventStore
 
 
@@ -222,6 +226,21 @@ class OutcomeEvaluatorTests(unittest.TestCase):
             collect_due_evaluations(self.store, boom, now=self.t0 + timedelta(seconds=11))
         pending = self.store.list_evaluations("run-retry", status="pending")
         self.assertEqual(len(pending), 1)
+
+    def test_agent_verdicts_do_not_copy_global_credit(self):
+        evaluations = [{
+            "status": "collected", "window_label": "t+10s",
+            "deltas": {"per_ap": {
+                "ap1": {"score": 0.3, "metrics": {name: {} for name in range(4)}},
+                "ap3": {"score": -0.3, "metrics": {name: {} for name in range(4)}},
+            }},
+        }]
+        self.assertEqual(
+            summarize_agent_evaluations(evaluations, "ap1")["final_verdict"], "improved"
+        )
+        self.assertEqual(
+            summarize_agent_evaluations(evaluations, "ap3")["final_verdict"], "degraded"
+        )
 
 
 if __name__ == "__main__":

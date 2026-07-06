@@ -10,7 +10,9 @@
 | 记忆 | 通俗理解 | 解决的问题 | 保存位置 |
 |---|---|---|---|
 | 会话记忆 | 当前这次会议的会议纪要 | 对话太长时，Agent 仍能记住前文 | `session_memories` |
+| Agent 本地会话记忆 | 每个 AP 自己的会议笔记和私有底线 | 隔离各 Agent 的摘要、游标和私有上下文 | `openclaw/workspaces/<agent>/memory/` |
 | 案例记忆 | 过去每次协商的案例档案 | 下次遇到相似情况，可以参考以前怎么处理 | `episodic_memories` |
+| Agent 本地案例记忆 | 每个 AP 自己经历过的状态、动作和效果 | 让 Agent 复用与自身相关的跨 run 经验 | `openclaw/workspaces/<agent>/MEMORY.md` |
 | 语义记忆 | 从多个案例中总结出的经验规律 | 不只记住单个案例，还能判断某类策略通常是否有效 | `semantic_rules` |
 
 此外，系统还会保存完整事件、状态快照和执行记录，用于故障恢复和审计。所有持久化
@@ -32,8 +34,8 @@ logs/agent_memory.sqlite3
 假设系统正在处理一次信道拥塞：
 
 1. **协商开始**：保存当前 AP 状态，作为后续比较的基线。
-2. **Agent 讨论**：完整发言写入事件日志。对话过长时，早期内容被整理成简短摘要，
-   最近几轮仍保留原文。
+2. **Agent 讨论**：公共发言写入共享 transcript，同时复制进每个 Agent 的本地视图；
+   私有 SLA 只写入所属 Agent 的本地视图。每个视图独立压缩，互不共享摘要游标。
 3. **准备提案**：系统查找“拓扑相同、负载和干扰相似”的历史案例，并读取已有经验
    规律，最多各取 3 条放进提案上下文。
 4. **验证与执行**：提案仍必须读取最新状态并经过 Validator；历史经验不能直接替代
@@ -87,11 +89,68 @@ logs/agent_memory.sqlite3
 - 默认保留最近 6 条发言原文；
 - 每个 Agent 回合的上下文默认最多 14,000 字符；
 - 提案参数和 Validator 证据优先保留；
-- 摘要使用确定性 Python 逻辑，不调用额外模型；
+- 基础摘要使用确定性 Python 逻辑；启用配置后可在后台异步精炼旧摘要；
 - 只压缩给模型看的上下文，SQLite 和 JSONL 中的完整原文不会丢失；
 - 摘要和处理游标会持久化，中断恢复后不会从头重复摘要。
 
 对应实现：`src/memory/session_memory.py`。
+
+#### 共享记忆与 Agent 本地记忆
+
+```text
+公共发言 ───────────────> 共享 transcript / shared Session Memory
+   │
+   ├─> AP1 local transcript + AP1 私有 SLA ─> AP1 local memory
+   ├─> AP2 local transcript + AP2 私有 SLA ─> AP2 local memory
+   └─> AP3 local transcript + AP3 私有 SLA ─> AP3 local memory
+
+完整案例 ───────────────> shared Episodic Memory
+   ├─> AP1 的本地状态、动作、效果 ─> AP1 local episode
+   ├─> AP2 的本地状态、动作、效果 ─> AP2 local episode
+   └─> AP3 的本地状态、动作、效果 ─> AP3 local episode
+```
+
+Agent 每次回合只使用自己的 local context。公共讨论仍对所有 Agent 可见，但某个 AP
+的私有 SLA 和本地案例不会进入其他 AP 的上下文。共享记忆用于协调、审计和全局规律；
+本地记忆用于保持各 Agent 的独立视角。
+
+公共 transcript 只有共享事件流这一份事实源，不再复制到三个 Agent 工作区。Agent 的
+`local_transcript` 是纯 private overlay，只允许私有约束和后续本地证据。组装上下文时
+动态合并共享历史与对应 Agent overlay，private SLA 只通过工作区本地区块注入一次。
+
+共享案例明确分为 positive 和 warnings；共享 warning 对提案方和所有投票方可见。本地
+案例使用 `min_quality=0` 召回，因此自身 degraded 历史不会因低质量分消失，而会在
+`MEMORY.md` 中标记为“本地失败警告”。全局与本地 verdict 相反时记录
+`global_local_conflict=true`，决策策略优先保护本地 SLA。缺少局部指标时本地结论固定为
+`inconclusive`，禁止继承全局评价。
+
+本地记忆的运行时权威副本位于各 Agent 工作区：
+
+- `MEMORY.md`：最多 20 条经过真实效果评估的长期案例，OpenClaw 启动时自动读取；
+- `memory/current-session.md`：人和 Agent 可读的早期摘要与私有约束；最近公共对话只在
+  当前回合消息中出现，避免重复占用上下文；
+- `memory/current-session.json`：摘要游标、结构化 memory 和本地 transcript，用于原子更新和恢复。
+
+每次 Agent 回合前，编排器先重新读取该 Agent 的 `current-session.json`，校验 schema、run、
+Agent、游标和 transcript 结构，再原子刷新工作区文件。随后读取有界工作区记忆，以明确的
+“数据而非指令”区块注入该 Agent 回合，保证新随机 session 也一定得到本地记忆，不依赖
+OpenClaw 对非 bootstrap 文件的隐式加载行为。最近公共对话作为独立区块注入，不在本地记忆
+中重复。
+
+工作区 JSON 不能反向覆盖系统持有的 private SLA。自主笔记限制为 4,000 字符并对常见凭据
+模式脱敏；系统刷新只保留“Agent 自主笔记”段。文件不可写时协商降级使用内存和 SQLite，
+并记录 `workspace_memory_failed`，不会因辅助记忆故障中断。SQLite 中的
+`agent_session_memories` 和 `agent_episodic_memories` 是审计、查询和恢复镜像。checkpoint
+同时保存共享与本地状态，恢复时可重新生成工作区文件。
+
+会话记忆与语义记忆使用独立的 LLM 开关。PPIO 默认只处理语义规律和案例叙事；会话
+transcript 可能包含 private SLA，因此默认只做确定性摘要。即使显式开启会话 LLM，
+`PRIVATE_MEMORY` 也不会发送到外部 API。本地三个 overlay 不做 LLM 精炼，公共摘要最多
+精炼一次，避免同一对话重复调用模型。
+
+会话事件携带 `broadcast/proposal/vote/validator/decision/private_constraint` 类型。异步
+精炼保存 source hash、revision、model 和 prompt version；完成时 revision 不一致则丢弃
+过期结果。会话结束后，各工作区最多保留 20 份 `memory/sessions/<run_id>` 摘要归档。
 
 ### 2. 案例记忆：记住以前发生过什么
 
@@ -105,6 +164,24 @@ logs/agent_memory.sqlite3
 - 案例质量分。
 
 案例质量分在 `[0, 1]` 范围内，分为“流水线基础分”和“实际效果修正”两步计算。
+
+案例同时维护结构化生命周期和质量向量：
+
+```text
+draft → awaiting_evaluation → trusted / warning / evaluated / inconclusive → archived
+```
+
+`quality_vector` 分开保存流水线可靠性、效果置信度、指标覆盖率和因果置信度，单一
+`quality_score` 仅保留用于旧接口排序。`episode_fingerprint` 对环境、策略和动作去重，
+避免重复运行人为放大经验权重。案例还保存 feature/evaluation policy 版本。
+
+在线召回分为两条通道：
+
+- `positive`：实际改善的案例，可作为方案参考；
+- `warnings`：实际恶化的案例，只作为失败警告，禁止直接复用动作。
+
+PPIO 为完成评估的案例生成有证据哈希的简短 narrative，说明适用条件、动作、全局效果、
+局部风险和不确定性；结构化事实、效果结论和质量计算仍由确定性模块控制。
 
 第一步根据本次协商流程是否完整可靠计算基础分：
 
@@ -154,6 +231,12 @@ neutral / inconclusive：最终质量分 = Q
 
 对应实现：`src/memory/episodic.py`。
 
+案例环境编码采用 v2 双层签名：`topology_signature` 只包含 AP 集合和有向邻接边，
+用于结构硬门控；`deployment_signature` 进一步包含信道、频段、带宽、PHY、SSID/BSSID
+等部署信息。负载、重传、优先级、当前参数、终端 RSSI/数量和无线电信息作为软特征参与
+混合排序。最终检索分数由环境相似度、案例质量和真实反馈置信度组成；旧 v1 案例通过
+AP/邻接边兼容检查继续可召回，无需停机迁移。
+
 ### 3. 语义记忆：总结“通常什么方法有效”
 
 单个案例可能是偶然结果。语义记忆会把多个有实际效果反馈的案例按“拓扑、场景、
@@ -193,6 +276,15 @@ neutral / inconclusive：最终质量分 = Q
 不参与上述规律置信度计算。
 
 对应实现：`src/memory/semantic.py`。
+
+规律的证据分组、方向、支持数、一致性和置信度仍由确定性代码计算。后台 harvester
+整理新反馈时，可再调用本地 LLM，把结构化统计和有界案例证据总结成“适用条件—动作—
+效果—不确定性”叙述。LLM 结果只作为解释文本，不参与门控和评分；超时、离线或输出为空
+时自动保留确定性规律。归档导致证据不足的旧规律会标为 inactive，不再召回。
+
+会话压缩同样采用两级流水线：关键路径立即生成结构化 digest，保证上下文立刻受控；
+积累到批量阈值后，以 daemon 后台线程调用 LLM 精炼早期多条 digest。协商请求不等待该
+调用，最近六条结构证据始终逐条保留，后台失败也不会影响当前会话或进程退出。
 
 ## 系统怎样判断一个方案是否真的有效
 
@@ -288,7 +380,9 @@ executor 调用使用幂等 key。已经成功的动作不会重复发送；明�
 | `action_journal` | executor 等外部副作用及幂等状态 |
 | `negotiation_projections` | 最近的安全协商 checkpoint |
 | `session_memories` | 当前会话摘要和摘要游标 |
+| `agent_session_memories` | 按 run、Agent 隔离的本地摘要和游标 |
 | `episodic_memories` | 历史协商案例 |
+| `agent_episodic_memories` | 按 Agent 隔离的本地长期案例 |
 | `outcome_evaluations` | 各观察窗口的效果结论 |
 | `semantic_rules` | 跨案例归纳的经验规律 |
 | `maintenance_locks` | 后台整理任务的互斥锁 |
@@ -360,6 +454,17 @@ bash openclaw/serve.sh status
 | 配置 | 默认值 | 作用 |
 |---|---:|---|
 | `MULTIAP_EVENT_DB` | `logs/agent_memory.sqlite3` | 修改数据库路径 |
+| `MULTIAP_MEMORY_LLM` | `1` | 默认启用 LLM 核心语义总结；设为 `0` 时降级为统计摘要 |
+| `MULTIAP_SESSION_MEMORY_LLM` | `0` | 会话摘要外部 LLM，默认关闭以防 private SLA 外传 |
+| `MULTIAP_MEMORY_PPIO_MODEL` | `qwen/qwen3.6-35b-a3b` | PPIO 记忆总结模型 |
+| `MULTIAP_MEMORY_PPIO_BASE_URL` | `https://api.ppio.com/openai/v1` | PPIO OpenAI 兼容 API 地址 |
+| `MULTIAP_AGENT_CONTEXT_BUDGET_CHARS` | 继承共享预算 | 每个 Agent 本地上下文的字符预算 |
+| `MULTIAP_AGENT_CONTEXT_RECENT_TURNS` | 继承共享配置 | 每个 Agent 本地上下文保留的最近原文条数 |
+| `MULTIAP_AGENT_WORKSPACES_ROOT` | `openclaw/workspaces` | Agent 工作区根目录，测试或多部署实例可分别覆盖 |
+| `MULTIAP_AGENT_TOTAL_CONTEXT_CHARS` | `26000` | 每个 Agent 最终本地记忆、对话和任务的统一字符预算 |
+| `MULTIAP_RUN_STALE_SECONDS` | `3600` | Harvester 将无更新 running run 标为 interrupted 的门限 |
+| `MULTIAP_AP_SANDBOX` | `0` | setup 时设为 1，为 AP 启用独立 Docker agent sandbox 和工作区权限边界 |
+| `PPIO_API_KEY` | 无 | PPIO API 密钥；也可放在仓库 `.env`，不会写入记忆或日志 |
 | `MULTIAP_EVENT_STORE` | `1` | 设为 `0` 可关闭事件存储，仅建议调试使用 |
 | `--context-budget-chars` | `14000` | 单回合上下文字符上限，不能低于 2000 |
 | `--context-recent-turns` | `6` | 最近保留原文的发言数，不能低于 2 |
@@ -381,6 +486,10 @@ bash openclaw/serve.sh status
 5. **完整数据可审计**：摘要不会删除原始事件，归档不会物理删除案例。
 6. **确定性和幂等**：摘要、检索、评估和整理同输入应得到同结果；重复执行不应产生
    重复副作用。
+7. **反馈隔离**：评估窗口由数据库租约原子认领；窗口内若完成了另一轮协商，旧窗口
+   标记为 `inconclusive`，不得把后续动作效果归因给先前案例。
+8. **验证后召回**：在线协商默认只注入已经得到确定性执行后反馈的案例；未评估案例
+   仍保留供审计和离线分析。
 
 ## 代码入口与测试
 
@@ -400,9 +509,19 @@ bash openclaw/serve.sh status
 测试位于 `tests/`，覆盖数据库迁移、事件幂等、会话摘要、案例隔离与排序、效果评估、
 回滚、规律归纳、后台整理、恢复边界和健康度统计。
 
+数据库 v13 会为升级前的共享 episode 自动回填 `agent_episodic_memories`。Agent 本地案例
+使用自身 `per_ap` 指标计算局部 verdict 和 quality，不再复制全局方案结论。Harvester 每轮
+写入 `service_heartbeats`，并终结超过门限仍无更新的 run。健康度输出还包括 overdue
+评估、每 Agent 本地案例数、工作区文件状态和服务心跳。
+
+Semantic Rule 可以继续在管理界面审计，但在线召回默认要求至少 5 个证据，且 neutral
+规律不作为可操作提示。最终 Agent 上下文统一按“当前任务 > 最新对话 > 工作区记忆”分配
+预算，避免多个独立预算叠加失控。
+
 当前仍有两个明确限制：
 
 - 案例按拓扑签名严格隔离，新拓扑无法直接复用其他拓扑经验；
-- 会话摘要目前是确定性规则摘要，不是模型生成的自然语言总结。
+- MCP 编排仍使用进程级会话对象，因此同一进程内的 `structured_relay` 被显式串行化；
+  若需要并行协商，应使用独立进程，或进一步把 MCP 工具绑定改造成实例级上下文。
 
 后续研究方向见 `docs/memory-architecture.md`。

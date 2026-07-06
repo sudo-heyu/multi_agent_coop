@@ -1,5 +1,8 @@
 import copy
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from openclaw.mcp import orchestration as orch
 from openclaw.scenes import MOCK_SCENES
@@ -8,7 +11,16 @@ from src.memory.outcome import evaluate_deltas
 
 class PrivateSlaTests(unittest.TestCase):
     def setUp(self):
+        self._workspace_td = tempfile.TemporaryDirectory()
+        self._workspace_patch = patch.dict(
+            os.environ, {"MULTIAP_AGENT_WORKSPACES_ROOT": self._workspace_td.name}
+        )
+        self._workspace_patch.start()
         orch.reset_session(copy.deepcopy(MOCK_SCENES["hidden_sla"]))
+
+    def tearDown(self):
+        self._workspace_patch.stop()
+        self._workspace_td.cleanup()
 
     def test_private_sla_not_in_global_agent_view(self):
         visible = orch.agent_view(orch.session().ap_state)
@@ -21,9 +33,10 @@ class PrivateSlaTests(unittest.TestCase):
             {ap: {"CWmin": 15, "CWmax": 63, "AIFSN": 6} for ap in ("ap1", "ap2", "ap3")},
             1,
         )
-        self.assertIn("deadline_minutes", instruction)
-        self.assertIn("必须反对并给出反提案", instruction)
-        self.assertNotIn("max_latency_ms\": 100", instruction)  # AP1 的私有底线
+        message = orch._build_agent_message("ap3", "", instruction)
+        self.assertNotIn("deadline_minutes", instruction)
+        self.assertEqual(message.count("deadline_minutes"), 1)
+        self.assertNotIn("max_latency_ms\": 100", message)  # AP1 的私有底线
 
 
 class SlaQualityTests(unittest.TestCase):

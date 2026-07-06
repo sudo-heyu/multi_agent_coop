@@ -54,9 +54,9 @@ else
   MODEL_REF="${MULTIAP_MODEL_REF:-ollama/$OLLAMA_MODEL}"
 fi
 echo "[setup] default model = $MODEL_REF  (ppio_key=$([ -n "$PPIO_KEY" ] && echo yes || echo no))"
-"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$PPIO_MODEL_ALIAS" "$PPIO_MODEL_NAME" "$MODEL_REF" "$GATEWAY_PORT" "${AGENTS[@]}" <<'PYEOF'
+"$PY" - "$CFG" "$REPO" "$TOKEN" "$OLLAMA_MODEL" "$PPIO_KEY" "$PPIO_MODEL_ID" "$PPIO_MODEL_ALIAS" "$PPIO_MODEL_NAME" "$MODEL_REF" "$GATEWAY_PORT" "${MULTIAP_AP_SANDBOX:-0}" "${AGENTS[@]}" <<'PYEOF'
 import json, sys
-cfg, repo, token, ollama_model, ppio_key, ppio_model_id, ppio_model_alias, ppio_model_name, model_ref, gateway_port, *agents = sys.argv[1:]
+cfg, repo, token, ollama_model, ppio_key, ppio_model_id, ppio_model_alias, ppio_model_name, model_ref, gateway_port, sandbox_enabled, *agents = sys.argv[1:]
 ppio_ref = f"ppio/{ppio_model_id}"
 providers = {"ollama": {
     "baseUrl": "http://localhost:11434", "apiKey": "ollama-local", "api": "ollama",
@@ -89,6 +89,13 @@ def _agent_entry(a):
              "workspace": f"{repo}/openclaw/workspaces/{a}"}
     if a != "coordinator":
         entry["tools"] = {"deny": coordinator_only}
+        if sandbox_enabled.lower() in {"1", "true", "yes", "on"}:
+            entry["sandbox"] = {
+                "mode": "all", "backend": "docker", "scope": "agent",
+                "workspaceAccess": "rw",
+                "docker": {"network": "none", "readOnlyRoot": True,
+                           "capDrop": ["ALL"]},
+            }
     return entry
 
 conf = {

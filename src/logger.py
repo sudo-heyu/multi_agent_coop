@@ -279,12 +279,35 @@ class SessionLogger:
             budget_chars=budget_chars,
         )
 
+    def save_agent_session_memory(
+        self, agent_id: str, memory: dict[str, Any], summary_text: str,
+        budget_chars: int,
+    ) -> None:
+        if self._event_store is None:
+            return
+        self._event_store.save_agent_session_memory(
+            self.session_id, agent_id, memory=memory,
+            summary_text=summary_text, budget_chars=budget_chars,
+        )
+        self._write(
+            "agent_session_memory_updated", agent=agent_id,
+            summarized_turns=memory.get("summarized_turns", 0),
+            entry_count=len(memory.get("entries") or []), budget_chars=budget_chars,
+        )
+
+    def workspace_memory_failed(self, agent_id: str, error: str) -> None:
+        self._write("workspace_memory_failed", agent=agent_id, error=error)
+
+    def context_manifest(self, agent_id: str, manifest: dict[str, Any]) -> None:
+        self._write("context_manifest", agent=agent_id, **manifest)
+
     def recall_episodes(
         self,
         state: dict[str, Any],
         *,
         limit: int = 3,
         min_quality: float = 0.5,
+        require_evaluation: bool = True,
     ) -> list[dict[str, Any]]:
         if self._event_store is None:
             return []
@@ -295,6 +318,7 @@ class SessionLogger:
             limit=limit,
             min_quality=min_quality,
             exclude_run_id=self.session_id,
+            require_evaluation=require_evaluation,
         )
         self._write(
             "episodic_memory_recalled",
@@ -309,6 +333,55 @@ class SessionLogger:
             ],
         )
         return episodes
+
+    def recall_agent_episodes(
+        self, agent_id: str, state: dict[str, Any], *, limit: int = 3,
+        min_quality: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        if self._event_store is None:
+            return []
+        from .memory import find_agent_episodes
+        episodes = find_agent_episodes(
+            self._event_store, agent_id, state,
+            limit=limit, min_quality=min_quality,
+        )
+        self._write(
+            "agent_episodic_memory_recalled", agent=agent_id,
+            run_ids=[item["run_id"] for item in episodes],
+        )
+        return episodes
+
+    def recall_episode_memory(
+        self, state: dict[str, Any], *, positive_limit: int = 3,
+        warning_limit: int = 2,
+    ) -> dict[str, list[dict[str, Any]]]:
+        if self._event_store is None:
+            return {"positive": [], "warnings": []}
+        from .memory import find_episode_memory
+        result = find_episode_memory(
+            self._event_store, state, positive_limit=positive_limit,
+            warning_limit=warning_limit, exclude_run_id=self.session_id,
+        )
+        self._write(
+            "episodic_memory_channels_recalled",
+            positive_run_ids=[e["run_id"] for e in result["positive"]],
+            warning_run_ids=[e["run_id"] for e in result["warnings"]],
+        )
+        return result
+
+    def load_recalled_memory(
+        self, episode_ids: list[str], warning_ids: list[str], rule_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        if self._event_store is None:
+            return {"positive": [], "warnings": [], "rules": []}
+        positive = [item for episode_id in episode_ids
+                    if (item := self._event_store.get_episode(episode_id=episode_id)) is not None]
+        warnings = [item for episode_id in warning_ids
+                    if (item := self._event_store.get_episode(episode_id=episode_id)) is not None]
+        wanted = set(rule_ids)
+        rules = [r for r in self._event_store.list_rules(include_conflicted=False)
+                 if r["rule_id"] in wanted]
+        return {"positive": positive, "warnings": warnings, "rules": rules}
 
     def schedule_outcome_evaluations(
         self,

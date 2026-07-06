@@ -52,7 +52,8 @@ def consolidate(
     try:
         capacity = _archive_over_capacity(store, config)
         expired = _archive_expired(store, config, now)
-        rules = induce_rules(store)  # 基于存活案例（archived 已排除）重新归纳
+        # 仅后台整理调用可选 LLM，协商关键路径从不等待模型。
+        rules = induce_rules(store, use_llm=True)  # archived 已排除
         conflicted = _flag_conflicted_rules(store, rules, config)
         return {
             "status": "done",
@@ -72,7 +73,7 @@ def _archive_over_capacity(store: EventStore, config: ConsolidationConfig) -> li
     for topology, count in counts.items():
         if count <= config.max_per_topology:
             continue
-        episodes = store.list_episodes(topology_signature=topology, limit=1000)
+        episodes = store.list_episodes(topology_signature=topology, limit=100_000)
         # list_episodes 已按 quality_score DESC, created_at DESC 排序：保留前 N。
         losers = episodes[config.max_per_topology:]
         run_ids = [e["run_id"] for e in losers]
@@ -88,7 +89,7 @@ def _archive_expired(
     """归档年龄超限且质量低于保留下限的案例（老且不够好的先淘汰）。"""
     cutoff = now.timestamp() - config.max_age_days * 86400.0
     stale: list[str] = []
-    for episode in store.list_episodes(limit=1000):
+    for episode in store.list_episodes(limit=100_000):
         if episode["quality_score"] >= config.min_quality_keep:
             continue
         created = _parse_ts(episode["created_at"]).timestamp()
