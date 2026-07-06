@@ -172,10 +172,18 @@ def format_rule(rule: dict[str, Any]) -> str:
     action = "，".join(
         f"{ap}:{params}" for ap, params in (rule.get("action_summary") or {}).items()
     )
+    if rule.get("trust") is not None:
+        verified = rule.get("last_verified_at")
+        trust_text = (
+            f"，信任={rule['trust']:.2f}，最近验证="
+            f"{str(verified)[:10] if verified else '未再验证'}"
+        )
+    else:
+        trust_text = ""
     evidence_stats = (
         f"策略={rule.get('strategy')}，{rule['support']} 个带真实反馈案例中"
         f"倾向{verdict_map.get(rule['dominant_verdict'], rule['dominant_verdict'])}"
-        f"（分布 {dist}，一致性={rule['consistency']}，置信度={rule['confidence']}），"
+        f"（分布 {dist}，一致性={rule['consistency']}，置信度={rule['confidence']}{trust_text}），"
         f"典型做法：{action or '（无参数模式）'}"
     )
     narrative = str(rule.get("llm_summary") or "").strip()

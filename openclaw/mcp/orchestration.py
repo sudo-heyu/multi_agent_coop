@@ -366,18 +366,21 @@ def _build_agent_message(
             evaluation = item.get("evaluation") or {}
             lines.append(
                 f"- 策略={item.get('strategy')}，全局结果=degraded，"
-                f"置信度={evaluation.get('final_confidence', 0)}，"
+                f"置信度={evaluation.get('final_confidence', 0)}"
+                + _trust_suffix(item) + "，"
                 f"动作={json.dumps(item.get('decision'), ensure_ascii=False)}"
             )
         warning_block = "\n".join(lines) + "\n\n"
     shared_block = ""
     if shared_positive or shared_rules:
-        lines = ["【共享经验（低于实时状态、本地 SLA 和失败警告）】"]
+        lines = ["【共享经验假设（待检验，低于实时状态、本地 SLA 和失败警告；"
+                 "信任分衰减或前提不符时放弃引用）】"]
         for item in (shared_positive or [])[:3]:
             lines.append(
                 f"- 正例：策略={item.get('strategy')}，动作="
                 f"{json.dumps(item.get('decision'), ensure_ascii=False)}，"
                 f"总结={item.get('case_narrative') or '无'}"
+                + _trust_suffix(item)
             )
         if shared_rules:
             from src.memory import format_rule
@@ -860,6 +863,15 @@ def broadcast_instruction(ap_id: str) -> str:
     )
 
 
+def _trust_suffix(memory: dict) -> str:
+    """反思字段展示：信任分 + 最近验证时间（反思关闭时记忆无 trust 字段，返回空）。"""
+    if memory.get("trust") is None:
+        return ""
+    verified = memory.get("last_verified_at")
+    verified_text = str(verified)[:10] if verified else "未再验证"
+    return f"，信任={memory['trust']:.2f}，最近验证={verified_text}"
+
+
 def propose_instruction(
     proposer_id: str,
     strategy_hint: str | None = None,
@@ -894,7 +906,9 @@ def propose_instruction(
     memory_hint = ""
     if recalled_episodes:
         lines = [
-            "【历史案例（仅作参考，必须按当前最新状态重新调用工具验算）】"
+            "【历史案例假设（每条是待检验的假设，不是事实：前提成立才可参考；"
+            "前提=当前状态与其相似、且信任分未衰减；必须按最新状态重新调用工具验算，"
+            "验算不通过即放弃该假设）】"
         ]
         for item in recalled_episodes[:3]:
             metrics = item.get("metrics") or {}
@@ -905,16 +919,18 @@ def propose_instruction(
                     "neutral": "无明显变化", "inconclusive": "数据不足",
                 }
                 feedback = (
-                    f"执行后评估={verdict_map.get(evaluation['final_verdict'], evaluation['final_verdict'])}"
-                    f"(置信度={evaluation.get('final_confidence', 0)})"
+                    f"预测：复用该动作应得到"
+                    f"{verdict_map.get(evaluation['final_verdict'], evaluation['final_verdict'])}"
+                    f"(历史置信度={evaluation.get('final_confidence', 0)})"
                 )
             else:
                 feedback = f"实测反馈={'可用' if metrics.get('available') else '尚无'}"
             lines.append(
-                f"- 相似度={item.get('similarity', 0):.3f}，"
-                f"质量={item.get('quality_score', 0):.2f}，"
+                f"- 前提：相似度={item.get('similarity', 0):.3f}，"
+                f"质量={item.get('quality_score', 0):.2f}"
+                + _trust_suffix(item) + "；"
                 f"策略={item.get('strategy')}，结果={item.get('outcome')}，"
-                f"决策={json.dumps(item.get('decision'), ensure_ascii=False)}，"
+                f"动作={json.dumps(item.get('decision'), ensure_ascii=False)}；"
                 f"{feedback}"
             )
         memory_hint = "\n".join(lines) + "\n\n"
@@ -926,7 +942,8 @@ def propose_instruction(
             lines.append(
                 f"- 策略={item.get('strategy')}，历史动作="
                 f"{json.dumps(item.get('decision'), ensure_ascii=False)}，"
-                f"实际结果=恶化（置信度={evaluation.get('final_confidence', 0)}），"
+                f"实际结果=恶化（置信度={evaluation.get('final_confidence', 0)}）"
+                + _trust_suffix(item) + "，"
                 f"案例总结={item.get('case_narrative') or '无'}"
             )
         warning_hint = "\n".join(lines) + "\n\n"
@@ -1141,6 +1158,21 @@ def run_propose(
         proposer_id, strategy_hint, _SESSION.recalled_episodes, _SESSION.recalled_rules,
         _SESSION.recalled_warnings,
     )
+    if logger is not None:
+        # R3：注入即记账——本次提案依赖了哪些记忆、注入时信任分与可证伪预测。
+        conclusive_local = [
+            item for item in _SESSION.agent_recalled_episodes.get(proposer_id.lower(), [])
+            if (item.get("evaluation") or {}).get("final_verdict")
+            in {"improved", "neutral", "degraded"}
+        ][:20]
+        logger.memory_reliance(
+            proposer_id,
+            episodes=_SESSION.recalled_episodes[:3],
+            warnings=_SESSION.recalled_warnings[:2],
+            rules=_SESSION.recalled_rules[:3],
+            agent_episodes=[(proposer_id.lower(), item) for item in conclusive_local],
+            proposal_num=_SESSION.proposal_num + 1,
+        )
     reply, _ = _run_agent_turn(
         proposer_id,
         3,

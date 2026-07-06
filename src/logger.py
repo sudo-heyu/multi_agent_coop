@@ -369,6 +369,46 @@ class SessionLogger:
         )
         return result
 
+    def memory_reliance(
+        self, proposer: str, *, episodes=(), warnings=(), rules=(),
+        agent_episodes=(), proposal_num: int | None = None,
+    ) -> None:
+        """R3：把本次提案实际依赖的记忆（含注入时信任分与预测）落入事件流。
+
+        predicted 字段是该记忆的可证伪预测（案例=历史 verdict，规律=主导 verdict），
+        供执行后评估比对，判定证实或证伪（矛盾账本）。
+        """
+        entries = []
+        for item in episodes:
+            entries.append({
+                "memory_kind": "episode", "memory_key": item.get("run_id"),
+                "role": "positive", "trust": item.get("trust"),
+                "predicted": (item.get("evaluation") or {}).get("final_verdict"),
+            })
+        for item in warnings:
+            entries.append({
+                "memory_kind": "episode", "memory_key": item.get("run_id"),
+                "role": "warning", "trust": item.get("trust"),
+                "predicted": "degraded",
+            })
+        for rule in rules:
+            entries.append({
+                "memory_kind": "rule", "memory_key": rule.get("rule_id"),
+                "role": "rule", "trust": rule.get("trust"),
+                "predicted": rule.get("dominant_verdict"),
+            })
+        for agent_id, item in agent_episodes:
+            entries.append({
+                "memory_kind": "agent_episode",
+                "memory_key": f"{item.get('run_id')}:{agent_id}",
+                "role": "agent_local", "trust": item.get("trust"),
+                "predicted": (item.get("evaluation") or {}).get("final_verdict"),
+            })
+        self._write(
+            "memory_reliance", proposer=proposer,
+            proposal_num=proposal_num, entries=entries,
+        )
+
     def load_recalled_memory(
         self, episode_ids: list[str], warning_ids: list[str], rule_ids: list[str],
     ) -> dict[str, list[dict[str, Any]]]:

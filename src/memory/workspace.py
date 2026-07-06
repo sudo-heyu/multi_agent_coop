@@ -132,7 +132,9 @@ def save_long_term_memory(agent_id: str, episodes: list[dict[str, Any]]) -> None
         pass
     lines = [
         f"# {agent_id.upper()} 本地长期记忆", "",
-        "> 本文件由该 Agent 的真实执行反馈维护。历史经验仅供参考，必须重新读取实时状态并验算。",
+        "> 本文件由该 Agent 的真实执行反馈维护。每条案例是待检验的假设而非事实：",
+        "> 信任分随时间衰减、随矛盾反馈下降；信任低或前提不符时必须放弃引用，",
+        "> 且任何情况下都要重新读取实时状态并验算。",
         "",
     ]
     conclusive = [
@@ -142,6 +144,7 @@ def save_long_term_memory(agent_id: str, episodes: list[dict[str, Any]]) -> None
     ][:20]
     if not conclusive:
         lines.append("暂无经过效果评估的本地案例。")
+    from .reflection import enabled as reflection_enabled, memory_trust
     for item in conclusive:
         evaluation = item.get("evaluation") or {}
         verdict = evaluation.get("final_verdict")
@@ -155,8 +158,16 @@ def save_long_term_memory(agent_id: str, episodes: list[dict[str, Any]]) -> None
             f"（置信度 {evaluation.get('final_confidence', 0)}）",
             f"- 全局/本地关系：全局={evaluation.get('global_verdict', '未知')}，"
             f"冲突={'是，本地 SLA 风险优先' if evaluation.get('global_local_conflict') else '否'}",
-            f"- 案例质量：{item.get('quality_score', 0):.4f}", "",
+            f"- 案例质量：{item.get('quality_score', 0):.4f}",
         ])
+        if reflection_enabled():
+            trust = item["trust"] if item.get("trust") is not None else memory_trust(item)
+            verified = item.get("last_verified_at")
+            lines.append(
+                f"- 信任：{trust:.2f}（矛盾 {int(item.get('contradictions') or 0)} 笔，"
+                f"最近验证 {str(verified)[:10] if verified else '无'}）"
+            )
+        lines.append("")
     autonomous_notes = _SENSITIVE_NOTE.sub(r"\1=[REDACTED]", autonomous_notes)
     autonomous_notes = autonomous_notes[:MAX_AUTONOMOUS_NOTES_CHARS]
     lines.extend([

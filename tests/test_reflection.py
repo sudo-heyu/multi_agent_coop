@@ -261,6 +261,44 @@ class RecallGatingTests(ContradictionLedgerTests):
         self.assertEqual([item["run_id"] for item in episodes], ["run-a"])
         self.assertNotIn("trust", episodes[0])
 
+    def test_memory_reliance_event_recorded(self):
+        """R3：注入即记账，show <run_id> 可审计依赖了哪些记忆及其信任分。"""
+        from src.logger import SessionLogger
+        import src.logger as logger_module
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(logger_module, "LOG_DIR", root / "logs"), patch.object(
+                logger_module, "STATE_LOG_DIR", root / "logs" / "state"
+            ):
+                logger = SessionLogger(
+                    session_id="reliance-run", verbose=False, mode="mock",
+                    event_store=self.store,
+                )
+                logger.session_start("openclaw", "edca", copy.deepcopy(self.baseline))
+                logger.memory_reliance(
+                    "ap1",
+                    episodes=[{"run_id": "run-a", "trust": 0.8,
+                               "evaluation": {"final_verdict": "improved"}}],
+                    warnings=[{"run_id": "run-w", "trust": 0.6}],
+                    rules=[{"rule_id": "rule-1", "trust": 0.7,
+                            "dominant_verdict": "improved"}],
+                    agent_episodes=[("ap1", {"run_id": "run-a", "trust": 0.8,
+                                             "evaluation": {"final_verdict": "improved"}})],
+                    proposal_num=1,
+                )
+        events = self.store.load_events("reliance-run")
+        reliance = [e for e in events if e["event"] == "memory_reliance"]
+        self.assertEqual(len(reliance), 1)
+        entries = reliance[0]["entries"]
+        self.assertEqual(len(entries), 4)
+        by_role = {entry["role"]: entry for entry in entries}
+        self.assertEqual(by_role["positive"]["memory_key"], "run-a")
+        self.assertEqual(by_role["positive"]["predicted"], "improved")
+        self.assertEqual(by_role["positive"]["trust"], 0.8)
+        self.assertEqual(by_role["warning"]["predicted"], "degraded")
+        self.assertEqual(by_role["rule"]["memory_key"], "rule-1")
+        self.assertEqual(by_role["agent_local"]["memory_key"], "run-a:ap1")
+
     def test_gate_thousand_memories_under_latency_budget(self):
         now = datetime.now(timezone.utc).isoformat()
         memories = [{
@@ -272,6 +310,62 @@ class RecallGatingTests(ContradictionLedgerTests):
         elapsed = time.perf_counter() - started
         self.assertTrue(gated)
         self.assertLess(elapsed, 0.1)
+
+
+class HypothesisInjectionTests(unittest.TestCase):
+    """R3：注入格式携带信任分/最近验证，记忆以待检验假设呈现。"""
+
+    def test_agent_message_shows_trust_and_hypothesis_wording(self):
+        from openclaw.mcp import orchestration as orch
+        memory = {
+            "strategy": "co_edca", "decision": {"ap1": {"CWmin": 7}},
+            "case_narrative": None, "trust": 0.72,
+            "last_verified_at": "2026-07-01T00:00:00+00:00",
+            "evaluation": {"final_confidence": 0.9},
+        }
+        text = orch._build_agent_message(
+            "ap1", "", "请提案", shared_positive=[memory], shared_warnings=[memory],
+        )
+        self.assertIn("共享经验假设", text)
+        self.assertIn("信任=0.72", text)
+        self.assertIn("最近验证=2026-07-01", text)
+
+    def test_agent_message_without_trust_keeps_legacy_format(self):
+        from openclaw.mcp import orchestration as orch
+        memory = {"strategy": "co_edca", "decision": {"ap1": {"CWmin": 7}},
+                  "case_narrative": None, "evaluation": {"final_confidence": 0.9}}
+        text = orch._build_agent_message("ap1", "", "请提案", shared_positive=[memory])
+        self.assertNotIn("信任=", text)
+
+    def test_format_rule_includes_trust(self):
+        from src.memory import format_rule
+        rule = {
+            "strategy": "co_edca", "support": 6, "consistency": 0.9,
+            "confidence": 0.85, "dominant_verdict": "improved",
+            "verdict_counts": {"improved": 6}, "action_summary": {},
+            "trust": 0.61, "last_verified_at": None,
+        }
+        text = format_rule(rule)
+        self.assertIn("信任=0.61", text)
+        self.assertIn("未再验证", text)
+
+    def test_memory_md_renders_trust_line(self):
+        from src.memory.workspace import save_long_term_memory
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ, {"MULTIAP_AGENT_WORKSPACES_ROOT": td}
+        ):
+            save_long_term_memory("ap1", [{
+                "run_id": "r1", "scene": "edca", "strategy": "co_edca",
+                "local_state": {}, "local_decision": {"CWmin": 7},
+                "outcome": "success", "quality_score": 0.9,
+                "evaluation": {"final_verdict": "improved", "final_confidence": 0.9},
+                "trust": 0.83, "contradictions": 1,
+                "last_verified_at": "2026-07-05T00:00:00+00:00",
+                "created_at": "2026-07-01T00:00:00+00:00",
+            }])
+            content = (Path(td) / "ap1" / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("待检验的假设", content)
+        self.assertIn("信任：0.83（矛盾 1 笔，最近验证 2026-07-05）", content)
 
 
 if __name__ == "__main__":
