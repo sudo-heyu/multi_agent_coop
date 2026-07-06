@@ -94,7 +94,8 @@ def find_matching_rules(
                 continue
             rule = {**rule, "applicability_similarity": similarity}
         applicable.append(rule)
-    return applicable[: max(1, int(limit))]
+    from .reflection import gate_memories
+    return gate_memories(applicable)[: max(1, int(limit))]
 
 
 def _build_rule(

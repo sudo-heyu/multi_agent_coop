@@ -154,7 +154,8 @@ def find_agent_episodes(
             if (item.get("evaluation") or {}).get("final_verdict")
             in {"improved", "neutral", "degraded"}
         ]
-    return candidates[:max(1, min(int(limit), 20))]
+    from .reflection import gate_memories
+    return gate_memories(candidates)[:max(1, min(int(limit), 20))]
 
 
 def find_similar_episodes(
@@ -192,7 +193,8 @@ def find_similar_episodes(
                        "similarity_components": components,
                        "retrieval_score": round(retrieval_score, 6)})
     ranked.sort(key=lambda item: (item["retrieval_score"], item["similarity"]), reverse=True)
-    return ranked[: max(1, min(int(limit), 20))]
+    from .reflection import gate_memories
+    return gate_memories(ranked)[: max(1, min(int(limit), 20))]
 
 
 def find_episode_memory(

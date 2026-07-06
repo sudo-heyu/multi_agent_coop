@@ -1,18 +1,25 @@
 import copy
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
 from openclaw.scenes import MOCK_SCENES
-from src.memory import materialize_episode, memory_trust, should_quarantine, trust_score
+from src.memory import (
+    find_agent_episodes, find_episode_memory, find_matching_rules,
+    find_similar_episodes, materialize_episode, memory_trust, should_quarantine,
+    trust_score,
+)
 from src.memory.reflection import (
     CONTRADICTION_FACTOR, FRESHNESS_FLOOR, QUARANTINE_CONTRADICTIONS,
     QUARANTINE_TRUST_THRESHOLD, TRUST_HALF_LIFE_SECONDS,
-    base_confidence, contradiction_penalty, freshness, memory_age_seconds,
+    base_confidence, contradiction_penalty, freshness, gate_memories,
+    memory_age_seconds,
 )
 from src.memory.semantic import induce_rules
 from src.persistence import EventStore
@@ -120,12 +127,13 @@ class ContradictionLedgerTests(unittest.TestCase):
         self.store.append_event(run_id, "session_end", {"outcome": "success", "total_rounds": 1})
         self.store.complete_run(run_id, "success")
         materialize_episode(self.store, run_id)
-        self.store.update_episode_evaluation(
-            run_id,
-            evaluation={"final_verdict": verdict, "final_confidence": confidence,
-                        "needs_rollback": False},
-            quality_score=0.9,
-        )
+        evaluation = {"final_verdict": verdict, "final_confidence": confidence,
+                      "needs_rollback": False}
+        self.store.update_episode_evaluation(run_id, evaluation=evaluation, quality_score=0.9)
+        for agent in ("ap1", "ap2", "ap3"):
+            self.store.update_agent_episode_evaluation(
+                run_id, agent, evaluation=evaluation, quality_score=0.9,
+            )
 
     def test_record_contradiction_increments_and_is_idempotent(self):
         count = self.store.record_contradiction(
@@ -196,6 +204,74 @@ class ContradictionLedgerTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             self.store._memory_where("agent_episode", "missing-agent-part")
+
+
+class RecallGatingTests(ContradictionLedgerTests):
+    """R2：隔离区记忆在所有召回路径上零注入；R6：门控为纯内存计算。"""
+
+    def test_quarantined_episode_not_recalled(self):
+        state = copy.deepcopy(self.baseline)
+        self.assertTrue(find_similar_episodes(self.store, state, require_evaluation=True))
+        self.assertTrue(find_episode_memory(self.store, state)["positive"])
+
+        self.store.set_memory_quarantined("episode", "run-a", True)
+        self.assertEqual(
+            find_similar_episodes(self.store, state, require_evaluation=True), []
+        )
+        memory = find_episode_memory(self.store, state)
+        self.assertEqual(memory["positive"], [])
+        self.assertEqual(memory["warnings"], [])
+
+    def test_quarantined_agent_episode_not_recalled(self):
+        state = copy.deepcopy(self.baseline)
+        self.assertTrue(find_agent_episodes(self.store, "ap1", state))
+        self.store.set_memory_quarantined("agent_episode", "run-a:ap1", True)
+        self.assertEqual(find_agent_episodes(self.store, "ap1", state), [])
+
+    def test_quarantined_rule_not_matched(self):
+        for index in range(2, 7):
+            self._episode(f"run-{index}", "improved")
+        rules = induce_rules(self.store, min_support=1)
+        state = copy.deepcopy(self.baseline)
+        matched = find_matching_rules(self.store, state, min_confidence=0.0)
+        self.assertTrue(matched)
+        self.store.set_memory_quarantined("rule", rules[0]["rule_id"], True)
+        self.assertEqual(find_matching_rules(self.store, state, min_confidence=0.0), [])
+
+    def test_recalled_memories_carry_trust(self):
+        state = copy.deepcopy(self.baseline)
+        episodes = find_similar_episodes(self.store, state, require_evaluation=True)
+        self.assertIn("trust", episodes[0])
+        self.assertGreater(episodes[0]["trust"], 0.0)
+
+    def test_stale_memory_gated_out(self):
+        stale = {
+            "quality_score": 0.9,
+            "evaluation": {"final_confidence": 0.9},
+            "created_at": "2020-01-01T00:00:00+00:00",
+            "contradictions": 0,
+        }
+        self.assertEqual(gate_memories([stale]), [])
+
+    def test_reflection_switch_restores_legacy_behavior(self):
+        self.store.set_memory_quarantined("episode", "run-a", True)
+        state = copy.deepcopy(self.baseline)
+        with patch.dict(os.environ, {"MULTIAP_REFLECTION": "0"}):
+            episodes = find_similar_episodes(self.store, state, require_evaluation=True)
+        self.assertEqual([item["run_id"] for item in episodes], ["run-a"])
+        self.assertNotIn("trust", episodes[0])
+
+    def test_gate_thousand_memories_under_latency_budget(self):
+        now = datetime.now(timezone.utc).isoformat()
+        memories = [{
+            "quality_score": 0.8, "evaluation": {"final_confidence": 0.8},
+            "created_at": now, "contradictions": index % 3, "quarantined": index % 5 == 0,
+        } for index in range(1000)]
+        started = time.perf_counter()
+        gated = gate_memories(memories)
+        elapsed = time.perf_counter() - started
+        self.assertTrue(gated)
+        self.assertLess(elapsed, 0.1)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,19 @@ def main() -> None:
                                 help="每个 Agent 最多读取的本地案例数")
     sub.add_parser("calibrate", help="评估阈值校准诊断：score/verdict 分布与摇摆率")
     sub.add_parser("health", help="记忆系统健康度快照（案例/评估/规律/runs）")
+    quarantine = sub.add_parser("quarantine", help="反思隔离区：列出被停止注入的记忆")
+    quarantine.add_argument("--set", dest="set_key", metavar="KIND:KEY",
+                            help="手动隔离一条记忆，如 episode:run-42 / rule:<rule_id> "
+                                 "/ agent_episode:<run_id>:<agent>")
+    revalidate = sub.add_parser(
+        "revalidate", help="再验证解除隔离：确认记忆仍适用后恢复注入并重置时效锚点",
+    )
+    revalidate.add_argument("memory_kind", choices=["episode", "agent_episode", "rule"])
+    revalidate.add_argument("memory_key")
+    contradictions_cmd = sub.add_parser("contradictions", help="查看矛盾账本（不可删除，仅审计）")
+    contradictions_cmd.add_argument("--kind", choices=["episode", "agent_episode", "rule"])
+    contradictions_cmd.add_argument("--key")
+    contradictions_cmd.add_argument("--limit", type=int, default=100)
     args = parser.parse_args()
 
     store = EventStore(Path(args.db))
@@ -161,6 +174,24 @@ def main() -> None:
                 agents=agents,
                 topology_signature=args.topology_signature,
                 limit=args.limit,
+            )
+        elif args.command == "quarantine":
+            if args.set_key:
+                kind, _, key = args.set_key.partition(":")
+                if kind not in {"episode", "agent_episode", "rule"} or not key:
+                    raise SystemExit(f"格式应为 KIND:KEY，收到: {args.set_key}")
+                store.set_memory_quarantined(kind, key, True)
+            result = store.list_quarantined_memories()
+        elif args.command == "revalidate":
+            store.set_memory_quarantined(args.memory_kind, args.memory_key, False)
+            store.mark_memory_verified(args.memory_kind, args.memory_key)
+            result = {
+                "memory_kind": args.memory_kind, "memory_key": args.memory_key,
+                "quarantined": False, "revalidated": True,
+            }
+        elif args.command == "contradictions":
+            result = store.list_contradictions(
+                memory_kind=args.kind, memory_key=args.key, limit=args.limit,
             )
         elif args.command == "calibrate":
             result = evaluation_diagnostics(store)

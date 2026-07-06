@@ -108,3 +108,32 @@ def should_quarantine(trust: float, contradictions: int) -> bool:
     if contradictions >= QUARANTINE_CONTRADICTIONS:
         return True
     return trust < QUARANTINE_TRUST_THRESHOLD
+
+
+def enabled() -> bool:
+    """反思门控总开关：MULTIAP_REFLECTION=0 时召回行为回退到 v15 版本。"""
+    return os.environ.get("MULTIAP_REFLECTION", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
+def gate_memories(
+    memories: list[dict[str, Any]], *, now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """召回门控：剔除隔离区记忆和信任跌破隔离阈值的记忆，并附加信任分。
+
+    纯内存计算，不触发额外 SQL / LLM；排序仍由召回方的既有打分决定，
+    信任分附加在 "trust" 字段供假设化注入展示。反思关闭时原样返回。
+    """
+    if not enabled():
+        return memories
+    reference = now or datetime.now(timezone.utc)
+    gated = []
+    for memory in memories:
+        if memory.get("quarantined"):
+            continue
+        trust = memory_trust(memory, now=reference)
+        if trust < QUARANTINE_TRUST_THRESHOLD:
+            continue
+        gated.append({**memory, "trust": trust})
+    return gated
