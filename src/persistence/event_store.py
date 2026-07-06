@@ -911,9 +911,21 @@ class EventStore:
                     execution_json=excluded.execution_json,
                     observed_state_json=excluded.observed_state_json,
                     metrics_json=excluded.metrics_json,
-                    quality_score=excluded.quality_score,
-                    lifecycle=excluded.lifecycle,
-                    quality_vector_json=excluded.quality_vector_json,
+                    quality_score=CASE
+                        WHEN episodic_memories.evaluation_json IS NOT NULL
+                        THEN episodic_memories.quality_score
+                        ELSE excluded.quality_score
+                    END,
+                    lifecycle=CASE
+                        WHEN episodic_memories.evaluation_json IS NOT NULL
+                        THEN episodic_memories.lifecycle
+                        ELSE excluded.lifecycle
+                    END,
+                    quality_vector_json=CASE
+                        WHEN episodic_memories.evaluation_json IS NOT NULL
+                        THEN episodic_memories.quality_vector_json
+                        ELSE excluded.quality_vector_json
+                    END,
                     episode_fingerprint=excluded.episode_fingerprint,
                     feature_schema_version=excluded.feature_schema_version,
                     evaluation_policy_version=excluded.evaluation_policy_version,
@@ -970,8 +982,18 @@ class EventStore:
                     scene=excluded.scene, strategy=excluded.strategy,
                     local_state_json=excluded.local_state_json,
                     local_decision_json=excluded.local_decision_json,
-                    outcome=excluded.outcome, quality_score=excluded.quality_score,
-                    evaluation_json=excluded.evaluation_json, updated_at=excluded.updated_at
+                    outcome=excluded.outcome,
+                    quality_score=CASE
+                        WHEN agent_episodic_memories.evaluation_json IS NOT NULL
+                             AND excluded.evaluation_json IS NULL
+                        THEN agent_episodic_memories.quality_score
+                        ELSE excluded.quality_score
+                    END,
+                    evaluation_json=COALESCE(
+                        excluded.evaluation_json,
+                        agent_episodic_memories.evaluation_json
+                    ),
+                    updated_at=excluded.updated_at
                 """,
                 (
                     episode["run_id"], episode["agent_id"], episode["topology_signature"],

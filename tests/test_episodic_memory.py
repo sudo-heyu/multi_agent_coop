@@ -50,6 +50,37 @@ class EpisodicMemoryTests(unittest.TestCase):
         self.assertNotEqual(ap1[0]["local_state"], ap2[0]["local_state"])
         self.assertEqual(ap1[0]["local_decision"], {"CWmin": 7, "CWmax": 31, "AIFSN": 3})
 
+    def test_rematerialization_preserves_existing_evaluation_feedback(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "repeat-materialize.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(store, "repeat-case", state)
+            store.update_episode_evaluation(
+                "repeat-case",
+                evaluation={"final_verdict": "improved", "final_confidence": 0.9},
+                quality_score=0.95,
+                quality_vector={"outcome_confidence": 0.9},
+                lifecycle="trusted",
+            )
+            store.update_agent_episode_evaluation(
+                "repeat-case", "ap1",
+                evaluation={"final_verdict": "improved", "final_confidence": 0.8},
+                quality_score=0.91,
+            )
+
+            materialize_episode(store, "repeat-case")
+
+            episode = store.get_episode(run_id="repeat-case")
+            ap1 = store.list_agent_episodes("ap1", min_quality=0.0)[0]
+            store.close()
+
+        self.assertEqual(episode["evaluation"]["final_verdict"], "improved")
+        self.assertEqual(episode["quality_score"], 0.95)
+        self.assertEqual(episode["lifecycle"], "trusted")
+        self.assertEqual(episode["quality_vector"]["outcome_confidence"], 0.9)
+        self.assertEqual(ap1["evaluation"]["final_verdict"], "improved")
+        self.assertEqual(ap1["quality_score"], 0.91)
+
     def test_opening_store_backfills_legacy_shared_episodes(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "backfill.sqlite3"

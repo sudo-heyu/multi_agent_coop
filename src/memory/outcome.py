@@ -487,7 +487,7 @@ def _update_case_narrative(
 ) -> None:
     from .llm_backend import enabled, model_name, summarize
     evidence = {"scene": episode.get("scene"), "strategy": episode.get("strategy"),
-                "initial_state": episode.get("initial_state"),
+                "initial_state": _redact_private_evidence(episode.get("initial_state")),
                 "decision": episode.get("decision"), "evaluation": summary,
                 "quality_vector": quality_vector}
     raw = json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -511,6 +511,21 @@ def _update_case_narrative(
         store.update_episode_narrative(
             run_id, narrative=None, model=model_name(), evidence_hash=digest, status="failed"
         )
+
+
+def _redact_private_evidence(value: Any) -> Any:
+    """Remove private-only fields before evidence leaves the process for LLM narration."""
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if key_text == "private_sla" or key_text.startswith("private_"):
+                continue
+            redacted[key] = _redact_private_evidence(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_private_evidence(item) for item in value]
+    return value
 
 
 def summarize_agent_evaluations(

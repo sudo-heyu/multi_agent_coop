@@ -17,6 +17,7 @@ from src.memory import (
     induce_rules,
     summarize_run_evaluations,
 )
+from src.memory.workspace import AGENT_IDS, sync_long_term_memories
 from openclaw.scenes import _parse_executor_endpoints
 
 
@@ -57,6 +58,16 @@ def main() -> None:
     consolidate_cmd = sub.add_parser("consolidate", help="L6 整理：容量/过期归档 + 重归纳 + 冲突标记")
     consolidate_cmd.add_argument("--max-per-topology", type=int, default=50)
     consolidate_cmd.add_argument("--max-age-days", type=float, default=90.0)
+    sync_workspace = sub.add_parser(
+        "sync-workspace-memory",
+        help="从 SQLite 刷新 openclaw/workspaces/<agent>/MEMORY.md",
+    )
+    sync_workspace.add_argument("--agent", choices=AGENT_IDS, action="append",
+                                help="只同步指定 Agent；可重复传入")
+    sync_workspace.add_argument("--topology-signature",
+                                help="只同步指定拓扑签名的本地案例")
+    sync_workspace.add_argument("--limit", type=int, default=20,
+                                help="每个 Agent 最多读取的本地案例数")
     sub.add_parser("calibrate", help="评估阈值校准诊断：score/verdict 分布与摇摆率")
     sub.add_parser("health", help="记忆系统健康度快照（案例/评估/规律/runs）")
     args = parser.parse_args()
@@ -142,6 +153,14 @@ def main() -> None:
                     max_per_topology=args.max_per_topology,
                     max_age_days=args.max_age_days,
                 ),
+            )
+        elif args.command == "sync-workspace-memory":
+            agents = tuple(args.agent) if args.agent else AGENT_IDS
+            result = sync_long_term_memories(
+                store,
+                agents=agents,
+                topology_signature=args.topology_signature,
+                limit=args.limit,
             )
         elif args.command == "calibrate":
             result = evaluation_diagnostics(store)

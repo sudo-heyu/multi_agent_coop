@@ -19,6 +19,10 @@ AGENT_IDS = ("ap1", "ap2", "ap3")
 SESSION_SCHEMA_VERSION = 1
 MAX_AUTONOMOUS_NOTES_CHARS = 4_000
 MAX_PROMPT_MEMORY_CHARS = 8_000
+MAX_CURRENT_SESSION_JSON_BYTES = 256_000
+MAX_LOCAL_TRANSCRIPT_TURNS = 10_000
+MAX_LOCAL_TRANSCRIPT_CONTENT_CHARS = 20_000
+MAX_LOCAL_TRANSCRIPT_TOTAL_CHARS = 120_000
 _SENSITIVE_NOTE = re.compile(
     r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*\S+"
 )
@@ -79,6 +83,8 @@ def save_current_session(
 def load_current_session(agent_id: str, *, run_id: str) -> dict[str, Any] | None:
     path = workspace(agent_id) / "memory" / "current-session.json"
     try:
+        if path.stat().st_size > MAX_CURRENT_SESSION_JSON_BYTES:
+            return None
         value = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
@@ -91,17 +97,24 @@ def load_current_session(agent_id: str, *, run_id: str) -> dict[str, Any] | None
     transcript, memory = value.get("local_transcript"), value.get("memory")
     if not isinstance(transcript, list) or not isinstance(memory, dict):
         return None
-    if len(transcript) > 10_000:
+    if len(transcript) > MAX_LOCAL_TRANSCRIPT_TURNS:
         return None
     cursor = memory.get("summarized_turns", 0)
     if not isinstance(value.get("memory_revision"), int) or value["memory_revision"] < 1:
         return None
     if not isinstance(cursor, int) or cursor < 0 or cursor > len(transcript):
         return None
+    total_content_chars = 0
     for item in transcript:
         if not isinstance(item, dict) or not isinstance(item.get("speaker"), str):
             return None
-        if not isinstance(item.get("content"), str):
+        content = item.get("content")
+        if not isinstance(content, str):
+            return None
+        if len(item["speaker"]) > 200 or len(content) > MAX_LOCAL_TRANSCRIPT_CONTENT_CHARS:
+            return None
+        total_content_chars += len(content)
+        if total_content_chars > MAX_LOCAL_TRANSCRIPT_TOTAL_CHARS:
             return None
     return value
 
@@ -161,6 +174,49 @@ def try_save_long_term_memory(agent_id: str, episodes: list[dict[str, Any]]) -> 
         return True
     except OSError:
         return False
+
+
+def sync_long_term_memories(
+    store: Any,
+    *,
+    agents: tuple[str, ...] = AGENT_IDS,
+    topology_signature: str | None = None,
+    limit: int = 20,
+) -> dict[str, dict[str, Any]]:
+    """Refresh workspace MEMORY.md files from durable agent-local episodes.
+
+    SQLite is the audit source of truth; this function materializes its current
+    agent-scoped view into OpenClaw-readable workspace files. It is intentionally
+    idempotent and safe to run manually after historical backfills or harvester
+    downtime.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    bounded_limit = max(1, min(int(limit), 100))
+    for agent_id in agents:
+        agent = agent_id.lower()
+        episodes = store.list_agent_episodes(
+            agent,
+            topology_signature=topology_signature,
+            min_quality=0.0,
+            limit=bounded_limit,
+        )
+        ok = try_save_long_term_memory(agent, episodes)
+        conclusive = [
+            item for item in episodes
+            if (item.get("evaluation") or {}).get("final_verdict")
+            in {"improved", "neutral", "degraded"}
+        ]
+        result[agent] = {
+            "ok": ok,
+            "path": str(workspace(agent) / "MEMORY.md"),
+            "episodes_considered": len(episodes),
+            "evaluated_written": min(len(conclusive), 20),
+            "warnings_written": sum(
+                1 for item in conclusive
+                if (item.get("evaluation") or {}).get("final_verdict") == "degraded"
+            ),
+        }
+    return result
 
 
 def read_prompt_memory(agent_id: str) -> str:

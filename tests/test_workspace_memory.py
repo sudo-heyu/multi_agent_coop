@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 from src.memory.workspace import (
     archive_current_session, load_current_session, save_current_session,
-    save_long_term_memory,
+    save_long_term_memory, sync_long_term_memories,
 )
+from src.persistence import EventStore
 from openclaw.mcp import orchestration as orch
 
 
@@ -41,6 +42,19 @@ class WorkspaceMemoryTests(unittest.TestCase):
         self.assertEqual(load_current_session("ap1", run_id="run-1")["agent_id"], "ap1")
         self.assertIsNone(load_current_session("ap1", run_id="another-run"))
 
+    def test_current_session_rejects_oversized_transcript_content(self):
+        save_current_session(
+            "ap1",
+            memory={"version": 1, "revision": 0, "summarized_turns": 0, "entries": []},
+            summary_text="",
+            local_transcript=[{"speaker": "PRIVATE_MEMORY", "content": "x" * 20_001}],
+            private_sla=None,
+            budget_chars=2400,
+            run_id="too-large",
+            memory_revision=1,
+        )
+        self.assertIsNone(load_current_session("ap1", run_id="too-large"))
+
     def test_long_term_memory_contains_only_target_agents_local_case(self):
         save_long_term_memory("ap2", [{
             "run_id": "r1", "scene": "edca", "strategy": "co_edca",
@@ -63,6 +77,28 @@ class WorkspaceMemoryTests(unittest.TestCase):
         text = (Path(self._td.name) / "ap1" / "MEMORY.md").read_text(encoding="utf-8")
         self.assertIn("本地失败警告", text)
         self.assertIn("degraded", text)
+
+    def test_sync_long_term_memories_refreshes_workspace_from_sqlite(self):
+        store = EventStore(Path(self._td.name) / "workspace-sync.sqlite3")
+        try:
+            store.start_run("sync-run", mode="mock", scene="edca", model="openclaw")
+            store.save_agent_episode({
+                "run_id": "sync-run", "agent_id": "ap2",
+                "topology_signature": "topo", "scene": "edca",
+                "strategy": "co_edca", "local_state": {"traffic_priority": "high"},
+                "local_decision": {"CWmin": 3}, "outcome": "success",
+                "quality_score": 0.88,
+                "evaluation": {"final_verdict": "improved", "final_confidence": 0.7},
+            })
+            result = sync_long_term_memories(store, agents=("ap2",))
+        finally:
+            store.close()
+
+        self.assertTrue(result["ap2"]["ok"])
+        self.assertEqual(result["ap2"]["evaluated_written"], 1)
+        text = (Path(self._td.name) / "ap2" / "MEMORY.md").read_text(encoding="utf-8")
+        self.assertIn("sync-run", text)
+        self.assertIn("CWmin", text)
 
     def test_system_refresh_preserves_agents_autonomous_notes(self):
         save_long_term_memory("ap1", [])

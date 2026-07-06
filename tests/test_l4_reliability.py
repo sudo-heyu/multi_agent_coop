@@ -44,12 +44,12 @@ class L4ReliabilityTests(unittest.TestCase):
         self.store.close()
         self._td.cleanup()
 
-    def _run(self, run_id, *, decision=DECISION):
-        state = copy.deepcopy(self.baseline)
-        self.store.start_run(run_id, mode="real", scene="edca", model="openclaw")
+    def _run(self, run_id, *, decision=DECISION, state=None, scene="edca"):
+        state = copy.deepcopy(state or self.baseline)
+        self.store.start_run(run_id, mode="real", scene=scene, model="openclaw")
         self.store.append_event(
             run_id, "session_start",
-            {"model": "openclaw", "scene": "edca", "ap_state": state},
+            {"model": "openclaw", "scene": scene, "ap_state": state},
         )
         self.store.record_snapshot(run_id, label="initial", source="session_start", state=state)
         self.store.append_event(run_id, "final_decision", {"decision": decision, "raw_response": "{}"})
@@ -165,6 +165,37 @@ class L4ReliabilityTests(unittest.TestCase):
         local = self.store.list_agent_episodes("ap1", min_quality=0.0)
         self.assertEqual(local[0]["evaluation"]["final_verdict"], "degraded")
         self.assertEqual(local[0]["quality_score"], ep["quality_score"])
+
+    def test_case_narrative_llm_evidence_redacts_private_sla(self):
+        private_state = copy.deepcopy(MOCK_SCENES["hidden_sla"])
+        self._run("run-private", state=private_state, scene="hidden_sla")
+        schedule_outcome_evaluations(
+            self.store, "run-private", private_state, (10.0,), now=self.t0
+        )
+        prompts = []
+
+        def summarize(prompt):
+            prompts.append(prompt)
+            return "已脱敏案例总结"
+
+        with patch("src.memory.llm_backend.enabled", return_value=True), patch(
+            "src.memory.llm_backend.summarize", side_effect=summarize,
+        ):
+            harvest_evaluations(
+                self.store,
+                lambda: copy.deepcopy(private_state),
+                now=self.t0 + timedelta(seconds=11),
+            )
+
+        self.assertTrue(prompts)
+        prompt = prompts[0]
+        self.assertNotIn("private_sla", prompt)
+        self.assertNotIn("deadline_minutes", prompt)
+        self.assertNotIn("min_throughput_mbps", prompt)
+        self.assertNotIn("max_latency_ms", prompt)
+        self.assertIn("traffic_priority", prompt)
+        ep = self.store.get_episode(run_id="run-private")
+        self.assertEqual(ep["case_narrative_status"], "ready")
 
     def test_missing_local_metrics_never_inherit_global_verdict(self):
         self._run("run-local-missing")
