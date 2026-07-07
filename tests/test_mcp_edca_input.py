@@ -28,6 +28,20 @@ class TestMcpEdcaInput(unittest.TestCase):
         result = multiap_mcp.validate_edca_proposal("{bad json")
         self.assertIn("不是合法 JSON", result["error"])
 
+    def test_accepts_per_ac_vi_fields(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        proposal = {
+            "ap1": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2},
+            "ap2": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2},
+            "ap3": {"VI_CWmin": 15, "VI_CWmax": 31, "VI_AIFSN": 3},
+        }
+        with patch.object(multiap_mcp, "get_all_states", return_value=state):
+            result = multiap_mcp.validate_edca_proposal(proposal)
+
+        self.assertNotIn("error", result)
+        self.assertTrue(all(result[ap]["valid"] for ap in ("ap1", "ap2", "ap3")))
+        self.assertEqual(result["ap1"]["VI_CWmin"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,8 @@ VALID_AP_IDS = {"ap1", "ap2", "ap3"}
 # state server REQUIRED_FIELDS 里的指标键（ap_id/timestamp 之外，ns3 遥测都带）
 TELEMETRY_KEYS = {
     "tx_power_dbm", "cwmin", "cwmax", "aifsn",
+    "be_cwmin", "be_cwmax", "be_aifsn",
+    "vi_cwmin", "vi_cwmax", "vi_aifsn",
     "Data_rate_to_bandwidth_ratio", "tx_retries_ratio",
     "neighbor_rssi_dbm", "sta_rssi_dbm", "noise_floor_dbm",
     "throughput_mbps_iperf", "throughput_mbps_user", "ac_iperf", "ac_user",
@@ -69,6 +71,12 @@ STRATEGY_KEYS: dict[str, list[tuple[str, str, object]]] = {
         ("CWmin", "cwmin", lambda v: ecw_to_cw(int(v))),
         ("CWmax", "cwmax", lambda v: ecw_to_cw(int(v))),
         ("AIFSN", "aifsn", lambda v: int(v)),
+        ("BE_CWmin", "be_cwmin", lambda v: ecw_to_cw(int(v))),
+        ("BE_CWmax", "be_cwmax", lambda v: ecw_to_cw(int(v))),
+        ("BE_AIFSN", "be_aifsn", lambda v: int(v)),
+        ("VI_CWmin", "vi_cwmin", lambda v: ecw_to_cw(int(v))),
+        ("VI_CWmax", "vi_cwmax", lambda v: ecw_to_cw(int(v))),
+        ("VI_AIFSN", "vi_aifsn", lambda v: int(v)),
     ],
 }
 # joint = co_sr ∪ co_edca
@@ -127,11 +135,12 @@ class Ns3Bridge:
             self._seen.add(ap_id)
             return
         # 实际 CW → 指数 n（与真实 AP 上报口径一致）
-        try:
-            obj["cwmin"] = cw_to_ecw(int(obj["cwmin"]))
-            obj["cwmax"] = cw_to_ecw(int(obj["cwmax"]))
-        except (KeyError, TypeError, ValueError):
-            pass
+        for key in ("cwmin", "cwmax", "be_cwmin", "be_cwmax", "vi_cwmin", "vi_cwmax"):
+            try:
+                if obj.get(key) is not None:
+                    obj[key] = cw_to_ecw(int(obj[key]))
+            except (TypeError, ValueError):
+                pass
         payload = {k: obj.get(k) for k in TELEMETRY_KEYS}
         payload["ap_id"] = ap_id
         payload["timestamp"] = datetime.now(timezone.utc).isoformat()

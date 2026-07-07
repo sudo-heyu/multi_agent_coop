@@ -30,6 +30,12 @@ AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
     "cwmin",                 # EDCA 竞争窗口下限（实际 CW 值，由上报指数解码而来）
     "cwmax",                 # EDCA 竞争窗口上限（实际 CW 值，由上报指数解码而来）
     "aifsn",                 # EDCA 仲裁帧间间隔数（Co-EDCA 可调）
+    "be_cwmin",              # AC_BE EDCA 竞争窗口下限（实际 CW 值）
+    "be_cwmax",              # AC_BE EDCA 竞争窗口上限（实际 CW 值）
+    "be_aifsn",              # AC_BE AIFSN
+    "vi_cwmin",              # AC_VI EDCA 竞争窗口下限（实际 CW 值）
+    "vi_cwmax",              # AC_VI EDCA 竞争窗口上限（实际 CW 值）
+    "vi_aifsn",              # AC_VI AIFSN
     "sta_rssi_dbm",          # 己方 STA 信号强度（降功率安全下界）
     "throughput_mbps_user",  # 用户实际业务吞吐
     "neighbor_rssi_dbm",     # 邻居 AP 信号强度（Co-SR 干扰感知）

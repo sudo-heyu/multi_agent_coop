@@ -149,35 +149,48 @@ def validate_decision(
         for ap_id in ap_ids:
             report = per_ap.setdefault(ap_id, _empty_ap_entry())
             params_raw = normalized[ap_id]
-            edca_params = {k: params_raw.get(k) for k in ("CWmin", "CWmax", "AIFSN")}
-            missing_keys = [k for k, v in edca_params.items() if v is None]
+            edca_groups = _extract_edca_param_groups(params_raw)
 
-            if missing_keys:
-                err = f"{ap_id.upper()}: 缺少 EDCA 参数 {missing_keys}"
+            if not edca_groups:
+                err = f"{ap_id.upper()}: 缺少 EDCA 参数 ['CWmin', 'CWmax', 'AIFSN']"
                 global_errors.append(err)
                 report["errors"].append(err)
                 report["checks"].append({"check": "Co-EDCA params", "ok": False, "errors": [err]})
                 continue
 
-            edca_params_int = {k: int(v) for k, v in edca_params.items()}
-            report["proposed_params"].update(edca_params_int)
-            edca_errors = _validate_edca_range(edca_params_int)
+            edca_errors: list[str] = []
 
-            if observed_is_real:
-                observed_edca = _observed_edca_params(obs.get(ap_id, {}))
-                has_edca_obs = any(v is not None for v in observed_edca.values())
-                if has_edca_obs:
-                    # AP 上报了 EDCA 参数（从 hostapd 回读）→ 检查是否生效
-                    report["observed_params"].update(
-                        {k: v for k, v in observed_edca.items() if v is not None}
-                    )
-                    for key, expected in edca_params_int.items():
-                        actual = observed_edca.get(key)
-                        if actual is None:
-                            edca_errors.append(f"观测结果缺少 {key}")
-                        elif actual != expected:
-                            edca_errors.append(f"{key} 未生效：期望 {expected}，观测 {actual}")
-                # else: AP 未上报 EDCA 观测值（典型情况），跳过生效检查
+            for ac, edca_params in edca_groups.items():
+                missing_keys = [k for k, v in edca_params.items() if v is None]
+                if missing_keys:
+                    edca_errors.append(f"{ac}: 缺少 EDCA 参数 {missing_keys}")
+                    continue
+
+                edca_params_int = {k: int(v) for k, v in edca_params.items()}
+                report["proposed_params"].update(_format_edca_group(ac, edca_params_int))
+                edca_errors.extend(
+                    f"{ac}: {e}" for e in _validate_edca_range(edca_params_int)
+                )
+
+                if observed_is_real:
+                    observed_edca = _observed_edca_params(obs.get(ap_id, {}), ac)
+                    has_edca_obs = any(v is not None for v in observed_edca.values())
+                    if has_edca_obs:
+                        # AP 上报了 EDCA 参数（从 hostapd/ns-3 回读）→ 检查是否生效
+                        report["observed_params"].update(
+                            _format_edca_group(
+                                ac, {k: v for k, v in observed_edca.items() if v is not None}
+                            )
+                        )
+                        for key, expected in edca_params_int.items():
+                            actual = observed_edca.get(key)
+                            if actual is None:
+                                edca_errors.append(f"{ac}: 观测结果缺少 {key}")
+                            elif int(actual) != expected:
+                                edca_errors.append(
+                                    f"{ac}: {key} 未生效：期望 {expected}，观测 {actual}"
+                                )
+                    # else: AP 未上报该 AC 的 EDCA 观测值，跳过生效检查
 
             report["errors"].extend([f"{ap_id.upper()}: {e}" for e in edca_errors])
             report["checks"].append({
@@ -235,11 +248,70 @@ def _validate_edca_range(params: dict) -> list[str]:
     return errors
 
 
-def _observed_edca_params(observed: dict) -> dict:
+def _first_present(params: dict, keys: tuple[str, ...]):
+    for key in keys:
+        if key in params and params.get(key) is not None:
+            return params.get(key)
+    return None
+
+
+def _extract_edca_param_groups(params: dict) -> dict[str, dict]:
+    """提取 legacy/Per-AC EDCA 参数。
+
+    旧字段 CWmin/CWmax/AIFSN 等价于 BE；显式 BE_* 优先于旧字段。
+    VI_* 可单独出现，用于只调整 AC_VI。
+    """
+    specs = {
+        "BE": {
+            "CWmin": ("BE_CWmin", "be_cwmin", "CWmin", "cwmin"),
+            "CWmax": ("BE_CWmax", "be_cwmax", "CWmax", "cwmax"),
+            "AIFSN": ("BE_AIFSN", "be_aifsn", "AIFSN", "aifsn"),
+        },
+        "VI": {
+            "CWmin": ("VI_CWmin", "vi_cwmin"),
+            "CWmax": ("VI_CWmax", "vi_cwmax"),
+            "AIFSN": ("VI_AIFSN", "vi_aifsn"),
+        },
+    }
+    out: dict[str, dict] = {}
+    for ac, fields in specs.items():
+        group = {canonical: _first_present(params, aliases)
+                 for canonical, aliases in fields.items()}
+        if any(v is not None for v in group.values()):
+            out[ac] = group
+    return out
+
+
+def _format_edca_group(ac: str, params: dict) -> dict:
+    if ac == "BE":
+        # 保持旧报告字段兼容；额外 BE_* 字段便于审计 Per-AC 下发。
+        return {
+            "CWmin": params.get("CWmin"),
+            "CWmax": params.get("CWmax"),
+            "AIFSN": params.get("AIFSN"),
+            "BE_CWmin": params.get("CWmin"),
+            "BE_CWmax": params.get("CWmax"),
+            "BE_AIFSN": params.get("AIFSN"),
+        }
+    prefix = f"{ac}_"
     return {
-        "CWmin": observed.get("cwmin"),
-        "CWmax": observed.get("cwmax"),
-        "AIFSN": observed.get("aifsn"),
+        f"{prefix}CWmin": params.get("CWmin"),
+        f"{prefix}CWmax": params.get("CWmax"),
+        f"{prefix}AIFSN": params.get("AIFSN"),
+    }
+
+
+def _observed_edca_params(observed: dict, ac: str = "BE") -> dict:
+    if ac == "VI":
+        return {
+            "CWmin": observed.get("vi_cwmin"),
+            "CWmax": observed.get("vi_cwmax"),
+            "AIFSN": observed.get("vi_aifsn"),
+        }
+    return {
+        "CWmin": observed.get("be_cwmin", observed.get("cwmin")),
+        "CWmax": observed.get("be_cwmax", observed.get("cwmax")),
+        "AIFSN": observed.get("be_aifsn", observed.get("aifsn")),
     }
 
 

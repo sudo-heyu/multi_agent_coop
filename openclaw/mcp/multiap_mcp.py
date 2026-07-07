@@ -78,12 +78,17 @@ def _current_proposal() -> dict:
 def _edca_from_proposal(proposal: dict | None) -> dict:
     if not proposal:
         return {}
+    edca_keys = (
+        "CWmin", "CWmax", "AIFSN", "cwmin", "cwmax", "aifsn",
+        "BE_CWmin", "BE_CWmax", "BE_AIFSN", "be_cwmin", "be_cwmax", "be_aifsn",
+        "VI_CWmin", "VI_CWmax", "VI_AIFSN", "vi_cwmin", "vi_cwmax", "vi_aifsn",
+    )
     out: dict = {}
     for ap_id, params in proposal.items():
-        if isinstance(params, dict) and any(k in params for k in ("CWmin", "CWmax", "AIFSN")):
+        if isinstance(params, dict) and any(k in params for k in edca_keys):
             out[str(ap_id).lower()] = {
                 k: params[k]
-                for k in ("CWmin", "CWmax", "AIFSN")
+                for k in edca_keys
                 if k in params
             }
     return out
@@ -212,7 +217,9 @@ def validate_edca_proposal(proposed_edca: dict | str | None = None) -> dict:
     + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
     并评估拥塞匹配度。traffic_priority 不是 AP 固定身份；同优先级时不要强行制造梯度。
     proposed_edca 可传对象或该对象的 JSON 字符串，形如
-    {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。"""
+    {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。
+    Per-AC EDCA 也支持 BE_CWmin/BE_CWmax/BE_AIFSN 与
+    VI_CWmin/VI_CWmax/VI_AIFSN；旧字段等价于 AC_BE。"""
     def _run() -> dict:
         proposed = _normalize_edca_proposal(proposed_edca)
         if not proposed:

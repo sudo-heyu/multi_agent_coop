@@ -19,6 +19,11 @@ if str(REPO_ROOT) not in sys.path:
 from src.tools import sr as _sr
 
 AP_IDS = ["ap1", "ap2", "ap3"]
+EDCA_KEYS = {
+    "CWmin", "CWmax", "AIFSN", "cwmin", "cwmax", "aifsn",
+    "BE_CWmin", "BE_CWmax", "BE_AIFSN", "be_cwmin", "be_cwmax", "be_aifsn",
+    "VI_CWmin", "VI_CWmax", "VI_AIFSN", "vi_cwmin", "vi_cwmax", "vi_aifsn",
+}
 
 
 def _normalize_proposal(proposal: dict) -> dict:
@@ -49,7 +54,7 @@ def _infer_strategy_from_proposal(proposal: dict) -> str:
         if not isinstance(v, bool)
     )
     has_edca = any(
-        isinstance(v, dict) and any(k in v for k in ("CWmin", "CWmax", "AIFSN"))
+        isinstance(v, dict) and any(k in v for k in EDCA_KEYS)
         for v in proposal.values()
     )
     if has_sr and has_edca:

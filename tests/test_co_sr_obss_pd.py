@@ -11,6 +11,7 @@ import threading
 import unittest
 
 from src.tools import sr
+from src.tools.edca import decode_state_edca, encode_params_edca
 from src import validator
 from openclaw.mcp.proposal_utils import _infer_strategy_from_proposal
 
@@ -114,6 +115,115 @@ class BridgeApplyTableTests(unittest.TestCase):
                                     "cwmin": 4, "cwmax": 10, "aifsn": 2})["command"]
         # 指数 n=4 → 实际 CW 15；n=10 → 1023
         self.assertEqual(cmd, "APPLY ap3 tx=8.0 obss_pd=-70.0 cwmin=15 cwmax=1023 aifsn=2")
+
+    def test_per_ac_edca_maps_vi_fields(self):
+        cmd = self._bridge().apply("ap1", "co_edca",
+                                   {"VI_CWmin": 3, "VI_CWmax": 4, "VI_AIFSN": 2})["command"]
+        # 指数 n=3 → 实际 CW 7；n=4 → 15
+        self.assertEqual(cmd, "APPLY ap1 vi_cwmin=7 vi_cwmax=15 vi_aifsn=2")
+
+    def test_unknown_strategy_is_rejected_without_writing(self):
+        b = self._bridge()
+        result = b.apply("ap1", "co_bf", {"bf": 1})
+        self.assertFalse(result["ok"])
+        self.assertIn("unsupported strategy", result["error"])
+        self.assertEqual(b.proc.stdin.getvalue(), "")
+
+    def test_unrecognized_params_are_rejected_without_writing(self):
+        b = self._bridge()
+        result = b.apply("ap1", "co_sr", {"bf": 1})
+        self.assertFalse(result["ok"])
+        self.assertIn("no recognized params", result["error"])
+        self.assertEqual(b.proc.stdin.getvalue(), "")
+
+    def test_apply_endpoint_returns_400_for_invalid_strategy(self):
+        from state_server import ns3_bridge as br
+        old_bridge = br._bridge
+        old_last_result = br._last_result
+        b = self._bridge()
+        br._bridge = b
+        br._last_result = {}
+        try:
+            resp = br.app.test_client().post("/apply", json={
+                "ap_id": "ap1",
+                "strategy": "co_bf",
+                "params": {"bf": 1},
+            })
+            self.assertEqual(resp.status_code, 400)
+            self.assertFalse(resp.get_json()["ok"])
+            self.assertEqual(b.proc.stdin.getvalue(), "")
+        finally:
+            br._bridge = old_bridge
+            br._last_result = old_last_result
+
+    def test_forward_encodes_per_ac_cw_fields(self):
+        from state_server import ns3_bridge as br
+        b = br.Ns3Bridge.__new__(br.Ns3Bridge)
+        b.state_server = "http://state"
+        b._seen = {"ap1"}
+
+        class _Http:
+            def __init__(self):
+                self.payload = None
+
+            def post(self, url, json, timeout):
+                self.payload = json
+
+        b._http = _Http()
+        b._forward({
+            "ap_id": "ap1",
+            "tx_power_dbm": 10,
+            "cwmin": 15, "cwmax": 1023, "aifsn": 3,
+            "be_cwmin": 15, "be_cwmax": 1023, "be_aifsn": 3,
+            "vi_cwmin": 7, "vi_cwmax": 15, "vi_aifsn": 2,
+            "Data_rate_to_bandwidth_ratio": 0.5, "tx_retries_ratio": 0,
+            "neighbor_rssi_dbm": -72, "sta_rssi_dbm": -46, "noise_floor_dbm": -94,
+            "throughput_mbps_iperf": 10, "throughput_mbps_user": 2,
+            "ac_iperf": "AC_BE", "ac_user": "AC_VI",
+            "latency_ms": 10, "packet_loss_pct": 0,
+        })
+        payload = b._http.payload
+        self.assertEqual(payload["cwmin"], 4)
+        self.assertEqual(payload["cwmax"], 10)
+        self.assertEqual(payload["be_cwmin"], 4)
+        self.assertEqual(payload["be_cwmax"], 10)
+        self.assertEqual(payload["vi_cwmin"], 3)
+        self.assertEqual(payload["vi_cwmax"], 4)
+
+
+class PerAcEdcaTests(unittest.TestCase):
+    def test_encode_decode_cover_per_ac_cw_fields(self):
+        encoded = encode_params_edca({
+            "BE_CWmin": 15, "BE_CWmax": 1023,
+            "VI_CWmin": 7, "VI_CWmax": 15,
+            "VI_AIFSN": 2,
+        })
+        self.assertEqual(encoded["BE_CWmin"], 4)
+        self.assertEqual(encoded["BE_CWmax"], 10)
+        self.assertEqual(encoded["VI_CWmin"], 3)
+        self.assertEqual(encoded["VI_CWmax"], 4)
+        decoded = decode_state_edca({
+            "be_cwmin": 4, "be_cwmax": 10,
+            "vi_cwmin": 3, "vi_cwmax": 4,
+        })
+        self.assertEqual(decoded["be_cwmin"], 15)
+        self.assertEqual(decoded["be_cwmax"], 1023)
+        self.assertEqual(decoded["vi_cwmin"], 7)
+        self.assertEqual(decoded["vi_cwmax"], 15)
+
+    def test_validator_accepts_vi_only_edca(self):
+        decision = {
+            "ap1": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2},
+            "ap2": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2},
+            "ap3": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2},
+        }
+        rep = validator.validate_decision(_states(), decision, "co_edca")
+        self.assertTrue(rep["approved"], rep["summary"])
+        self.assertEqual(rep["per_ap"]["ap1"]["proposed_params"]["VI_CWmin"], 7)
+
+    def test_per_ac_edca_infers_co_edca(self):
+        proposal = {"ap1": {"VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+        self.assertEqual(_infer_strategy_from_proposal(proposal), "co_edca")
 
 
 if __name__ == "__main__":

@@ -38,6 +38,31 @@ _LIMITS = {
     "AIFSN": (1, 15),
 }
 
+_STATE_CW_KEYS: tuple[str, ...] = (
+    "cwmin", "cwmax",
+    "be_cwmin", "be_cwmax",
+    "vi_cwmin", "vi_cwmax",
+)
+
+_PARAM_CW_KEYS: tuple[str, ...] = (
+    "CWmin", "CWmax", "cwmin", "cwmax",
+    "BE_CWmin", "BE_CWmax", "be_cwmin", "be_cwmax",
+    "VI_CWmin", "VI_CWmax", "vi_cwmin", "vi_cwmax",
+)
+
+_PARAM_GROUP_ALIASES = {
+    "BE": {
+        "CWmin": ("BE_CWmin", "be_cwmin", "CWmin", "cwmin"),
+        "CWmax": ("BE_CWmax", "be_cwmax", "CWmax", "cwmax"),
+        "AIFSN": ("BE_AIFSN", "be_aifsn", "AIFSN", "aifsn"),
+    },
+    "VI": {
+        "CWmin": ("VI_CWmin", "vi_cwmin"),
+        "CWmax": ("VI_CWmax", "vi_cwmax"),
+        "AIFSN": ("VI_AIFSN", "vi_aifsn"),
+    },
+}
+
 
 # ── 竞争窗口的指数表示 ⇄ 实际值 ──────────────────────────────────────────────
 # 硬件（hostapd / iw）以指数 n 表示竞争窗口，实际竞争窗口 CW = 2^n - 1：
@@ -65,7 +90,7 @@ def decode_state_edca(state: dict) -> dict:
     if not isinstance(state, dict):
         return state
     out = dict(state)
-    for key in ("cwmin", "cwmax"):
+    for key in _STATE_CW_KEYS:
         val = out.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             out[key] = ecw_to_cw(val)
@@ -82,10 +107,32 @@ def encode_params_edca(params: dict) -> dict:
     if not isinstance(params, dict):
         return params
     out = dict(params)
-    for key in ("CWmin", "CWmax", "cwmin", "cwmax"):
+    for key in _PARAM_CW_KEYS:
         val = out.get(key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             out[key] = cw_to_ecw(val)
+    return out
+
+
+def _first_present(params: dict, keys: tuple[str, ...]):
+    for key in keys:
+        if key in params and params.get(key) is not None:
+            return params.get(key)
+    return None
+
+
+def extract_param_groups(params: dict) -> dict[str, dict]:
+    """提取 legacy/Per-AC EDCA 参数；旧字段等价于 BE，显式 BE_* 优先。"""
+    if not isinstance(params, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for ac, fields in _PARAM_GROUP_ALIASES.items():
+        group = {
+            canonical: _first_present(params, aliases)
+            for canonical, aliases in fields.items()
+        }
+        if any(v is not None for v in group.values()):
+            out[ac] = group
     return out
 
 
@@ -110,19 +157,26 @@ def validate(params: dict) -> tuple[bool, list[str]]:
     Returns:
         (is_valid, errors)  —  errors 为空列表时 is_valid=True
     """
+    groups = extract_param_groups(params)
     errors: list[str] = []
+    if not groups:
+        groups = {"BE": {"CWmin": None, "CWmax": None, "AIFSN": None}}
 
-    for key, (lo, hi) in _LIMITS.items():
-        val = params.get(key)
-        if val is None:
-            errors.append(f"{key} 缺失")
-        elif not (lo <= val <= hi):
-            errors.append(f"{key}={val} 超出范围 [{lo}, {hi}]")
+    for ac, group in groups.items():
+        for key, (lo, hi) in _LIMITS.items():
+            val = group.get(key)
+            if val is None:
+                errors.append(f"{ac}: {key} 缺失")
+                continue
+            val = int(val)
+            if not (lo <= val <= hi):
+                errors.append(f"{ac}: {key}={val} 超出范围 [{lo}, {hi}]")
 
-    cwmin = params.get("CWmin", 0)
-    cwmax = params.get("CWmax", 0)
-    if cwmax <= cwmin:
-        errors.append(f"CWmax={cwmax} 必须大于 CWmin={cwmin}")
+        if group.get("CWmin") is not None and group.get("CWmax") is not None:
+            cwmin = int(group.get("CWmin"))
+            cwmax = int(group.get("CWmax"))
+            if cwmax <= cwmin:
+                errors.append(f"{ac}: CWmax={cwmax} 必须大于 CWmin={cwmin}")
 
     return len(errors) == 0, errors
 
@@ -158,12 +212,16 @@ def evaluate_edca_effectiveness(ap_states: dict, proposed_edca: dict) -> dict:
 
         priority = get_traffic_priority(state)
         rank     = _PRIORITY_RANK.get(priority, 1)
-        cwmin    = int(params.get("CWmin", 15))
-        aifsn    = int(params.get("AIFSN", 3))
+        groups = extract_param_groups(params)
+        selected_ac = "BE" if "BE" in groups else ("VI" if "VI" in groups else "BE")
+        selected = groups.get(selected_ac, {})
+        cwmin    = int(selected.get("CWmin", 15))
+        aifsn    = int(selected.get("AIFSN", 3))
 
         ordering_entries.append((key, rank, cwmin, aifsn))
         per_ap[key] = {
             "traffic_priority": priority,
+            "edca_ac":          selected_ac,
             "cwmin":            cwmin,
             "aifsn":            aifsn,
         }
