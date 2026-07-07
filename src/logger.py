@@ -164,15 +164,21 @@ class SessionLogger:
         ts = _now()
         event_id = uuid.uuid4().hex
         sequence = None
+        store_error = None
         if self._event_store is not None:
-            event_id, sequence = self._event_store.append_event(
-                self.session_id,
-                event,
-                payload,
-                event_id=event_id,
-                occurred_at=ts,
-            )
-        return {
+            # SQLite 写失败（磁盘满/锁超时）降级为只写 JSONL 并标记，绝不让
+            # 日志层异常打死协商主流程；事后可凭标记对账补录。
+            try:
+                event_id, sequence = self._event_store.append_event(
+                    self.session_id,
+                    event,
+                    payload,
+                    event_id=event_id,
+                    occurred_at=ts,
+                )
+            except Exception as exc:  # noqa: BLE001 — 双写降级点
+                store_error = f"{type(exc).__name__}: {exc}"
+        row = {
             "ts":         ts,
             "session_id": self.session_id,
             "event":      event,
@@ -180,6 +186,9 @@ class SessionLogger:
             "sequence":   sequence,
             **payload,
         }
+        if store_error is not None:
+            row["store_write_failed"] = store_error
+        return row
 
     def _write_file_only(self, event: str, **kw) -> None:
         """写入 JSONL 文件，不通知 event_sink（避免与高频推送重复）。"""
@@ -730,6 +739,45 @@ class SessionLogger:
         )
         summary = _tool_summary(tool, result)
         self._console("tool_call", f"{tool} ({duration_ms:.0f}ms) | {summary}")
+
+    def mcp_tool_call(
+        self,
+        agent: str,
+        tool: str,
+        args: Any,
+        result: Any,
+        duration_ms: float | None,
+    ) -> None:
+        """AP agent 经 MCP 调用工具的持久记录（提案/投票的验算依据）。
+
+        与 tool_call（编排层确定性计算工具）区分：这里是 LLM 自主发起的调用，
+        参数与结果全量保留，供审计"这个决策凭什么"。"""
+        self._write(
+            "mcp_tool_call",
+            agent=agent,
+            tool=tool,
+            args=args,
+            result=result,
+            duration_ms=round(duration_ms, 1) if duration_ms is not None else None,
+        )
+
+    def agent_turn_retry(
+        self, agent: str, attempt: int, error: str, *, via_gateway: bool,
+    ) -> None:
+        """AP 回合失败重试（空回复/进程失败/gateway 回退），保留失败原因。"""
+        self._write(
+            "agent_turn_retry",
+            agent=agent, attempt=attempt, error=error, via_gateway=via_gateway,
+        )
+
+    def session_failed(self, error: str, traceback_text: str | None = None) -> None:
+        """协商中未捕获异常的终态记录：保留失败原因与调用栈。
+
+        只写事件，不改 run 状态——run 保持 incomplete，`memory_admin incomplete`
+        可发现、checkpoint 安全时 `--resume-run` 仍可恢复。"""
+        self._write("session_failed", error=error, traceback=traceback_text)
+        self._console("session_failed",
+                      f"{error} | run 保持可恢复状态（memory_admin incomplete）")
 
     def agent_speak_start(self, agent: str, phase: int, role: str) -> None:
         """Agent 开始发言（流式输出前写入，dashboard 据此创建空气泡）。"""

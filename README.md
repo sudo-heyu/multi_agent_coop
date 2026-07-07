@@ -231,8 +231,11 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 ## 日志
 
 每次运行在 `logs/` 生成一个 JSONL 文件，每行一个事件
-（`session_start` / `phase_start` / `agent_speak` / `tool_call` / `vote` / `round_result` /
-`final_decision` / `validation_result` / `executor_apply` / `session_end`），供 Dashboard 可视化或离线分析。
+（`session_start` / `phase_start` / `agent_speak` / `mcp_tool_call`（AP 经 MCP 的工具调用，
+含全量参数与结果）/ `proposal_params` / `vote` / `round_result` / `final_decision` /
+`validation_result` / `executor_apply` / `agent_turn_retry` / `session_failed`（崩溃原因与
+调用栈，run 保持可恢复）/ `session_end`），供 Dashboard 可视化或离线分析。
+SQLite 写失败会降级为只写 JSONL 并在行内标记 `store_write_failed`，日志层异常不打断协商。
 
 **参数变化全程保留**：每次协商自动形成一条可回放的参数时间线——协商前初始快照、
 每个提案/反提案的结构化候选参数（`proposal_params` 事件）、最终决策、逐 AP 执行下发、

@@ -544,21 +544,34 @@ def main():
             if attempt is not None:
                 print(f"[Goal] 目标 {goal['metric']}：attempt #{attempt['sequence']}"
                       f"（预算 {goal['budget_attempts']} 次）")
-        result = orch.structured_relay(
-            max_turns=args.max_steps,
-            on_event=None,
-            on_event_start=_print_event_stream_start,
-            on_event_chunk=_print_event_stream_chunk,
-            on_tool=_print_tool,
-            logger=logger,
-            observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
-            observation_wait_seconds=args.observation_wait,
-            executor_endpoints=executor_endpoints,
-            resume_projection=resume_projection,
-            evaluation_windows=eval_windows,
-            initial_state=initial_ap_state,
-            goal_context=goal_context,
-        )
+        try:
+            result = orch.structured_relay(
+                max_turns=args.max_steps,
+                on_event=None,
+                on_event_start=_print_event_stream_start,
+                on_event_chunk=_print_event_stream_chunk,
+                on_tool=_print_tool,
+                logger=logger,
+                observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
+                observation_wait_seconds=args.observation_wait,
+                executor_endpoints=executor_endpoints,
+                resume_projection=resume_projection,
+                evaluation_windows=eval_windows,
+                initial_state=initial_ap_state,
+                goal_context=goal_context,
+            )
+        except BaseException as exc:
+            # 失败原因落盘（此前只在终端滚屏里）；run 保持 incomplete 可恢复。
+            import traceback as _tb
+            try:
+                logger.session_failed(
+                    f"{type(exc).__name__}: {exc}",
+                    traceback_text=_tb.format_exc(),
+                )
+                logger.close()
+            except Exception:
+                pass
+            raise
     else:
         _require_openclaw_config(require_qwen80b=args.require_qwen80b)
         result = _run_via_coordinator(

@@ -116,6 +116,18 @@ def _raw_stream_path(env: dict[str, str] | None = None) -> Path:
 # 工具调用展示回调（进程内 structured_relay 路径用）。structured_relay 进入时设置、退出时清理；
 # coordinator 路径（run_fast_negotiation）保持 None，drive_ap 自动跳过解析。
 _tool_callback: Callable | None = None
+# 活跃协商的 SessionLogger：MCP 工具调用/回合重试经它落盘（展示回调之外的持久副本）。
+_tool_logger = None
+
+
+def _log_mcp_tool(ap_id: str, name: str, args, result, dur_ms) -> None:
+    """把 AP agent 的 MCP 工具调用写入事件流；日志失败绝不干扰协商。"""
+    if _tool_logger is None:
+        return
+    try:
+        _tool_logger.mcp_tool_call(ap_id, name, args, result, dur_ms)
+    except Exception:
+        pass
 _relay_lock = threading.Lock()
 
 
@@ -341,6 +353,13 @@ def drive_ap(
             if use_gateway:
                 # gateway 模式失败（连接/进程级）→ 回退 embedded，后续尝试不再走 gateway
                 use_gateway = False
+        if _tool_logger is not None:
+            try:
+                _tool_logger.agent_turn_retry(
+                    ap, attempt + 1, last_err, via_gateway=use_gateway,
+                )
+            except Exception:
+                pass
         if attempt < DRIVE_RETRIES - 1:
             __import__("time").sleep(2.0)
     raise RuntimeError(f"drive_ap({ap}) 连续 {DRIVE_RETRIES} 次失败: {last_err}")
@@ -506,6 +525,7 @@ def _stream_agent_session(
                 except json.JSONDecodeError:
                     pass
             dur_ms = max(0.0, ts_ms - start_ms) if ts_ms and start_ms else None
+            _log_mcp_tool(ap_id, name, args, result, dur_ms)
             if _tool_callback is not None:
                 try:
                     _tool_callback(name, args, result, dur_ms)
@@ -629,11 +649,11 @@ def _stream_agent_session(
 
 
 def _emit_tool_calls(ap_id: str, session_id: str) -> None:
-    """若设置了 _tool_callback，从本次 AP 会话的 trajectory 提取工具调用并逐条回调。
+    """从本次 AP 会话的 trajectory 提取工具调用：回调展示 + 事件流落盘。
 
     structured_relay 非流式：工具行无法穿插在发言中间，故由调用方在发言前成块打印。
     任何解析/显示异常都被吞掉——工具展示永不打断协商。"""
-    if _tool_callback is None or not session_id:
+    if (_tool_callback is None and _tool_logger is None) or not session_id:
         return
     try:
         tpath = _trajectory_path_for(ap_id, session_id)
@@ -647,7 +667,9 @@ def _emit_tool_calls(ap_id: str, session_id: str) -> None:
             except (json.JSONDecodeError, OSError):
                 time.sleep(0.3)
         for rec in tools or []:
-            _tool_callback(rec["name"], rec["args"], rec["result"], rec["dur_ms"])
+            _log_mcp_tool(ap_id, rec["name"], rec["args"], rec["result"], rec["dur_ms"])
+            if _tool_callback is not None:
+                _tool_callback(rec["name"], rec["args"], rec["result"], rec["dur_ms"])
     except Exception:
         pass
 
@@ -1586,14 +1608,16 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
                      executor_endpoints: dict[str, str] | None = None,
                      initial_state: dict | None = None,
                      resume_projection: dict | None = None,
-                     evaluation_windows: tuple[float, ...] | None = None) -> dict:
+                     evaluation_windows: tuple[float, ...] | None = None,
+                     goal_context: dict | None = None) -> dict:
     """阶段级快速协商。on_tool：进程内 structured_relay 路径传入工具调用展示回调，
     在 drive_ap 每次 AP 发言后从 trajectory 提取并回调；coordinator 路径
     （run_fast_negotiation）不传，保持 None。"""
-    global _tool_callback
+    global _tool_callback, _tool_logger
     if not _relay_lock.acquire(blocking=False):
         raise RuntimeError("当前进程已有协商运行；全局 MCP 会话暂不支持并发 structured_relay")
     _tool_callback = on_tool
+    _tool_logger = logger
     memory_sink = None
     if logger is not None:
         def persist_memory(
@@ -1624,9 +1648,11 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
             resume_projection=resume_projection,
             evaluation_windows=evaluation_windows,
             memory_callback=memory_sink,
+            goal_context=goal_context,
         )
     finally:
         _tool_callback = None
+        _tool_logger = None
         _SESSION.memory_callback = None
         _relay_lock.release()
 
