@@ -59,6 +59,7 @@ MIN_ABANDON_GRACE_SECONDS = 3600.0
 
 DEFAULT_WINDOWS: dict[str, tuple[float, ...]] = {
     "mock": (10.0, 30.0),
+    "ns3": (10.0, 30.0),
     "real": (60.0, 300.0, 900.0),
 }
 

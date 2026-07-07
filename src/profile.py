@@ -45,6 +45,9 @@ AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
 # Co-SR 的 SINR 约束需要本底噪声，但它不进入 agent 的推理视野。
 INTERNAL_FIELDS: tuple[str, ...] = (
     "noise_floor_dbm",
+    "obss_pd_dbm",
+    "bss_color",
+    "sr_reset_count",
 )
 
 # 协商流程保留的全部字段（白名单之外的上报字段一律忽略）

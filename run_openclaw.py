@@ -236,8 +236,8 @@ def _validate_real_endpoints(endpoints: dict[str, str] | None) -> None:
 
 
 def _start_telemetry(mode: str, no_feeder: bool, server: str, scene: dict, interval: float):
-    """按模式启动遥测；real 路径绝不实例化 MockTelemetryFeeder。"""
-    if mode == "real":
+    """按模式启动遥测；real/ns3 路径绝不实例化 MockTelemetryFeeder。"""
+    if mode in {"real", "ns3"}:
         return None
     if not no_feeder:
         feeder = MockTelemetryFeeder(server, scene, interval=interval)
@@ -317,15 +317,15 @@ def main():
     except (AttributeError, ValueError):
         pass
     ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
-    ap.add_argument("--mode", choices=["mock", "real"], default="mock",
-                    help="mock 使用预设场景持续喂数；real 只接受三台真实 AP reporter 上报")
+    ap.add_argument("--mode", choices=["mock", "real", "ns3"], default="mock",
+                    help="mock 使用预设场景持续喂数；real/ns3 只接受外部持续上报")
     ap.add_argument("--scene", choices=sorted(MOCK_SCENES), default="joint")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
     ap.add_argument("--no-feeder", action="store_true",
-                    help="mock 模式只推一帧后停止（兼容选项）；real 模式始终不创建 feeder")
+                    help="mock 模式只推一帧后停止（兼容选项）；real/ns3 模式始终不创建 feeder")
     ap.add_argument("--state-wait", type=float, default=None,
-                    help="等待三台 AP 新鲜状态的最长秒数（默认 mock=5，real=90）")
+                    help="等待三台 AP 新鲜状态的最长秒数（默认 mock=5，real/ns3=90）")
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
@@ -430,6 +430,8 @@ def main():
 
     if args.mode == "real":
         print("[State] real 模式：不创建 MockTelemetryFeeder，等待三台 AP reporter 真值")
+    elif args.mode == "ns3":
+        print("[State] ns3 模式：不创建 MockTelemetryFeeder，等待 ns-3 bridge 上报 source=ns3")
     feeder = _start_telemetry(
         args.mode,
         args.no_feeder,
@@ -437,17 +439,20 @@ def main():
         scene,
         args.plot_interval,
     )
-    wait_s = args.state_wait if args.state_wait is not None else (90.0 if args.mode == "real" else 5.0)
+    wait_s = args.state_wait if args.state_wait is not None else (90.0 if args.mode in {"real", "ns3"} else 5.0)
+    required_source = {"real": "ap", "ns3": "ns3"}.get(args.mode)
     try:
         ready_state = _wait_state_ready(
             args.server,
             wait_s,
-            required_source="ap" if args.mode == "real" else None,
+            required_source=required_source,
         )
     except RuntimeError as exc:
         print(f"[错误] {exc}")
         if args.mode == "real":
             print("请确认三台香蕉派 reporter 均在持续上报，且 source=ap。")
+        elif args.mode == "ns3":
+            print("请确认 state_server/ns3_bridge.py 正在运行，且 source=ns3。")
         sys.exit(1)
     if resume_checkpoint:
         compatible, reason = _resume_state_compatible(
@@ -501,7 +506,7 @@ def main():
         else:
             # initial 快照/episodic 特征/评估基线都取自这里：real 模式必须用
             # 真实上报（ready_state 的 data 载荷），不能用 mock 场景定义。
-            if args.mode == "real":
+            if args.mode in {"real", "ns3"}:
                 initial_ap_state = {
                     ap: ready_state[ap]["data"] for ap in ("ap1", "ap2", "ap3")
                 }
