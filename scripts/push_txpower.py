@@ -3,12 +3,12 @@
 push_txpower.py — 直接向香蕉派下发 TxPower 决策
 
 用法：
-  python push_txpower.py 16 16 16                 # 位置参数：ap1 ap2 ap3
-  python push_txpower.py 18                       # 只下发 ap1，其余跳过
-  python push_txpower.py 18 15 20                 # 分别指定
-  python push_txpower.py                          # 使用默认功率（全部 20 dBm）
-  python push_txpower.py 16 16 16 --dry-run       # 只打印 payload，不发请求
-  python push_txpower.py --all 17                 # 三个 AP 统一设置
+  python scripts/push_txpower.py 16 16 16                 # 位置参数：ap1 ap2 ap3
+  python scripts/push_txpower.py 18                       # 只下发 ap1，其余跳过
+  python scripts/push_txpower.py 18 15 20                 # 分别指定
+  python scripts/push_txpower.py                          # 使用默认功率（全部 20 dBm）
+  python scripts/push_txpower.py 16 16 16 --dry-run       # 只打印 payload，不发请求
+  python scripts/push_txpower.py --all 17                 # 三个 AP 统一设置
 """
 
 import argparse

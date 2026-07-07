@@ -679,7 +679,7 @@ def _has_pending_evaluations(run_id: str) -> bool:
 
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
     # 必须显式给端点才推送：mock/演示默认无端点→跳过下发，避免对不可达的真实 AP
-    # 反复 8s 超时。真实 AP 模式用 --ap-endpoints 或 --ap-config ap_endpoints.json。
+    # 反复 8s 超时。真实 AP 模式用 --ap-endpoints 或 --ap-config config/ap_endpoints.json。
     if config_arg:
         config_path = Path(config_arg)
         if not config_path.exists():

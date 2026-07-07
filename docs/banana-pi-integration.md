@@ -200,7 +200,7 @@ bash openclaw/serve.sh status
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002
 ```
 
-执行端点不会自动从 `ap_endpoints.json` 读取，必须显式传入 `--ap-endpoints` 或 `--ap-config`。`--mode real` 保证不创建 mock feeder，检查 state server 已拒收生成源，等待三台 AP 的 `source=ap` 新鲜数据，并要求端点恰好覆盖 ap1/ap2/ap3。
+执行端点不会自动从 `config/ap_endpoints.json` 读取，必须显式传入 `--ap-endpoints` 或 `--ap-config`。`--mode real` 保证不创建 mock feeder，检查 state server 已拒收生成源，等待三台 AP 的 `source=ap` 新鲜数据，并要求端点恰好覆盖 ap1/ap2/ap3。
 
 ## 五、本地联调（无真实硬件）
 

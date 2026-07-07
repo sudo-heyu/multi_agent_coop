@@ -6,16 +6,16 @@
 
 用法：
   # 默认：轮询 http://localhost:5001，每 1s 记录一次，写入 logs/throughput/throughput_user_<启动时间>.csv
-  python log_throughput.py
+  python scripts/log_throughput.py
 
   # 指定服务器、间隔、输出文件
-  python log_throughput.py --server http://192.168.1.100:5001 --interval 2 --out logs/exp1.csv
+  python scripts/log_throughput.py --server http://192.168.1.100:5001 --interval 2 --out logs/exp1.csv
 
   # 只记录某个 AP
-  python log_throughput.py --ap-id ap1
+  python scripts/log_throughput.py --ap-id ap1
 
   # 限定记录时长（秒），到点自动停止；不指定则一直记录到 Ctrl-C
-  python log_throughput.py --duration 300
+  python scripts/log_throughput.py --duration 300
 
 CSV 格式：
   timestamp,elapsed_s,ap1_throughput_mbps_user,ap2_throughput_mbps_user,ap3_throughput_mbps_user

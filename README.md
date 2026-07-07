@@ -66,7 +66,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 # DGX：触发协商并明确配置执行端点
 .venv/bin/python run_openclaw.py --mode real --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
-#  或 --ap-config ap_endpoints.json（须显式指定；不再自动读取，避免 mock 演示误推到不可达 AP 而 8s 超时）
+#  或 --ap-config config/ap_endpoints.json（须显式指定；不再自动读取，避免 mock 演示误推到不可达 AP 而 8s 超时）
 ```
 
 `--mode real` 不创建 `MockTelemetryFeeder`，会等待 ap1/ap2/ap3 均有未过期的 `source=ap` 状态，并强制要求三个 executor 端点。若 state server 允许 mock，启动器会拒绝继续并提示按真实模式重启服务。
@@ -173,32 +173,56 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 ```
 .
-├── run_openclaw.py               # 薄启动器：准备场景 → 复用 serve.sh 常驻服务（state/gateway/Dashboard/曲线）→ 进程内直跑 structured_relay（coordinator 默认停用，--use-coordinator 回退）
-├── openclaw/
-│   ├── setup.sh                  # 配置隔离 profile multiap（providers + 4 agent + 工具限制 + MCP 注册）
-│   ├── scenes.py                 # 三套 mock 场景 + 状态服务器/Dashboard/学术曲线启动器
+├── run_openclaw.py               # 主入口：准备场景 → 复用 serve.sh 常驻服务 → 进程内直跑 structured_relay；--goal 进入目标驱动迭代
+├── memory_admin.py               # 管理 CLI：run/案例/评估/规律/隔离区/矛盾账本/goal 查询与维护
+├── config/
+│   └── ap_endpoints.json         # 真实 AP 执行端点配置（--ap-config 显式传入）
+├── scripts/                      # 独立运维/实验脚本（不依赖 src，可单独拷到现场）
+│   ├── push_edca.py              # 手动向香蕉派下发 EDCA 参数
+│   ├── push_txpower.py           # 手动向香蕉派下发 TxPower
+│   ├── log_throughput.py         # 轮询 state server 记录用户吞吐 CSV
+│   └── start_server.sh           # 只拉 state server 的调试脚本（日常用 serve.sh）
+├── openclaw/                     # 智能体运行时
+│   ├── setup.sh                  # 配置隔离 profile multiap（providers + agent + 工具限制 + MCP 注册）
+│   ├── serve.sh                  # 常驻服务生命周期：state/gateway/Dashboard/学术曲线/harvester
+│   ├── scenes.py                 # 三套 mock 场景 + 配套服务启动器
 │   ├── mcp/
-│   │   ├── multiap_mcp.py        # stdio MCP 工具服务（暴露计算/验算/状态/编排/下发工具）
+│   │   ├── multiap_mcp.py        # stdio MCP 工具服务（计算/验算/状态/编排/下发工具）
 │   │   ├── orchestration.py      # 编排机制层：四阶段 structured_relay、驱动 AP、计票、反提案
 │   │   ├── proposal_utils.py     # 提案/JSON/策略推断纯函数
-│   │   └── tool_console.py       # 工具调用富文本 formatter（阶段接力工具展示）
-│   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS.md
-├── state_server/
+│   │   └── tool_console.py       # 工具调用富文本 formatter
+│   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS/MEMORY.md
+├── state_server/                 # 遥测与执行面
 │   ├── server.py                 # Flask 状态服务器（AP 上报 / MCP 工具读取）
 │   ├── reporter.py               # AP 状态上报脚本（部署在香蕉派，或本地 mock）
 │   ├── executor.py               # 执行端点：接收决策并下发到硬件
-│   ├── mock_feeder.py            # mock 曲线喂数器（持续喂遥测 + 协商后注入决策）
+│   ├── ns3_bridge.py             # ns-3 实时桥：仿真遥测入 server + /apply 写回仿真
+│   ├── mock_feeder.py            # mock 曲线喂数器
+│   ├── outcome_harvester.py      # 常驻评估窗口收割器
 │   └── academic_plot.py          # Matplotlib 学术曲线窗口
-├── src/                          # 保留的确定性基础设施/工具（被 MCP 工具复用）
-│   ├── tools/{sr,edca}.py        # Co-SR / Co-EDCA 计算与约束验算
+├── src/                          # 确定性领域核心（被 MCP 工具与运行时复用）
+│   ├── tools/{sr,edca}.py        # Co-SR / Co-EDCA 计算与约束验算（含 per-AC EDCA）
 │   ├── validator.py              # 确定性 Validator：物理约束最终验算
 │   ├── profile.py                # 状态规范化 + 字段白名单
 │   ├── state_client.py           # 读取状态服务器（含过期检查）
-│   ├── logger.py                 # 结构化 JSONL 日志
-│   └── console_style.py          # 彩色终端输出
-├── dashboard/                    # Flask + SSE 实时协商对话 Dashboard
-├── memory_admin.py               # 本地 SQLite 事件/恢复 checkpoint 查询
-├── logs/                         # JSONL + agent_memory.sqlite3 持久事件存储
+│   ├── logger.py                 # 结构化 JSONL + SQLite 双写日志
+│   ├── console_style.py          # 彩色终端输出
+│   ├── persistence/              # L1 Event Store（SQLite schema 迁移 / 恢复 checkpoint）
+│   └── memory/                   # 记忆体系（L2–L6 + 反思 + 迭代）
+│       ├── session_memory.py     #   L2 会话记忆：确定性增量摘要
+│       ├── episodic.py           #   L3 案例记忆：物化 + 拓扑隔离相似检索
+│       ├── outcome.py            #   L4 效果评估：多窗口比对 + 质量回写
+│       ├── semantic.py           #   L5 语义规律：跨案例归纳（达标链加成）
+│       ├── consolidation.py      #   L6 整理：容量/过期归档 + 冲突标记
+│       ├── reflection.py         #   反思：信任模型/召回门控/矛盾账本/校准
+│       ├── goals.py              #   迭代：Goal/attempt 链/归因/停机准则
+│       ├── rollback.py           #   回滚建议执行（审批后走幂等通道）
+│       ├── workspace.py          #   agent 工作区记忆文件渲染与注入
+│       ├── observability.py      #   memory_health 聚合
+│       └── llm_backend.py        #   可选 LLM 叙事（确定性降级）
+├── dashboard/                    # Flask + SSE 实时协商 Dashboard（含 /memory 健康面板）
+├── tests/                        # unittest 套件（含 I5 迭代基准 test_goal_benchmark.py）
+├── logs/                         # JSONL + agent_memory.sqlite3 持久事件存储（gitignore）
 └── docs/                         # 设计文档（docs/openclaw/ 为 OpenClaw 自身参考文档）
 ```
 

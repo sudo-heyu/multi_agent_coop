@@ -21,7 +21,7 @@ ns-3 桥 —— 把真实 ns-3 仿真接到既有框架的两个 HTTP 边界上�
   #   python state_server/server.py
   # 再启动桥（会自己拉起 ns-3）：
   #   python state_server/ns3_bridge.py
-  # 然后把 ap_endpoints.json 里三个 AP 都指向 http://localhost:5003
+  # 然后把 config/ap_endpoints.json 里三个 AP 都指向 http://localhost:5003
 """
 from __future__ import annotations
 
@@ -291,7 +291,7 @@ def main():
                         args.report_interval, args.scenario, args.ns3_args)
     _bridge.start_reader()
 
-    print(f"[bridge] /apply 监听 http://0.0.0.0:{args.port} —— 请把 ap_endpoints.json "
+    print(f"[bridge] /apply 监听 http://0.0.0.0:{args.port} —— 请把 config/ap_endpoints.json "
           f"三个 AP 都指向 http://localhost:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False)
 

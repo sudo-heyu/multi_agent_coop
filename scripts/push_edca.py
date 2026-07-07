@@ -3,11 +3,11 @@
 push_edca.py — 直接向香蕉派下发 EDCA 参数决策
 
 用法：
-  python push_edca.py <cwmin> <cwmax> <aifsn>           # 三个 AP 使用相同参数
-  python push_edca.py 3 15 3                            # 全部统一
-  python push_edca.py --ap1 3 15 3 --ap2 7 31 2        # 分 AP 指定
-  python push_edca.py --ap1 3 15 3                      # 只下发 ap1
-  python push_edca.py 3 15 3 --dry-run                  # 预览 payload，不发送
+  python scripts/push_edca.py <cwmin> <cwmax> <aifsn>           # 三个 AP 使用相同参数
+  python scripts/push_edca.py 3 15 3                            # 全部统一
+  python scripts/push_edca.py --ap1 3 15 3 --ap2 7 31 2        # 分 AP 指定
+  python scripts/push_edca.py --ap1 3 15 3                      # 只下发 ap1
+  python scripts/push_edca.py 3 15 3 --dry-run                  # 预览 payload，不发送
 
 参数范围（IEEE 802.11）：
   CWmin:  3 – 1023
@@ -162,7 +162,7 @@ def main() -> None:
 
     if not target:
         print("未指定任何参数，退出。", file=sys.stderr)
-        print("示例：python push_edca.py 3 15 3", file=sys.stderr)
+        print("示例：python scripts/push_edca.py 3 15 3", file=sys.stderr)
         sys.exit(1)
 
     for ap_id, (cwmin, cwmax, aifsn) in target.items():

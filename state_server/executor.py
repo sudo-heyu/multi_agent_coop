@@ -22,7 +22,7 @@ from flask import Flask, request, jsonify
 
 # 说明：协商内部使用实际 CW 值，但 CW→指数 n 的换算在【发送端】完成
 # （openclaw/mcp/orchestration.py 的 _push_decision，经 src/tools/edca.py:encode_params_edca；
-# 以及 push_edca.py）。本执行服务收到的 CWmin/CWmax 已是指数 n，
+# 以及 scripts/push_edca.py）。本执行服务收到的 CWmin/CWmax 已是指数 n，
 # 直接写入 hostapd，不在此再次换算。
 
 app = Flask(__name__)
