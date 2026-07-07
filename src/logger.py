@@ -62,12 +62,17 @@ def _ts_ms() -> float:
 def _extract_ap_parameters(ap_state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     fields = (
         "tx_power_dbm",
+        "obss_pd_dbm",
         "cwmin",
         "cwmax",
         "aifsn",
         "CWmin",
         "CWmax",
         "AIFSN",
+        "be_cwmin", "be_cwmax", "be_aifsn",
+        "vi_cwmin", "vi_cwmax", "vi_aifsn",
+        "BE_CWmin", "BE_CWmax", "BE_AIFSN",
+        "VI_CWmin", "VI_CWmax", "VI_AIFSN",
         "Data_rate_to_bandwidth_ratio",
         "tx_retries_ratio",
         "throughput_mbps_iperf",
@@ -511,6 +516,37 @@ class SessionLogger:
             parameters=_extract_ap_parameters(ap_state),
             ap_state=ap_state,
         )
+
+    def record_proposal(
+        self,
+        proposal_num: int,
+        proposer: str,
+        strategy: str | None,
+        proposal: dict[str, Any] | None,
+        *,
+        kind: str = "proposal",
+    ) -> None:
+        """记录一次解析成功的提案/反提案候选参数（协商中间参数演变）。
+
+        与 agent_speak 的原文互补：这里是结构化参数，供参数时间线直接合并；
+        kind: "proposal"=正常提案, "counter"=反对者接管的反提案。
+        """
+        if proposal is None:
+            return
+        payload = {
+            "proposal_num": proposal_num,
+            "proposer": proposer,
+            "strategy": strategy,
+            "kind": kind,
+            "parameters": _extract_ap_parameters(proposal),
+            "proposal": proposal,
+        }
+        self._write("proposal_params", **payload)
+        self._write_state_trace("proposal_params", **payload)
+
+    def record_telemetry_trace(self, action: str, path: str | None) -> None:
+        """记录 state server 连续遥测 trace 的启停与文件路径（便于按 run 关联）。"""
+        self._write("telemetry_trace", action=action, path=path)
 
     def record_decision_parameters(
         self,

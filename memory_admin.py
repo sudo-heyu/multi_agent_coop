@@ -83,6 +83,10 @@ def main() -> None:
     contradictions_cmd.add_argument("--kind", choices=["episode", "agent_episode", "rule"])
     contradictions_cmd.add_argument("--key")
     contradictions_cmd.add_argument("--limit", type=int, default=100)
+    timeline = sub.add_parser(
+        "timeline", help="一次协商的参数演变时间线（快照/提案链/决策/下发/评估窗口）",
+    )
+    timeline.add_argument("run_id")
     goal = sub.add_parser("goal", help="迭代目标：创建/查看/放弃/确定性自动触发")
     goal_sub = goal.add_subparsers(dest="goal_command", required=True)
     goal_create = goal_sub.add_parser("create", help="创建目标（单活跃目标）")
@@ -218,6 +222,11 @@ def main() -> None:
             result = store.list_contradictions(
                 memory_kind=args.kind, memory_key=args.key, limit=args.limit,
             )
+        elif args.command == "timeline":
+            from src.memory.observability import parameter_timeline
+            if store.get_run(args.run_id) is None:
+                raise SystemExit(f"run not found: {args.run_id}")
+            result = parameter_timeline(store, args.run_id)
         elif args.command == "goal":
             from src.memory.goals import auto_create_goal, create_goal, goal_overview
             if args.goal_command == "create":

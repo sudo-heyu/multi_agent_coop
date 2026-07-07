@@ -1197,6 +1197,11 @@ def run_propose(
     _SESSION.proposal = proposal
     _SESSION.strategy = strategy
     _SESSION.proposal_num += 1
+    if logger is not None and proposal is not None:
+        # 参数时间线：结构化保留每个候选提案的参数（与发言原文互补）。
+        logger.record_proposal(
+            _SESSION.proposal_num, proposer_id, strategy, proposal,
+        )
     return {"proposer": proposer_id, "reply": reply, "proposal": proposal,
             "strategy": strategy, "proposal_num": _SESSION.proposal_num,
             "parsed": proposal is not None}
@@ -1939,7 +1944,13 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                         emit("propose", voter, rep["reply"])
                     counter = rep["counter_proposal"]
                 if counter is not None:
-                    promote_counter(voter, counter)
+                    promoted = promote_counter(voter, counter)
+                    if logger is not None:
+                        logger.record_proposal(
+                            promoted["proposal_num"], voter,
+                            promoted["strategy"], promoted["proposal"],
+                            kind="counter",
+                        )
                     agree = set()
                     _save_checkpoint(
                         logger, "counter_proposal_ready", retry=retry,

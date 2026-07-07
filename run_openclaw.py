@@ -354,7 +354,7 @@ def main():
                     help="上下文中优先保留原文的最近发言数（最小 2）")
     ap.add_argument("--eval-windows", default="",
                     help="决策生效后的效果评估窗口秒数，逗号分隔（如 60,300,900）；"
-                         "默认 mock=10,30 / real=60,300,900；传 off 关闭")
+                         "默认 mock/ns3=10,30 / real=60,300,900；传 off 关闭")
     ap.add_argument("--goal", default="",
                     help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
                          "（目标经 memory_admin.py goal create 创建）")
@@ -515,6 +515,14 @@ def main():
             logger.session_start(
                 model="openclaw-direct", scene=args.scene, ap_state=initial_ap_state
             )
+        # 参数时间线：让 state server 把本 run 期间收到的每一帧上报连续落盘
+        # （协商中 + 决策生效后评估期都在范围内）；进程任何退出路径都停止 trace。
+        trace_path = _start_run_trace(args.server, str(logger.session_id))
+        logger.record_telemetry_trace("start", trace_path)
+        if trace_path:
+            print(f"[Trace] 连续遥测落盘：{trace_path}")
+            import atexit
+            atexit.register(_stop_run_trace, args.server)
         resume_projection = None
         if resume_checkpoint:
             resume_projection = {
@@ -680,6 +688,29 @@ def _has_pending_evaluations(run_id: str) -> bool:
         return bool(store.list_evaluations(run_id, status="pending"))
     finally:
         store.close()
+
+
+def _start_run_trace(server: str, run_id: str) -> str | None:
+    """开启 state server 连续遥测 trace（按 run 关联文件名）；失败不阻塞协商。"""
+    import requests
+    try:
+        r = requests.post(
+            f"{server.rstrip('/')}/trace/start",
+            json={"session_id": run_id}, timeout=2,
+        )
+        if r.status_code == 200:
+            return (r.json() or {}).get("path")
+    except Exception:
+        pass
+    return None
+
+
+def _stop_run_trace(server: str) -> None:
+    import requests
+    try:
+        requests.post(f"{server.rstrip('/')}/trace/stop", timeout=2)
+    except Exception:
+        pass
 
 
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:

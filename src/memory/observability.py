@@ -111,6 +111,93 @@ def _reflection_health(store: EventStore) -> dict[str, Any]:
     }
 
 
+def parameter_timeline(store: EventStore, run_id: str) -> list[dict[str, Any]]:
+    """一次协商从头到尾的参数演变时间线（按时间排序，带逐步变化 diff）。
+
+    合并五类来源：状态快照（协商前/生效后观测）、提案/反提案候选参数、
+    最终决策、执行下发、评估窗口观测。条目分两个空间，diff 只在同空间内比较：
+    - target：提案/决策/下发的目标参数（EDCA 用实际 CW 值）；
+    - observed：遥测观测参数（cwmin/cwmax 为指数 n）。
+    两个空间单位约定不同，跨空间比较会产生误导，故各自成链。
+    """
+    from src.logger import _extract_ap_parameters
+
+    entries: list[dict[str, Any]] = []
+    for snapshot in store.iter_snapshots(run_id):
+        entries.append({
+            "ts": snapshot["observed_at"], "space": "observed",
+            "stage": f"snapshot:{snapshot['label']}",
+            "source": snapshot["source"],
+            "parameters": _extract_ap_parameters(snapshot["state"]),
+        })
+    for event in store.load_events(run_id):
+        kind = event["event"]
+        if kind == "proposal_params":
+            entries.append({
+                "ts": event["ts"], "space": "target",
+                "stage": f"proposal#{event.get('proposal_num')}"
+                         f"({event.get('kind')},{event.get('proposer')})",
+                "strategy": event.get("strategy"),
+                "parameters": event.get("parameters") or {},
+            })
+        elif kind == "final_decision" and event.get("decision"):
+            entries.append({
+                "ts": event["ts"], "space": "target", "stage": "final_decision",
+                "parameters": _extract_ap_parameters(event["decision"]),
+            })
+        elif kind == "executor_apply":
+            entries.append({
+                "ts": event["ts"], "space": "target",
+                "stage": f"executor_apply:{event.get('ap_id')}",
+                "ok": event.get("ok"),
+                "parameters": {
+                    str(event.get("ap_id")): {
+                        k: v for k, v in (event.get("payload") or {}).items()
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)
+                    }
+                },
+            })
+        elif kind == "validation_result":
+            entries.append({
+                "ts": event["ts"], "space": "marker",
+                "stage": "validation",
+                "approved": event.get("approved"),
+                "summary": event.get("summary"),
+            })
+    for evaluation in store.list_evaluations(run_id):
+        if evaluation.get("status") != "collected" or not evaluation.get("observed"):
+            continue
+        entries.append({
+            "ts": evaluation.get("collected_at") or evaluation["due_at"],
+            "space": "observed",
+            "stage": f"evaluation:{evaluation['window_label']}",
+            "verdict": evaluation.get("verdict"),
+            "parameters": _extract_ap_parameters(evaluation["observed"]),
+        })
+    entries.sort(key=lambda item: str(item.get("ts") or ""))
+    previous: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        params = entry.get("parameters")
+        if not isinstance(params, dict):
+            continue
+        space = entry["space"]
+        changes: dict[str, dict[str, Any]] = {}
+        last = previous.get(space) or {}
+        for ap, fields in params.items():
+            if not isinstance(fields, dict):
+                continue
+            for field, value in fields.items():
+                old = (last.get(ap) or {}).get(field)
+                if old is not None and value is not None and old != value:
+                    changes.setdefault(ap, {})[field] = {"from": old, "to": value}
+        if changes:
+            entry["changes"] = changes
+        merged = {ap: {**(last.get(ap) or {}), **fields}
+                  for ap, fields in params.items() if isinstance(fields, dict)}
+        previous[space] = {**last, **merged}
+    return entries
+
+
 def _distribution(sorted_values: list[float]) -> dict[str, Any]:
     if not sorted_values:
         return {"count": 0}

@@ -234,6 +234,14 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 （`session_start` / `phase_start` / `agent_speak` / `tool_call` / `vote` / `round_result` /
 `final_decision` / `validation_result` / `executor_apply` / `session_end`），供 Dashboard 可视化或离线分析。
 
+**参数变化全程保留**：每次协商自动形成一条可回放的参数时间线——协商前初始快照、
+每个提案/反提案的结构化候选参数（`proposal_params` 事件）、最终决策、逐 AP 执行下发、
+生效后观测快照、各评估窗口观测，全部双写 SQLite 与 `logs/state/state_trace_*.jsonl`；
+协商开始时还会自动开启 state server 连续遥测 trace（`logs/state/telemetry_trace_*.jsonl`，
+文件名含 run_id，覆盖协商中与生效后评估期的每一帧上报，进程退出自动停止）。用
+`.venv/bin/python memory_admin.py timeline <run_id>` 查看合并时间线（带逐步参数 diff；
+提案/决策为目标参数空间，遥测为观测空间，两空间单位约定不同、各自成链比较）。
+
 同一事件还会双写到 `logs/agent_memory.sqlite3`，按 run 保存有序事件和状态快照。可用
 `.venv/bin/python memory_admin.py incomplete` 查看异常中断运行，或用
 `.venv/bin/python memory_admin.py show <run_id>` 回放。executor 下发已使用持久化 action journal 和幂等 key：成功动作不会重复发送，明确失败最多尝试两次，网络不确定结果会阻塞恢复，必须核对 AP `/status` 后执行 `memory_admin.py resolve-action`。记忆模块完整说明见 `docs/memory-module.md`，演进历史见 `docs/memory-architecture.md`。
