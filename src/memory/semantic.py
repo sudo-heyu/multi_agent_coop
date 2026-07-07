@@ -49,11 +49,20 @@ def induce_rules(
         key = (episode["topology_signature"], episode.get("scene"), episode.get("strategy"))
         groups.setdefault(key, []).append(episode)
 
+    # I6：达标目标链上的案例是"被目标闭环验证过的成功路径"，归纳时给予
+    # 置信度加成（确定性、封顶 1.0）；失败链不在此惩罚——其矛盾账本已由
+    # R4 逐 run 记账，避免双重惩罚。
+    achieved_runs = {
+        attempt["run_id"]
+        for goal in store.list_goals(status="achieved")
+        for attempt in store.list_goal_attempts(goal["goal_id"])
+    }
+
     rules = []
     for (topology, scene, strategy), members in groups.items():
         if len(members) < min_support:
             continue
-        rule = _build_rule(topology, scene, strategy, members)
+        rule = _build_rule(topology, scene, strategy, members, achieved_runs=achieved_runs)
         if use_llm:
             rule.update(_llm_rule_summary(rule, members))
         rule["rule_id"] = store.upsert_rule(rule)
@@ -98,8 +107,12 @@ def find_matching_rules(
     return gate_memories(applicable)[: max(1, int(limit))]
 
 
+GOAL_SUPPORT_BONUS = 0.05  # 每个达标目标链成员的置信度加成（封顶 1.0）
+
+
 def _build_rule(
-    topology: str, scene: str | None, strategy: str | None, members: list[dict[str, Any]]
+    topology: str, scene: str | None, strategy: str | None, members: list[dict[str, Any]],
+    *, achieved_runs: set[str] | None = None,
 ) -> dict[str, Any]:
     counts = Counter(m["evaluation"]["final_verdict"] for m in members)
     support = len(members)
@@ -110,6 +123,13 @@ def _build_rule(
     )
     consistency = counts.get(dominant, 0) / support
     confidence = round(consistency * min(1.0, support / FULL_SUPPORT), 4)
+    goal_supported = sum(
+        1 for m in members
+        if m["run_id"] in (achieved_runs or set())
+        and m["evaluation"]["final_verdict"] == dominant
+    )
+    if goal_supported:
+        confidence = round(min(1.0, confidence + GOAL_SUPPORT_BONUS * goal_supported), 4)
     dominant_members = [
         m for m in members if m["evaluation"]["final_verdict"] == dominant
     ]
@@ -128,6 +148,7 @@ def _build_rule(
         "strategy": strategy,
         "dominant_verdict": dominant,
         "support": support,
+        "goal_supported": goal_supported,
         "consistency": round(consistency, 4),
         "confidence": confidence,
         "verdict_counts": dict(counts),
