@@ -8,11 +8,13 @@
 """
 import io
 import threading
+import time
 import unittest
 
 from src.tools import sr
 from src.tools.edca import decode_state_edca, encode_params_edca
 from src import validator
+from src.profile import apply_profile
 from openclaw.mcp.proposal_utils import _infer_strategy_from_proposal
 
 
@@ -84,6 +86,23 @@ class ValidatorObssPdTests(unittest.TestCase):
         rep = validator.validate_decision(_states(), decision, "co_sr")
         self.assertTrue(rep["approved"], rep["summary"])
 
+    def test_profile_keeps_obss_pd_for_real_observation_validation(self):
+        decision = {"ap1": {"tx_power_dbm": 6, "obss_pd_dbm": -66},
+                    "ap2": {"tx_power_dbm": 6, "obss_pd_dbm": -66},
+                    "ap3": {"tx_power_dbm": 20, "obss_pd_dbm": -82}}
+        observed_raw = {
+            ap_id: {**state, **decision[ap_id]}
+            for ap_id, state in _states().items()
+        }
+        observed = apply_profile(observed_raw)
+
+        rep = validator.validate_decision(
+            _states(), decision, "co_sr", observed, observed_is_real=True
+        )
+
+        self.assertTrue(rep["approved"], rep["summary"])
+        self.assertEqual(observed["ap1"]["obss_pd_dbm"], -66)
+
 
 class StrategyInferenceTests(unittest.TestCase):
     def test_obss_pd_only_infers_co_sr(self):
@@ -122,6 +141,72 @@ class BridgeApplyTableTests(unittest.TestCase):
         # 指数 n=3 → 实际 CW 7；n=4 → 15
         self.assertEqual(cmd, "APPLY ap1 vi_cwmin=7 vi_cwmax=15 vi_aifsn=2")
 
+    def test_bridge_merges_sta_telemetry_into_ap_payload(self):
+        from state_server import ns3_bridge as br
+        b = br.Ns3Bridge.__new__(br.Ns3Bridge)
+        posted = []
+
+        class _Http:
+            def post(self, url, json, timeout):
+                posted.append(json)
+
+                class _Resp:
+                    status_code = 200
+                    text = "ok"
+
+                return _Resp()
+
+        b.state_server = "http://state"
+        b._http = _Http()
+        b._seen = {"ap1"}
+        b._service_names = br.DEFAULT_SERVICE_NAMES
+        b._business_types = br.DEFAULT_BUSINESS_TYPES
+        b._priorities = br.DEFAULT_PRIORITIES
+        b._sta_feedback_by_ap = {"ap1": []}
+        b._telemetry_cond = None
+        b._last_post_error = None
+        b._last_raw_by_ap = {}
+        b._last_payload_by_ap = {}
+        b._telemetry_seq = {}
+
+        b._forward_sta({
+            "ap_id": "ap1",
+            "sta_id": "sta-ap1-live",
+            "flow_type": "video_call",
+            "sla": {"max_latency_ms": 80},
+            "measurements": {"latency_ms": 120, "jitter_ms": 25},
+        })
+        b._forward({
+            "ap_id": "ap1",
+            "tx_power_dbm": 16,
+            "cwmin": 15,
+            "cwmax": 1023,
+            "aifsn": 3,
+            "be_cwmin": 15,
+            "be_cwmax": 1023,
+            "be_aifsn": 3,
+            "vi_cwmin": 7,
+            "vi_cwmax": 15,
+            "vi_aifsn": 2,
+            "Data_rate_to_bandwidth_ratio": 0.5,
+            "tx_retries_ratio": 0.1,
+            "neighbor_rssi_dbm": {"ap2": -75},
+            "sta_rssi_dbm": -55,
+            "noise_floor_dbm": -94,
+            "throughput_mbps_iperf": 10,
+            "throughput_mbps_user": 3,
+            "ac_iperf": "AC_BE",
+            "ac_user": "AC_VI",
+            "latency_ms": 120,
+            "jitter_ms": 25,
+            "packet_loss_pct": 0.0,
+        })
+
+        self.assertEqual(posted[0]["source"], "ns3")
+        self.assertEqual(posted[0]["stas"][0]["sta_id"], "sta-ap1-live")
+        self.assertEqual(posted[0]["sta_feedback_summary"]["status"], "violated")
+        self.assertEqual(posted[0]["sla_violations"][0]["sta_id"], "sta-ap1-live")
+
     def test_unknown_strategy_is_rejected_without_writing(self):
         b = self._bridge()
         result = b.apply("ap1", "co_bf", {"bf": 1})
@@ -156,6 +241,34 @@ class BridgeApplyTableTests(unittest.TestCase):
             br._bridge = old_bridge
             br._last_result = old_last_result
 
+    def test_apply_ack_waits_past_one_stale_telemetry_frame(self):
+        from state_server import ns3_bridge as br
+        b = br.Ns3Bridge.__new__(br.Ns3Bridge)
+        b._apply_ack_timeout = 0.5
+        b._telemetry_cond = threading.Condition()
+        b._telemetry_seq = {"ap1": 0}
+        b._last_raw_by_ap = {}
+
+        def publish_frames():
+            time.sleep(0.03)
+            with b._telemetry_cond:
+                b._last_raw_by_ap["ap1"] = {"tx_power_dbm": 10.0}
+                b._telemetry_seq["ap1"] = 1
+                b._telemetry_cond.notify_all()
+            time.sleep(0.03)
+            with b._telemetry_cond:
+                b._last_raw_by_ap["ap1"] = {"tx_power_dbm": 6.0}
+                b._telemetry_seq["ap1"] = 2
+                b._telemetry_cond.notify_all()
+
+        t = threading.Thread(target=publish_frames)
+        t.start()
+        ack = b._wait_apply_visible("ap1", {"tx": 6.0}, 0)
+        t.join()
+
+        self.assertTrue(ack["ok"], ack)
+        self.assertEqual(ack["observed"]["tx_power_dbm"], 6.0)
+
     def test_forward_encodes_per_ac_cw_fields(self):
         from state_server import ns3_bridge as br
         b = br.Ns3Bridge.__new__(br.Ns3Bridge)
@@ -168,6 +281,7 @@ class BridgeApplyTableTests(unittest.TestCase):
 
             def post(self, url, json, timeout):
                 self.payload = json
+                return type("_Resp", (), {"status_code": 200, "text": "ok"})()
 
         b._http = _Http()
         b._forward({
@@ -177,7 +291,7 @@ class BridgeApplyTableTests(unittest.TestCase):
             "be_cwmin": 15, "be_cwmax": 1023, "be_aifsn": 3,
             "vi_cwmin": 7, "vi_cwmax": 15, "vi_aifsn": 2,
             "Data_rate_to_bandwidth_ratio": 0.5, "tx_retries_ratio": 0,
-            "neighbor_rssi_dbm": -72, "sta_rssi_dbm": -46, "noise_floor_dbm": -94,
+            "neighbor_rssi_dbm": {"ap2": -72}, "sta_rssi_dbm": -46, "noise_floor_dbm": -94,
             "throughput_mbps_iperf": 10, "throughput_mbps_user": 2,
             "ac_iperf": "AC_BE", "ac_user": "AC_VI",
             "latency_ms": 10, "packet_loss_pct": 0,
@@ -189,6 +303,34 @@ class BridgeApplyTableTests(unittest.TestCase):
         self.assertEqual(payload["be_cwmax"], 10)
         self.assertEqual(payload["vi_cwmin"], 3)
         self.assertEqual(payload["vi_cwmax"], 4)
+        self.assertEqual(payload["traffic_priority"], "low")
+        self.assertEqual(payload["business_type"], "后台下载")
+        self.assertEqual(payload["neighbor_rssi_dbm"], {"ap2": -72})
+
+    def test_forward_records_state_server_rejection(self):
+        from state_server import ns3_bridge as br
+        b = br.Ns3Bridge.__new__(br.Ns3Bridge)
+        b.state_server = "http://state"
+        b._seen = {"ap1"}
+
+        class _Http:
+            def post(self, url, json, timeout):
+                return type("_Resp", (), {"status_code": 400, "text": "bad source"})()
+
+        b._http = _Http()
+        b._forward({
+            "ap_id": "ap1",
+            "tx_power_dbm": 10,
+            "cwmin": 15, "cwmax": 1023, "aifsn": 3,
+            "Data_rate_to_bandwidth_ratio": 0.5, "tx_retries_ratio": 0,
+            "neighbor_rssi_dbm": {"ap2": -72}, "sta_rssi_dbm": -46, "noise_floor_dbm": -94,
+            "throughput_mbps_iperf": 10, "throughput_mbps_user": 2,
+            "ac_iperf": "AC_BE", "ac_user": "AC_VI",
+            "latency_ms": 10, "packet_loss_pct": 0,
+        })
+
+        self.assertEqual(b._last_post_error["status_code"], 400)
+        self.assertIn("bad source", b._last_post_error["body"])
 
 
 class PerAcEdcaTests(unittest.TestCase):

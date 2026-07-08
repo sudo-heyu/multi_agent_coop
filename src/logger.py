@@ -45,6 +45,8 @@ _LABELS: dict[str, str] = {
     "agent_speak":        "发言",
     "vote":               "投票",
     "round_result":       "轮次",
+    "proposal_repair":    "提案修复",
+    "proposal_precheck":  "提案预检",
     "final_decision":     "决策",
     "validation_result":  "验证",
     "session_end":        "会话结束",
@@ -80,8 +82,12 @@ def _extract_ap_parameters(ap_state: dict[str, Any]) -> dict[str, dict[str, Any]
         "ac_iperf",
         "ac_user",
         "latency_ms",
+        "jitter_ms",
         "packet_loss_pct",
         "sta_rssi_dbm",
+        "stas",
+        "sta_feedback_summary",
+        "sla_violations",
         "noise_floor_dbm",
         "neighbor_rssi_dbm",
     )
@@ -870,6 +876,64 @@ class SessionLogger:
         self._console("round_result",
                       f"第{round_num}轮 {agree_count}/{total_voters} "
                       f"{'全票通过' if all_agreed else '未通过'}")
+
+    def proposal_precheck(
+        self,
+        proposal_num: int,
+        proposer: str,
+        strategy: str | None,
+        result: dict,
+    ) -> None:
+        """投票前的确定性提案预检。
+
+        这是编排层安全闸门，不代表 AP 已投票；用于把硬约束检查从提示词转移到系统层。
+        """
+        self._write(
+            "proposal_precheck",
+            proposal_num=proposal_num,
+            proposer=proposer,
+            strategy=strategy,
+            result=result,
+        )
+        mark = "通过" if result.get("approved") else "未通过"
+        self._console(
+            "proposal_precheck",
+            f"提案#{proposal_num} {mark} | {result.get('summary', '')}",
+        )
+
+    def proposal_repair(
+        self,
+        proposal_num: int,
+        proposer: str,
+        strategy: str | None,
+        repairs: list[dict[str, Any]],
+        proposal: dict[str, Any] | None,
+    ) -> None:
+        """投票前的最小机械修复记录。
+
+        仅用于审计系统层对硬约束关系错误的修正，不代表 AP 主动修改了提案。
+        """
+        payload = {
+            "proposal_num": proposal_num,
+            "proposer": proposer,
+            "strategy": strategy,
+            "repairs": repairs,
+            "parameters": _extract_ap_parameters(proposal or {}),
+            "proposal": proposal,
+        }
+        self._write("proposal_repair", **payload)
+        self._write_state_trace("proposal_repair", **payload)
+        summary = "；".join(
+            f"{str(item.get('ap', '')).upper()} {item.get('ac')} "
+            f"{item.get('cwmax_field')} {item.get('old')}->{item.get('new')}"
+            for item in repairs[:4]
+        )
+        if len(repairs) > 4:
+            summary += f"；另 {len(repairs) - 4} 处"
+        self._console(
+            "proposal_repair",
+            f"提案#{proposal_num} 机械修复 {len(repairs)} 处 | {summary}",
+        )
 
     def final_decision(self, decision: dict | None, raw_response: str) -> None:
         """

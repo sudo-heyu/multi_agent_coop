@@ -15,6 +15,7 @@ Co-SR / Co-EDCA 只是当前工具支持的两类调参能力。是否使用它�
 """
 
 from .tools.edca import decode_state_edca
+from .sta_feedback import summarize_ap_feedback
 
 VALID_TRAFFIC_PRIORITIES: tuple[str, ...] = ("high", "medium", "low")
 DEFAULT_SERVICE_NAME = "未声明业务"
@@ -38,7 +39,13 @@ AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
     "vi_aifsn",              # AC_VI AIFSN
     "sta_rssi_dbm",          # 己方 STA 信号强度（降功率安全下界）
     "throughput_mbps_user",  # 用户实际业务吞吐
+    "latency_ms",            # 用户业务端到端时延（ns-3 FlowMonitor）
+    "jitter_ms",             # 用户业务 jitter（ns-3 FlowMonitor）
+    "packet_loss_pct",       # 用户业务丢包率
     "neighbor_rssi_dbm",     # 邻居 AP 信号强度（Co-SR 干扰感知）
+    "stas",                  # 关联 STA 的结构化 QoE/SLA 反馈列表
+    "sta_feedback_summary",  # 本 AP 侧 STA 反馈摘要
+    "sla_violations",        # 本 AP 关联 STA 的 SLA 违规摘要
 )
 
 # ── 仅供工具内部计算、不展示给 agent 的字段 ──────────────────────────────────
@@ -78,6 +85,13 @@ def apply_profile(ap_states: dict) -> dict:
         if priority not in VALID_TRAFFIC_PRIORITIES:
             priority = DEFAULT_TRAFFIC_PRIORITY
         filtered["traffic_priority"] = priority
+        if isinstance(filtered.get("stas"), list):
+            summary = summarize_ap_feedback(ap_id, filtered)
+            filtered["sta_feedback_summary"] = {
+                k: v for k, v in summary.items() if k != "stas"
+            }
+            filtered["stas"] = summary["stas"]
+            filtered["sla_violations"] = summary["violations"]
         result[ap_id] = filtered
     return result
 

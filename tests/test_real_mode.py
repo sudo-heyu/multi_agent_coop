@@ -31,6 +31,19 @@ class RealModeTests(unittest.TestCase):
         self.assertIsNone(result)
         feeder.assert_not_called()
 
+    def test_ns3_mode_never_constructs_mock_feeder(self):
+        with patch.object(run_openclaw, "MockTelemetryFeeder") as feeder:
+            result = run_openclaw._start_telemetry(
+                "ns3", False, "http://localhost:5001", {}, 1.0
+            )
+
+        self.assertIsNone(result)
+        feeder.assert_not_called()
+
+    def test_ns3_eval_windows_default_to_short_feedback(self):
+        with patch.dict(run_openclaw.os.environ, {"MULTIAP_EVAL_WINDOWS": ""}):
+            self.assertEqual(run_openclaw._resolve_eval_windows("", "ns3"), (10.0, 30.0))
+
     def test_resume_rejects_changed_ap_parameters(self):
         stored = orch.apply_profile(copy.deepcopy(MOCK_SCENES["edca"]))
         latest = {

@@ -23,6 +23,7 @@ BASE_PAYLOAD = {
     "ac_iperf": "BK",
     "ac_user": "BE",
     "latency_ms": 7.5,
+    "jitter_ms": 1.2,
     "packet_loss_pct": 0.0,
 }
 
@@ -63,6 +64,15 @@ class StateServerSourcePolicyTest(unittest.TestCase):
             server.DEFAULT_BUSINESS_TYPE,
         )
 
+    def test_default_server_accepts_ns3_source(self):
+        payload = copy.deepcopy(BASE_PAYLOAD)
+        payload["source"] = "ns3"
+
+        resp = self.client.post("/state", json=payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(server._store["ap1"]["data"]["source"], "ns3")
+
     def test_state_accepts_explicit_business_type(self):
         payload = copy.deepcopy(BASE_PAYLOAD)
         payload["source"] = "ap"
@@ -88,6 +98,33 @@ class StateServerSourcePolicyTest(unittest.TestCase):
         self.assertEqual(row["cwmin"], 4)
         self.assertEqual(row["cwmax"], 10)
         self.assertEqual(row["aifsn"], 3)
+        self.assertEqual(row["jitter_ms"], 1.2)
+
+    def test_state_accepts_sta_feedback_fields(self):
+        payload = copy.deepcopy(BASE_PAYLOAD)
+        payload["source"] = "ns3"
+        payload["stas"] = [{
+            "sta_id": "sta1",
+            "associated_ap": "ap1",
+            "flow_type": "video_call",
+            "sla": {"max_latency_ms": 20},
+            "measurements": {"latency_ms": 7.5, "jitter_ms": 1.2},
+            "sla_status": "satisfied",
+        }]
+        payload["sta_feedback_summary"] = {
+            "ap_id": "ap1",
+            "sta_count": 1,
+            "status": "satisfied",
+            "violations": [],
+        }
+        payload["sla_violations"] = []
+
+        resp = self.client.post("/state", json=payload)
+        state = self.client.get("/state/ap1").get_json()["data"]
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(state["stas"][0]["sta_id"], "sta1")
+        self.assertEqual(state["sta_feedback_summary"]["status"], "satisfied")
 
     def test_index_html_charts_mac_params_on_seconds_axis(self):
         html = server._INDEX_HTML

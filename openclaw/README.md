@@ -31,7 +31,7 @@ bash openclaw/serve.sh status
 
 `run_openclaw.py` 强制复用常驻服务：state server 必须在线；默认路径要求 gateway 在线；未传 `--no-dashboard` 时 Dashboard 也必须在线。plot 是可选服务，缺失只提示、不阻塞。
 
-`drive_ap` 优先连接常驻 gateway；单个回合连接失败时会回退 `--local`。广播的三个模型回合并发执行，输出仍按 ap1、ap2、ap3 排序。非广播回合通过 session/raw-stream JSONL 把文本增量和工具调用实时送到终端与 Dashboard。
+`drive_ap` 优先连接常驻 gateway；单个回合连接失败时会回退 `--local`。广播的三个模型回合并发执行，输出仍按 ap1、ap2、ap3 排序。默认只展示整轮最终回复，避免继续追 session/raw-stream 文本文件；如需调试文本增量，可显式设置 `MULTIAP_OPENCLAW_RAW_STREAM=1` 或 `MULTIAP_OPENCLAW_SESSION_TAIL=1`。工具调用由 `multiap_mcp.py` 在工具函数源头写入 `tool-events.jsonl`，再实时送到终端与 Dashboard。
 
 ## 服务管理
 
@@ -58,4 +58,4 @@ bash openclaw/serve.sh stop
 .venv/bin/python -m unittest discover -s tests
 ```
 
-当前确定性套件为 48/48。真实模型端到端测试依赖已配置的 provider、运行中的常驻服务和可用状态数据，不属于该单元测试命令。
+当前确定性套件为 246/246。真实模型端到端测试依赖已配置的 provider、运行中的常驻服务和可用状态数据，不属于该单元测试命令。

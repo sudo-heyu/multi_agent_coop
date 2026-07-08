@@ -30,6 +30,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,17 +40,27 @@ from flask import Flask, request, jsonify
 # 允许以 `python state_server/ns3_bridge.py` 从项目根运行时导入 src.*
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.tools.edca import cw_to_ecw, ecw_to_cw  # noqa: E402
+from src.sta_feedback import summarize_ap_feedback  # noqa: E402
 
 VALID_AP_IDS = {"ap1", "ap2", "ap3"}
+DEFAULT_PRIORITIES = {"ap1": "low", "ap2": "high", "ap3": "low"}
+DEFAULT_SERVICE_NAMES = {
+    "ap1": "background_download",
+    "ap2": "live_streaming",
+    "ap3": "background_download",
+}
+DEFAULT_BUSINESS_TYPES = {"ap1": "后台下载", "ap2": "直播", "ap3": "后台下载"}
 # state server REQUIRED_FIELDS 里的指标键（ap_id/timestamp 之外，ns3 遥测都带）
 TELEMETRY_KEYS = {
+    "service_name", "business_type", "traffic_priority",
     "tx_power_dbm", "cwmin", "cwmax", "aifsn",
     "be_cwmin", "be_cwmax", "be_aifsn",
     "vi_cwmin", "vi_cwmax", "vi_aifsn",
     "Data_rate_to_bandwidth_ratio", "tx_retries_ratio",
     "neighbor_rssi_dbm", "sta_rssi_dbm", "noise_floor_dbm",
     "throughput_mbps_iperf", "throughput_mbps_user", "ac_iperf", "ac_user",
-    "latency_ms", "packet_loss_pct",
+    "latency_ms", "jitter_ms", "packet_loss_pct",
+    "stas", "sta_feedback_summary", "sla_violations",
     # 协议级 Co-SR 观测字段（各启用 MAPC 方案追加，缺省来源可能没有）
     "bss_color", "obss_pd_dbm", "sr_reset_count",
 }
@@ -82,17 +93,86 @@ STRATEGY_KEYS: dict[str, list[tuple[str, str, object]]] = {
 # joint = co_sr ∪ co_edca
 STRATEGY_KEYS["joint"] = STRATEGY_KEYS["co_sr"] + STRATEGY_KEYS["co_edca"]
 
+APPLY_RAW_KEYS = {
+    "tx": "tx_power_dbm",
+    "obss_pd": "obss_pd_dbm",
+}
+
+
+def _parse_ap_value_map(
+    spec: str,
+    *,
+    defaults: dict[str, str],
+    allowed_values: set[str] | None = None,
+) -> dict[str, str]:
+    values = dict(defaults)
+    if not (spec or "").strip():
+        return values
+    for part in spec.split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise argparse.ArgumentTypeError(f"缺少 '=': {part!r}")
+        raw_ap, raw_value = part.split("=", 1)
+        ap_id = raw_ap.strip().lower()
+        value = raw_value.strip()
+        if ap_id not in VALID_AP_IDS:
+            raise argparse.ArgumentTypeError(f"未知 AP: {ap_id!r}")
+        if not value:
+            raise argparse.ArgumentTypeError(f"{ap_id} 的值不能为空")
+        if allowed_values is not None and value.lower() not in allowed_values:
+            allowed = ",".join(sorted(allowed_values))
+            raise argparse.ArgumentTypeError(f"{ap_id}={value!r} 非法，允许值: {allowed}")
+        values[ap_id] = value.lower() if allowed_values is not None else value
+    return values
+
+
+def _value_matches(actual: object, expected: object, *, tol: float = 1e-6) -> bool:
+    try:
+        return abs(float(actual) - float(expected)) <= tol
+    except (TypeError, ValueError):
+        return actual == expected
+
+
+def _matches_apply_details(raw: dict, details: dict) -> tuple[bool, list[dict]]:
+    mismatches: list[dict] = []
+    for apply_key, expected in details.items():
+        raw_key = APPLY_RAW_KEYS.get(apply_key, apply_key)
+        if raw_key not in raw:
+            mismatches.append({"key": raw_key, "expected": expected, "actual": None})
+            continue
+        actual = raw.get(raw_key)
+        if not _value_matches(actual, expected):
+            mismatches.append({"key": raw_key, "expected": expected, "actual": actual})
+    return not mismatches, mismatches
+
 
 class Ns3Bridge:
     """管理 ns-3 子进程：读遥测转发到 state server，写 APPLY 命令下发决策。"""
 
     def __init__(self, ns3_dir: str, state_server: str, sim_time: float,
-                 report_interval: float, scenario: str = "line", extra_args: str = ""):
+                 report_interval: float, scenario: str = "line", extra_args: str = "",
+                 priorities: dict[str, str] | None = None,
+                 service_names: dict[str, str] | None = None,
+                 business_types: dict[str, str] | None = None,
+                 apply_ack_timeout: float = 3.0):
         self.state_server = state_server.rstrip("/")
         self._http = requests.Session()
         self._http.trust_env = False
         self._stdin_lock = threading.Lock()
         self._seen: set[str] = set()   # 已上报过至少一帧的 ap；首帧丢弃（含暖机增量）
+        self._priorities = priorities or DEFAULT_PRIORITIES
+        self._service_names = service_names or DEFAULT_SERVICE_NAMES
+        self._business_types = business_types or DEFAULT_BUSINESS_TYPES
+        self._apply_ack_timeout = max(0.0, float(apply_ack_timeout))
+        self._telemetry_cond = threading.Condition()
+        self._telemetry_seq: dict[str, int] = {ap: 0 for ap in VALID_AP_IDS}
+        self._last_raw_by_ap: dict[str, dict] = {}
+        self._last_payload_by_ap: dict[str, dict] = {}
+        self._sta_feedback_by_ap: dict[str, list[dict]] = {ap: [] for ap in VALID_AP_IDS}
+        self._last_telemetry_at: str | None = None
+        self._last_post_error: dict | None = None
+        self._last_apply: dict | None = None
 
         cmdline = (
             f"scratch/multiap_coop/multiap_coop --live --scenario={scenario} "
@@ -117,14 +197,32 @@ class Ns3Bridge:
         assert self.proc.stdout is not None
         for line in self.proc.stdout:
             line = line.strip()
-            if not line.startswith("TELEMETRY "):
-                continue               # 忽略构建/仿真的其它输出
-            try:
-                obj = json.loads(line[len("TELEMETRY "):])
-            except json.JSONDecodeError:
-                continue
-            self._forward(obj)
+            if line.startswith("STA_TELEMETRY "):
+                try:
+                    obj = json.loads(line[len("STA_TELEMETRY "):])
+                except json.JSONDecodeError:
+                    continue
+                self._forward_sta(obj)
+            elif line.startswith("TELEMETRY "):
+                try:
+                    obj = json.loads(line[len("TELEMETRY "):])
+                except json.JSONDecodeError:
+                    continue
+                self._forward(obj)
         print("[bridge] ns-3 stdout 结束，读取线程退出")
+
+    def _forward_sta(self, obj: dict) -> None:
+        ap_id = str(obj.get("ap_id") or obj.get("associated_ap") or "").lower()
+        if ap_id not in VALID_AP_IDS:
+            return
+        sta_id = str(obj.get("sta_id") or f"{ap_id}_sta")
+        entry = dict(obj)
+        entry["sta_id"] = sta_id
+        entry["associated_ap"] = ap_id
+        current = list(self._sta_feedback_by_ap.get(ap_id) or [])
+        current = [item for item in current if item.get("sta_id") != sta_id]
+        current.append(entry)
+        self._sta_feedback_by_ap[ap_id] = current
 
     def _forward(self, obj: dict) -> None:
         ap_id = obj.get("ap_id")
@@ -134,6 +232,7 @@ class Ns3Bridge:
         if ap_id not in self._seen:
             self._seen.add(ap_id)
             return
+        raw_obj = dict(obj)
         # 实际 CW → 指数 n（与真实 AP 上报口径一致）
         for key in ("cwmin", "cwmax", "be_cwmin", "be_cwmax", "vi_cwmin", "vi_cwmax"):
             try:
@@ -141,14 +240,71 @@ class Ns3Bridge:
                     obj[key] = cw_to_ecw(int(obj[key]))
             except (TypeError, ValueError):
                 pass
+        service_names = getattr(self, "_service_names", DEFAULT_SERVICE_NAMES)
+        business_types = getattr(self, "_business_types", DEFAULT_BUSINESS_TYPES)
+        priorities = getattr(self, "_priorities", DEFAULT_PRIORITIES)
+        obj.setdefault("service_name", service_names.get(ap_id, "ns3_service"))
+        obj.setdefault("business_type", business_types.get(ap_id, "ns-3业务"))
+        obj.setdefault("traffic_priority", priorities.get(ap_id, "medium"))
+        stas = obj.get("stas")
+        if not isinstance(stas, list):
+            stas = getattr(self, "_sta_feedback_by_ap", {}).get(ap_id) or []
+        if stas:
+            obj["stas"] = stas
+            feedback = summarize_ap_feedback(ap_id, obj)
+            obj["sta_feedback_summary"] = {
+                key: value for key, value in feedback.items() if key != "stas"
+            }
+            obj["sla_violations"] = feedback.get("violations") or []
         payload = {k: obj.get(k) for k in TELEMETRY_KEYS}
         payload["ap_id"] = ap_id
         payload["timestamp"] = datetime.now(timezone.utc).isoformat()
         payload["source"] = "ns3"
         try:
-            self._http.post(f"{self.state_server}/state", json=payload, timeout=2)
+            resp = self._http.post(f"{self.state_server}/state", json=payload, timeout=2)
+            status_code = int(getattr(resp, "status_code", 200))
+            if status_code != 200:
+                body = str(getattr(resp, "text", ""))
+                self._last_post_error = {
+                    "ap_id": ap_id,
+                    "status_code": status_code,
+                    "body": body[:500],
+                    "at": payload["timestamp"],
+                }
+                print(
+                    f"[bridge] 上报 {ap_id} 被 state server 拒绝: "
+                    f"HTTP {status_code} {body[:200]}"
+                )
+                return
         except requests.RequestException as exc:
+            self._last_post_error = {
+                "ap_id": ap_id,
+                "error": str(exc),
+                "at": payload["timestamp"],
+            }
             print(f"[bridge] 上报 {ap_id} 失败: {exc}")
+            return
+        if not hasattr(self, "_last_raw_by_ap"):
+            self._last_raw_by_ap = {}
+        if not hasattr(self, "_last_payload_by_ap"):
+            self._last_payload_by_ap = {}
+        if not hasattr(self, "_telemetry_seq"):
+            self._telemetry_seq = {}
+        cond = getattr(self, "_telemetry_cond", None)
+        if cond is None:
+            self._last_post_error = None
+            self._last_raw_by_ap[ap_id] = raw_obj
+            self._last_payload_by_ap[ap_id] = payload
+            self._last_telemetry_at = payload["timestamp"]
+            self._telemetry_seq[ap_id] = self._telemetry_seq.get(ap_id, 0) + 1
+            return
+        with cond:
+            self._last_post_error = None
+            self._last_raw_by_ap[ap_id] = raw_obj
+            self._last_payload_by_ap[ap_id] = payload
+            self._last_telemetry_at = payload["timestamp"]
+            self._telemetry_seq[ap_id] = self._telemetry_seq.get(ap_id, 0) + 1
+            cond.notify_all()
 
     # ── 决策下发 ────────────────────────────────────────────────────────
     def apply(self, ap_id: str, strategy: str, params: dict) -> dict:
@@ -210,6 +366,7 @@ class Ns3Bridge:
                     "http_status": 503,
                 }
             try:
+                start_seq = getattr(self, "_telemetry_seq", {}).get(ap_id, 0)
                 self.proc.stdin.write(cmd)
                 self.proc.stdin.flush()
             except OSError as exc:
@@ -221,7 +378,49 @@ class Ns3Bridge:
                     "http_status": 503,
                 }
         print(f"[bridge] 下发 → ns-3: {cmd.strip()}")
-        return {"ok": True, "command": cmd.strip(), "details": details}
+        ack = self._wait_apply_visible(ap_id, details, start_seq)
+        result = {"ok": ack["ok"], "command": cmd.strip(), "details": details, "ack": ack}
+        if not ack["ok"]:
+            result["error"] = ack["error"]
+            result["http_status"] = 504
+        self._last_apply = {
+            **result,
+            "ap_id": ap_id,
+            "strategy": strategy,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        return result
+
+    def _wait_apply_visible(self, ap_id: str, details: dict, start_seq: int) -> dict:
+        timeout = float(getattr(self, "_apply_ack_timeout", 0.0) or 0.0)
+        if timeout <= 0:
+            return {"ok": True, "mode": "not_waited"}
+        deadline = time.monotonic() + timeout
+        checked_seq = start_seq
+        last_raw: dict | None = None
+        last_mismatches: list[dict] = []
+        with self._telemetry_cond:
+            while time.monotonic() < deadline:
+                current_seq = self._telemetry_seq.get(ap_id, 0)
+                if current_seq > checked_seq:
+                    checked_seq = current_seq
+                    raw = self._last_raw_by_ap.get(ap_id) or {}
+                    matched, mismatches = _matches_apply_details(raw, details)
+                    if matched:
+                        return {"ok": True, "mode": "telemetry", "observed": raw}
+                    last_raw = raw
+                    last_mismatches = mismatches
+                remaining = deadline - time.monotonic()
+                self._telemetry_cond.wait(timeout=max(0.0, remaining))
+        result = {
+            "ok": False,
+            "mode": "timeout",
+            "error": f"timed out waiting for {ap_id} telemetry after APPLY",
+        }
+        if last_raw is not None:
+            result["mismatches"] = last_mismatches
+            result["observed"] = last_raw
+        return result
 
 
 # ── Flask：暴露 /apply，替代香蕉派 executor ─────────────────────────────
@@ -264,8 +463,18 @@ def status():
 
 @app.route("/health", methods=["GET"])
 def health():
-    alive = _bridge is not None and _bridge.proc.poll() is None
-    return jsonify({"ok": True, "ns3_alive": alive}), 200
+    if _bridge is None:
+        return jsonify({"ok": False, "ns3_alive": False, "error": "bridge is not initialized"}), 503
+    alive = _bridge.proc.poll() is None
+    last_post_error = getattr(_bridge, "_last_post_error", None)
+    body = {
+        "ok": bool(alive and last_post_error is None),
+        "ns3_alive": alive,
+        "last_telemetry_at": getattr(_bridge, "_last_telemetry_at", None),
+        "last_post_error": last_post_error,
+        "last_apply": getattr(_bridge, "_last_apply", None),
+    }
+    return jsonify(body), 200 if alive else 503
 
 
 def main():
@@ -284,11 +493,33 @@ def main():
                         help="桥的 /apply 监听端口")
     parser.add_argument("--ns3-args", default="",
                         help="透传给 ns-3 场景的额外参数，如 '--txPowerDbm=20 --userRateMbps=3'")
+    parser.add_argument("--priorities", default="",
+                        help="覆盖业务优先级，格式 ap1=low,ap2=high,ap3=low")
+    parser.add_argument("--service-names", default="",
+                        help="覆盖业务名称，格式 ap1=background_download,ap2=live_streaming")
+    parser.add_argument("--business-types", default="",
+                        help="覆盖中文业务类型，格式 ap1=后台下载,ap2=直播")
+    parser.add_argument("--apply-ack-timeout", type=float, default=3.0,
+                        help="APPLY 后等待下一帧 telemetry 确认生效的秒数；0 表示不等待")
     args = parser.parse_args()
+    try:
+        priorities = _parse_ap_value_map(
+            args.priorities,
+            defaults=DEFAULT_PRIORITIES,
+            allowed_values={"high", "medium", "low"},
+        )
+        service_names = _parse_ap_value_map(args.service_names, defaults=DEFAULT_SERVICE_NAMES)
+        business_types = _parse_ap_value_map(args.business_types, defaults=DEFAULT_BUSINESS_TYPES)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
 
     global _bridge
     _bridge = Ns3Bridge(args.ns3_dir, args.state_server, args.sim_time,
-                        args.report_interval, args.scenario, args.ns3_args)
+                        args.report_interval, args.scenario, args.ns3_args,
+                        priorities=priorities,
+                        service_names=service_names,
+                        business_types=business_types,
+                        apply_ack_timeout=args.apply_ack_timeout)
     _bridge.start_reader()
 
     print(f"[bridge] /apply 监听 http://0.0.0.0:{args.port} —— 请把 config/ap_endpoints.json "

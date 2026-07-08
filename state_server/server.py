@@ -121,7 +121,7 @@ _INDEX_HTML = """
       <th>业务类型</th><th>业务优先级</th>
       <th>TX Power(dBm)</th><th>CWmin</th><th>CWmax</th><th>AIFSN</th>
       <th>信道利用率</th><th>重传率</th><th>STA RSSI(dBm)</th><th>噪声底(dBm)</th>
-      <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>丢包(%)</th>
+      <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>Jitter(ms)</th><th>丢包(%)</th>
       <th>邻居 RSSI(dBm)</th><th>最后上报</th>
     </tr>
     {% for ap_id in ap_ids %}
@@ -152,6 +152,7 @@ _INDEX_HTML = """
       <td>{{ e.data.throughput_mbps_user }}</td>
       <td>{{ e.data.get('ac_iperf', '—') }} / {{ e.data.get('ac_user', '—') }}</td>
       <td>{{ e.data.latency_ms }}</td>
+      <td>{{ e.data.get('jitter_ms', '—') }}</td>
       <td>{{ e.data.packet_loss_pct }}</td>
       <td>{{ e.data.neighbor_rssi_dbm }}</td>
       <td style="font-size:11px">{{ e.timestamp[:19] if e.timestamp else '—' }}</td>
@@ -181,6 +182,10 @@ _INDEX_HTML = """
     <div class="chart-box">
       <h3>延迟 (ms)</h3>
       <canvas id="chart-latency"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Jitter (ms)</h3>
+      <canvas id="chart-jitter"></canvas>
     </div>
     <div class="chart-box">
       <h3>丢包率 (%)</h3>
@@ -217,6 +222,7 @@ const CHART_SPECS = [
   { key: "throughput_mbps_user",  chart: "throughput_user",  canvas: "chart-throughput-user",  label: "Mbps" },
   { key: "throughput_mbps_total", chart: "throughput_total", canvas: "chart-throughput-total", label: "Mbps" },
   { key: "latency_ms",      chart: "latency",    canvas: "chart-latency",    label: "ms" },
+  { key: "jitter_ms",       chart: "jitter",     canvas: "chart-jitter",     label: "ms" },
   { key: "packet_loss_pct", chart: "loss",       canvas: "chart-loss",       label: "%" },
   { key: "tx_power_dbm",    chart: "txpower",    canvas: "chart-txpower",    label: "dBm" },
   { key: "cwmin",           chart: "cwmin",      canvas: "chart-cwmin",      label: "CWmin" },
@@ -413,7 +419,13 @@ def post_state():
             "throughput_mbps_user":  data.get("throughput_mbps_user"),
             "throughput_mbps_total": _throughput_total(data),
             "latency_ms":      data.get("latency_ms"),
+            "jitter_ms":       data.get("jitter_ms"),
             "packet_loss_pct": data.get("packet_loss_pct"),
+            "sla_violations":  data.get("sla_violations"),
+            "sta_violated_count": (
+                len(data.get("sla_violations") or [])
+                if isinstance(data.get("sla_violations"), list) else None
+            ),
             "tx_power_dbm":    data.get("tx_power_dbm"),
             "cwmin":           data.get("cwmin"),
             "cwmax":           data.get("cwmax"),

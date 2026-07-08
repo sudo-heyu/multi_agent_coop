@@ -24,8 +24,9 @@ STATE_PID="$RUN_DIR/state.pid"
 GW_PID="$RUN_DIR/gateway.pid"          # 仅当本脚本 nohup 兜底起 gateway 时写
 STATE_LOG="$RUN_DIR/state.log"
 GW_LOG="$RUN_DIR/gateway.log"
-RAW_STREAM_ENABLED="${MULTIAP_OPENCLAW_RAW_STREAM:-1}"
+RAW_STREAM_ENABLED="${MULTIAP_OPENCLAW_RAW_STREAM:-0}"
 RAW_STREAM_PATH="${MULTIAP_RAW_STREAM_PATH:-$RUN_DIR/../logs/raw-stream.jsonl}"
+TOOL_EVENT_PATH="${MULTIAP_TOOL_EVENT_PATH:-$RUN_DIR/../logs/tool-events.jsonl}"
 LAUNCHD_LABEL="ai.openclaw.${PROFILE}"
 
 # gateway 端口：env 覆盖 > profile 配置 gateway.port > 18789（OpenClaw 默认，与 drive_ap 解析一致）
@@ -68,20 +69,20 @@ harvest_alive()  { [ -f "$HARVEST_PID" ] || return 1
                    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
 launchd_exists() { launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; }
 
-ensure_launchd_raw_stream_env() {
-    [ "$RAW_STREAM_ENABLED" != "0" ] || return 1
+ensure_launchd_gateway_env() {
     local env_file="$HOME/.openclaw-$PROFILE/service-env/${LAUNCHD_LABEL}.env"
     [ -f "$env_file" ] || return 1
     local tmp_file="${env_file}.tmp.$$"
-    awk '!/^export OPENCLAW_RAW_STREAM=/ && !/^export OPENCLAW_RAW_STREAM_PATH=/' "$env_file" > "$tmp_file"
+    awk '!/^export OPENCLAW_RAW_STREAM=/ && !/^export OPENCLAW_RAW_STREAM_PATH=/ && !/^export MULTIAP_TOOL_EVENT_PATH=/' "$env_file" > "$tmp_file"
     printf "export OPENCLAW_RAW_STREAM='%s'\n" "$RAW_STREAM_ENABLED" >> "$tmp_file"
     printf "export OPENCLAW_RAW_STREAM_PATH='%s'\n" "$RAW_STREAM_PATH" >> "$tmp_file"
+    printf "export MULTIAP_TOOL_EVENT_PATH='%s'\n" "$TOOL_EVENT_PATH" >> "$tmp_file"
     if cmp -s "$env_file" "$tmp_file"; then
         rm -f "$tmp_file"
         return 1
     fi
     mv "$tmp_file" "$env_file"
-    echo "[serve] 已为 launchd gateway 启用 raw-stream: $RAW_STREAM_PATH"
+    echo "[serve] 已更新 launchd gateway 环境: raw-stream=${RAW_STREAM_ENABLED}；tool-events=${TOOL_EVENT_PATH}"
     return 0
 }
 
@@ -111,13 +112,13 @@ start_state() {
 start_gateway() {
     if port_listening "$GW_PORT"; then
         echo "[serve] gateway 已在线: :${GW_PORT} (launchd 长期服务)"
-        if ensure_launchd_raw_stream_env; then
-            echo "[serve] 提示：raw-stream 环境已写入；请执行 bash openclaw/serve.sh restart 让当前 gateway 生效。"
+        if ensure_launchd_gateway_env; then
+            echo "[serve] 提示：gateway 环境已写入；请执行 bash openclaw/serve.sh restart 让当前 gateway 生效。"
         fi
         return 0
     fi
     if launchd_exists; then
-        ensure_launchd_raw_stream_env || true
+        ensure_launchd_gateway_env || true
         echo "[serve] kickstart launchd 服务 $LAUNCHD_LABEL ..."
         launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null || true
     else
@@ -126,7 +127,7 @@ start_gateway() {
         if [ "$RAW_STREAM_ENABLED" != "0" ]; then
             raw_args=(--raw-stream --raw-stream-path "$RAW_STREAM_PATH")
         fi
-        OLLAMA_API_KEY=ollama-local OPENCLAW_RAW_STREAM="$RAW_STREAM_ENABLED" OPENCLAW_RAW_STREAM_PATH="$RAW_STREAM_PATH" \
+        OLLAMA_API_KEY=ollama-local OPENCLAW_RAW_STREAM="$RAW_STREAM_ENABLED" OPENCLAW_RAW_STREAM_PATH="$RAW_STREAM_PATH" MULTIAP_TOOL_EVENT_PATH="$TOOL_EVENT_PATH" \
             NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
             nohup "$OPENCLAW" --profile "$PROFILE" gateway --port "$GW_PORT" --bind loopback "${raw_args[@]}" >"$GW_LOG" 2>&1 &
         echo $! > "$GW_PID"
@@ -250,7 +251,7 @@ restart_gateway() {
     # 改了 setup.sh / mcp 注册 / 配置后用它重载 gateway（否则常驻 gateway 缓存旧 MCP 连接，
     # 会出现 AP 调工具时 "tool isn't available"）。
     if launchd_exists; then
-        ensure_launchd_raw_stream_env || true
+        ensure_launchd_gateway_env || true
         echo "[serve] 重启 launchd gateway ${LAUNCHD_LABEL}（重载 MCP/配置）..."
         launchctl kickstart -k "gui/$(id -u)/$LAUNCHD_LABEL" 2>/dev/null || true
         for _ in $(seq 1 45); do if port_listening "$GW_PORT"; then break; fi; sleep 1; done

@@ -10,6 +10,8 @@ KPI 指标不再作为 Validator 的通过条件。
 """
 from __future__ import annotations
 
+from .sta_feedback import evaluate_sta_qoe
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 硬性参数约束
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,13 +201,25 @@ def validate_decision(
                 "errors": [f"{ap_id.upper()}: {e}" for e in edca_errors],
             })
 
+    # ── STA QoE / SLA 反馈 ───────────────────────────────────────────────────
+    sta_qoe = evaluate_sta_qoe(
+        ap_state,
+        obs,
+        observed_is_real=observed_is_real,
+    )
+    if sta_qoe.get("checked") and not sta_qoe.get("approved"):
+        ids = [item.get("sta_id") for item in sta_qoe.get("new_violations") or []]
+        global_errors.append(f"决策后引入新的 STA SLA 违规: {ids}")
+
     # ── 汇总 ─────────────────────────────────────────────────────────────────
     for ap_id in ap_ids:
         entry = per_ap.setdefault(ap_id, _empty_ap_entry())
         entry["valid"] = len(entry["errors"]) == 0
         global_errors.extend(entry["errors"])
 
-    return _build_report(strategy, True, per_ap, global_errors)
+    report = _build_report(strategy, True, per_ap, global_errors)
+    report["sta_qoe"] = sta_qoe
+    return report
 
 
 # ─────────────────────────────────────────────────────────────────────────────
