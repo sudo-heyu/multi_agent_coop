@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--all", type=float, metavar="DBM", dest="all_ap",
                    help="三个 AP 统一设置相同功率")
     p.add_argument("--strategy", default="co_sr",
-                   choices=["co_sr", "co_edca", "joint"],
+                   choices=["co_sr", "co_edca"],
                    help="策略标签（默认: co_sr）")
     p.add_argument("--session-id", default=None,
                    help="会话 ID（默认自动生成）")

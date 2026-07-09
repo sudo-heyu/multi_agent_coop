@@ -6,7 +6,6 @@
 
 - Co-SR：`tx_power_dbm`
 - Co-EDCA：`CWmin`、`CWmax`、`AIFSN`
-- joint：同一提案同时包含功率和 EDCA 调整
 
 系统同时记录吞吐、延迟、丢包、信道利用率和重传率，用于展示调整前后的变化。
 
@@ -45,7 +44,7 @@
 ## 协商流程
 
 1. 广播：三台 AP 并发生成自身状态广播，按 ap1、ap2、ap3 顺序展示。
-2. 触发判断：确定性逻辑根据最新状态给出 `co_sr`、`co_edca`、`joint` 或 `noop` 提示。
+2. 触发判断：确定性逻辑根据最新状态给出 `co_sr`、`co_edca` 或 `noop` 提示。
 3. 提案：首轮由 ap1 发起，AP 自主调用状态和计算工具后输出参数 JSON。
 4. 投票：其他 AP 验算后同意、弃权或反对；反对者提交反提案并接管。
 5. 决策：全票通过后直接采用已通过提案，Validator 做最终验收。
@@ -57,9 +56,8 @@
 |---|---|---|---|
 | Co-SR | `--scene sr` | 邻居 RSSI 显示强/中干扰 | `co_sr` |
 | Co-EDCA | `--scene edca` | 业务优先级和拥塞存在差异 | `co_edca` |
-| 联合 | `--scene joint` | 同时存在干扰和 EDCA 差异 | `joint`，或基于实时证据先处理主导问题 |
 
-代码当前没有第四个“动态 AP1 业务骤升”内置场景；动态变化可由真实 reporter 或外部状态源驱动。
+当前只保留 `sr` 与 `edca` 两个运行时场景；若两类问题同时出现，编排层选择主导问题先处理，不再允许同一提案同时包含功率与 EDCA 调整。
 
 ## 状态与参数
 
@@ -77,7 +75,7 @@
 ```bash
 MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh  # 首次
 bash openclaw/serve.sh start
-.venv/bin/python run_openclaw.py --mode ns3 --scene joint
+.venv/bin/python run_openclaw.py --mode ns3 --scene sr
 ```
 
 真实 AP 使用 `--mode real`，并显式提供三个 executor 端点。该模式完全禁用 feeder、要求 state server 拒收生成数据，并等待三台 reporter 状态就绪。具体见 [香蕉派接入手册](banana-pi-integration.md)。

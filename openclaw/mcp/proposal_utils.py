@@ -31,6 +31,14 @@ _NESTED_AC_ALIASES = {
 }
 
 
+def _canonical_proposal_key(key: object) -> object:
+    """Canonicalize AP ids while preserving metadata keys such as _sr."""
+    if not isinstance(key, str):
+        return key
+    lower = key.lower()
+    return lower if lower in AP_IDS else key
+
+
 def _lookup_nested_edca_value(params: dict, canonical: str):
     aliases = {
         "CWmin": ("CWmin", "cwmin"),
@@ -79,12 +87,18 @@ def _normalize_proposal(proposal: dict) -> dict:
     """
     normalized: dict = {}
     for ap_id, value in proposal.items():
+        ap_key = _canonical_proposal_key(ap_id)
         if isinstance(value, bool):
-            normalized[ap_id] = value
+            normalized[ap_key] = value
         elif isinstance(value, (int, float)):
-            normalized[ap_id] = {"tx_power_dbm": float(value)}
+            normalized[ap_key] = {"tx_power_dbm": float(value)}
         elif isinstance(value, dict):
             entry = dict(value)
+            if isinstance(entry.get("concurrent_group"), list):
+                entry["concurrent_group"] = [
+                    str(item).lower() if str(item).lower() in AP_IDS else item
+                    for item in entry["concurrent_group"]
+                ]
             for nested_key in _NESTED_EDCA_KEYS:
                 nested = entry.get(nested_key)
                 if not isinstance(nested, dict):
@@ -95,9 +109,9 @@ def _normalize_proposal(proposal: dict) -> dict:
                 for key, nested_value in nested_fields.items():
                     entry.setdefault(key, nested_value)
                 entry.pop(nested_key, None)
-            normalized[ap_id] = entry
+            normalized[ap_key] = entry
         else:
-            normalized[ap_id] = value
+            normalized[ap_key] = value
     return normalized
 
 
@@ -114,8 +128,6 @@ def _infer_strategy_from_proposal(proposal: dict) -> str:
         isinstance(v, dict) and any(k in v for k in EDCA_KEYS)
         for v in proposal.values()
     )
-    if has_sr and has_edca:
-        return "joint"
     if has_sr:
         return "co_sr"
     if has_edca:
@@ -139,14 +151,14 @@ def _sr_concurrent_group_from_proposal(proposal: dict | None) -> list[str]:
 
 def _with_sr_concurrent_group(proposal: dict, ap_state: dict) -> dict:
     """
-    Co-SR / joint 提案必须先确定可用并发组。
+    Co-SR 提案必须先确定可用并发组。
 
     若模型已经显式给出 concurrent_group，则保留；若缺失，则使用确定性枚举器
     自动注入 best_group，避免退回“全网 AP 同时并发”的旧缺省语义。
     """
     proposal = _normalize_proposal(proposal)
     strategy = _infer_strategy_from_proposal(proposal)
-    if strategy not in ("co_sr", "joint"):
+    if strategy != "co_sr":
         return proposal
 
     groups = _sr.select_concurrent_groups(ap_state)

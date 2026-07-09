@@ -52,6 +52,14 @@ PLOT_LOG="$RUN_DIR/plot.log"
 HARVEST_PID="$RUN_DIR/harvester.pid"
 HARVEST_LOG="$RUN_DIR/harvester.log"
 HARVEST_INTERVAL="${MULTIAP_HARVEST_INTERVAL:-30}"
+ALLOW_OLLAMA_RAW="${MULTIAP_ALLOW_OLLAMA:-0}"
+case "$(printf '%s' "$ALLOW_OLLAMA_RAW" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) ALLOW_OLLAMA=1 ;;
+    *) ALLOW_OLLAMA=0 ;;
+esac
+case "${MULTIAP_MODEL_REF:-}" in
+    ollama/*) ALLOW_OLLAMA=1 ;;
+esac
 
 mkdir -p "$RUN_DIR"
 
@@ -121,10 +129,14 @@ start_gateway() {
     else
         echo "[serve] 未发现 launchd 服务，nohup 兜底起 gateway :$GW_PORT ..."
         local raw_args=()
+        local ollama_env=()
         if [ "$RAW_STREAM_ENABLED" != "0" ]; then
             raw_args=(--raw-stream --raw-stream-path "$RAW_STREAM_PATH")
         fi
-        OLLAMA_API_KEY=ollama-local OPENCLAW_RAW_STREAM="$RAW_STREAM_ENABLED" OPENCLAW_RAW_STREAM_PATH="$RAW_STREAM_PATH" MULTIAP_TOOL_EVENT_PATH="$TOOL_EVENT_PATH" \
+        if [ "$ALLOW_OLLAMA" = "1" ]; then
+            ollama_env=("OLLAMA_API_KEY=ollama-local")
+        fi
+        env "${ollama_env[@]}" OPENCLAW_RAW_STREAM="$RAW_STREAM_ENABLED" OPENCLAW_RAW_STREAM_PATH="$RAW_STREAM_PATH" MULTIAP_TOOL_EVENT_PATH="$TOOL_EVENT_PATH" \
             NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
             nohup "$OPENCLAW" --profile "$PROFILE" gateway --port "$GW_PORT" --bind loopback "${raw_args[@]+"${raw_args[@]}"}" >"$GW_LOG" 2>&1 &
         echo $! > "$GW_PID"

@@ -84,7 +84,7 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
     """
     results: dict[str, dict] = {}
 
-    if strategy in ("co_sr", "joint"):
+    if strategy == "co_sr":
         dbm = params.get("tx_power_dbm")
         if dbm is None:
             results["tx_power"] = {"ok": False, "error": "params 中缺少 tx_power_dbm"}
@@ -95,7 +95,7 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
             ok, out = _apply_tx_power(iface, dbm)
             results["tx_power"] = {"ok": ok, "value_dbm": dbm, "output": out}
 
-    if strategy in ("co_edca", "joint"):
+    if strategy == "co_edca":
         cwmin = params.get("CWmin") or params.get("cwmin")
         cwmax = params.get("CWmax") or params.get("cwmax")
         aifsn = params.get("AIFSN") or params.get("aifsn")

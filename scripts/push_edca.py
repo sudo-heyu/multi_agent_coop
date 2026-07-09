@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
                        help=f"{ap} 的 EDCA 参数：cwmin cwmax aifsn")
 
     p.add_argument("--strategy", default="co_edca",
-                   choices=["co_edca", "joint"],
+                   choices=["co_edca"],
                    help="策略标签（默认: co_edca）")
     p.add_argument("--session-id", default=None,
                    help="会话 ID（默认自动生成）")

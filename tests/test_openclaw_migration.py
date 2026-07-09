@@ -33,9 +33,6 @@ def decision_for(scene_name: str) -> dict:
         "concurrent_group": best["concurrent_group"],
         "non_concurrent_aps": best["non_concurrent_aps"],
     }
-    if scene_name == "joint":
-        for ap_id, params in EDCA_DECISION.items():
-            decision[ap_id].update(params)
     return decision
 
 
@@ -73,7 +70,7 @@ class OpenClawMigrationTests(unittest.TestCase):
         profiled = orch.apply_profile({"apx": {}})
 
         self.assertEqual(profiled["apx"]["business_type"], "未声明业务类型")
-        for name in ("sr", "edca", "joint"):
+        for name in ("sr", "edca"):
             scene = MOCK_SCENES[name]
             self.assertEqual(scene["ap1"]["business_type"], "后台下载")
             self.assertEqual(scene["ap2"]["business_type"], "直播")
@@ -415,6 +412,46 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertEqual(captured[0][1]["proposed_edca"]["ap1"]["CWmin"], 7)
         self.assertTrue(captured[0][2]["valid"])
 
+    def test_drive_ap_retries_context_overflow_with_smaller_prompt(self):
+        orch.reset_session(copy.deepcopy(MOCK_SCENES["edca"]))
+        calls = {"count": 0}
+
+        class FakeProc:
+            def __init__(self, cmd, stdout=None, stderr=None, env=None):
+                calls["count"] += 1
+                self.returncode = 0
+                text = (
+                    "Context overflow: prompt too large for the model."
+                    if calls["count"] == 1 else
+                    "第二次使用缩短上下文后成功。"
+                )
+                stdout.write(json.dumps({"payloads": [{"text": text}]}, ensure_ascii=False))
+                stdout.flush()
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def kill(self):
+                self.returncode = -9
+
+        original_builder = orch._build_agent_message
+        budgets = []
+
+        def wrapped_builder(*args, **kwargs):
+            budgets.append(kwargs.get("total_budget"))
+            return original_builder(*args, **kwargs)
+
+        with patch.dict(os.environ, {"MULTIAP_AGENT_TOTAL_CONTEXT_CHARS": "12000"}), \
+             patch.object(orch, "_gateway_up", return_value=False), \
+             patch.object(orch, "_stream_agent_session", return_value=0), \
+             patch.object(orch.subprocess, "Popen", FakeProc), \
+             patch.object(orch, "_build_agent_message", wrapped_builder):
+            reply = orch.drive_ap("ap1", "请提案")
+
+        self.assertEqual(reply, "第二次使用缩短上下文后成功。")
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(budgets[:2], [12000, 7200])
+
     def test_non_broadcast_stream_start_is_emitted_before_drive_ap(self):
         state = copy.deepcopy(MOCK_SCENES["sr"])
         events = []
@@ -481,6 +518,7 @@ class OpenClawMigrationTests(unittest.TestCase):
         }
         proposer_calls = 0
         vote_after_invalid = False
+        prechecks = []
 
         def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
             nonlocal proposer_calls, vote_after_invalid
@@ -496,11 +534,19 @@ class OpenClawMigrationTests(unittest.TestCase):
 
         with patch.object(orch, "get_all_states", return_value=state), \
              patch.object(orch, "drive_ap", fake_drive):
-            result = orch.structured_relay(max_validation_retries=3, max_turns=8)
+            result = orch.structured_relay(
+                max_validation_retries=3,
+                max_turns=8,
+                on_proposal_precheck=lambda proposer, num, strategy, check: prechecks.append(
+                    (proposer, num, strategy, check.get("approved"))
+                ),
+            )
 
         self.assertEqual(result["outcome"], "success", result)
         self.assertEqual(proposer_calls, 2)
         self.assertFalse(vote_after_invalid)
+        self.assertEqual(prechecks[0], ("ap1", 1, "co_edca", False))
+        self.assertEqual(prechecks[-1], ("ap1", 2, "co_edca", True))
         self.assertTrue(
             any(
                 item.get("speaker") == "VALIDATOR"
@@ -509,12 +555,116 @@ class OpenClawMigrationTests(unittest.TestCase):
             )
         )
 
+    def test_uppercase_ap_keys_are_canonicalized_in_proposals(self):
+        reply = """
+        提案如下：
+        ```json
+        {"AP1": {"CWmin": 15, "CWmax": 63, "AIFSN": 3},
+         "AP2": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
+         "AP3": {"CWmin": 7, "CWmax": 31, "AIFSN": 3}}
+        ```
+        """
+
+        proposal = orch._extract_proposal(reply)
+
+        self.assertEqual(sorted(proposal.keys()), ["ap1", "ap2", "ap3"])
+        self.assertEqual(proposal["ap2"]["CWmin"], 3)
+
+    def test_vote_with_tool_json_and_proposal_json_is_invalid_not_counter(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        orch.reset_session(state)
+        orch._SESSION.proposer = "ap1"
+        orch._SESSION.proposal = copy.deepcopy(EDCA_DECISION)
+        orch._SESSION.strategy = "co_edca"
+        orch._SESSION.proposal_num = 1
+        pseudo_counter = {
+            "ap1": {"CWmin": 31, "CWmax": 127, "AIFSN": 7},
+            "ap2": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
+            "ap3": {"CWmin": 15, "CWmax": 63, "AIFSN": 6},
+        }
+        malformed = (
+            '```json\n{"tool": "get_latest_ap_states", "arguments": {}}\n```\n'
+            "```json\n"
+            + json.dumps(pseudo_counter, ensure_ascii=False)
+            + "\n```"
+        )
+
+        def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
+            return malformed
+
+        with patch.object(orch, "drive_ap", fake_drive):
+            result = orch.run_vote("ap2")
+
+        self.assertEqual(result["vote"], "invalid")
+        self.assertIsNone(result["counter_proposal"])
+        self.assertEqual(orch._SESSION.proposer, "ap1")
+        self.assertEqual(orch._SESSION.proposal, EDCA_DECISION)
+
+    def test_structured_relay_repairs_malformed_vote_without_promoting_counter(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        pseudo_counter = {
+            "ap1": {"CWmin": 31, "CWmax": 127, "AIFSN": 7},
+            "ap2": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
+            "ap3": {"CWmin": 15, "CWmax": 63, "AIFSN": 6},
+        }
+
+        class MalformedVoteFakeAP:
+            def __init__(self):
+                self.malformed_once = False
+                self.vote_calls = []
+
+            def __call__(
+                self,
+                ap_id,
+                instruction,
+                thinking="off",
+                extra_env=None,
+                on_text_delta=None,
+            ):
+                if "上一条投票回复格式无效" in instruction:
+                    self.vote_calls.append((ap_id, "repair"))
+                    return '补投票。\n```json\n{"agreed": true, "reason": "格式修复后同意"}\n```'
+                if "最新提案参数" in instruction:
+                    self.vote_calls.append((ap_id, "vote"))
+                    if ap_id == "ap2" and not self.malformed_once:
+                        self.malformed_once = True
+                        return (
+                            '```json\n{"tool": "get_latest_ap_states", "arguments": {}}\n```\n'
+                            "```json\n"
+                            + json.dumps(pseudo_counter, ensure_ascii=False)
+                            + "\n```"
+                        )
+                    return '同意。\n```json\n{"agreed": true, "reason": "验算通过"}\n```'
+                if "所有 AP 已同意" in instruction:
+                    return "```json\n" + json.dumps(EDCA_DECISION, ensure_ascii=False) + "\n```\n协商结束"
+                if "提案方" in instruction:
+                    return "建议采用 EDCA 差异化。\n```json\n" + json.dumps(EDCA_DECISION, ensure_ascii=False) + "\n```"
+                return f"{ap_id.upper()} 广播自身状态。"
+
+        fake = MalformedVoteFakeAP()
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake):
+            result = orch.structured_relay(max_turns=8)
+
+        self.assertEqual(result["outcome"], "success", result)
+        self.assertEqual(result["decision"], EDCA_DECISION)
+        self.assertNotEqual(result["decision"], pseudo_counter)
+        self.assertIn(("ap2", "repair"), fake.vote_calls)
+        self.assertEqual(orch._SESSION.proposer, "ap1")
+        self.assertTrue(
+            any(
+                item.get("speaker") == "VALIDATOR"
+                and "[投票格式无效]" in item.get("content", "")
+                for item in orch._SESSION.transcript
+            )
+        )
+
     def test_mechanical_edca_repair_allows_trivial_cwmax_relation_error(self):
-        state = copy.deepcopy(MOCK_SCENES["joint"])
+        state = copy.deepcopy(MOCK_SCENES["edca"])
         proposal = {
-            "ap1": {"tx_power_dbm": 15, "cwmin": 7, "cwmax": 15, "aifsn": 2},
-            "ap2": {"tx_power_dbm": 15, "cwmin": 10, "cwmax": 15, "aifsn": 3},
-            "ap3": {"tx_power_dbm": 15, "cwmin": 15, "cwmax": 15, "aifsn": 4},
+            "ap1": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
+            "ap2": {"cwmin": 10, "cwmax": 15, "aifsn": 3},
+            "ap3": {"cwmin": 15, "cwmax": 15, "aifsn": 4},
         }
         vote_count = 0
 
@@ -524,7 +674,7 @@ class OpenClawMigrationTests(unittest.TestCase):
                 vote_count += 1
                 return '同意。\n```json\n{"agreed": true, "reason": "硬约束通过"}\n```'
             if "提案方" in instruction:
-                return "联合提案。\n```json\n" + json.dumps(proposal, ensure_ascii=False) + "\n```"
+                return "EDCA 提案。\n```json\n" + json.dumps(proposal, ensure_ascii=False) + "\n```"
             return f"{ap_id.upper()} 广播"
 
         with patch.object(orch, "get_all_states", return_value=state), \
@@ -532,7 +682,7 @@ class OpenClawMigrationTests(unittest.TestCase):
             result = orch.structured_relay(max_validation_retries=1, max_turns=8)
 
         self.assertEqual(result["outcome"], "success", result)
-        self.assertEqual(result["strategy"], "joint")
+        self.assertEqual(result["strategy"], "co_edca")
         self.assertGreaterEqual(vote_count, 2)
         self.assertEqual(result["decision"]["ap3"]["cwmax"], 31)
         self.assertTrue(result["validation"]["approved"], result["validation"])
@@ -545,18 +695,15 @@ class OpenClawMigrationTests(unittest.TestCase):
         )
 
     def test_nested_edca_proposal_is_normalized_before_validation(self):
-        state = copy.deepcopy(MOCK_SCENES["joint"])
+        state = copy.deepcopy(MOCK_SCENES["edca"])
         proposal = {
             "ap1": {
-                "tx_power_dbm": 18.0,
                 "edca": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
             },
             "ap2": {
-                "tx_power_dbm": 17.0,
                 "edca": {"cwmin": 9, "cwmax": 20, "aifsn": 3},
             },
             "ap3": {
-                "tx_power_dbm": 16.0,
                 "edca": {"cwmin": 14, "cwmax": 35, "aifsn": 4},
             },
         }
@@ -565,7 +712,7 @@ class OpenClawMigrationTests(unittest.TestCase):
             if "最新提案参数" in instruction:
                 return '同意。\n```json\n{"agreed": true, "reason": "验算通过"}\n```'
             if "提案方" in instruction:
-                return "联合提案。\n```json\n" + json.dumps(proposal, ensure_ascii=False) + "\n```"
+                return "EDCA 提案。\n```json\n" + json.dumps(proposal, ensure_ascii=False) + "\n```"
             return f"{ap_id.upper()} 广播"
 
         with patch.object(orch, "get_all_states", return_value=state), \
@@ -573,7 +720,7 @@ class OpenClawMigrationTests(unittest.TestCase):
             result = orch.structured_relay(max_validation_retries=1, max_turns=8)
 
         self.assertEqual(result["outcome"], "success", result)
-        self.assertEqual(result["strategy"], "joint")
+        self.assertEqual(result["strategy"], "co_edca")
         self.assertNotIn("edca", result["decision"]["ap2"])
         self.assertEqual(result["decision"]["ap2"]["cwmin"], 9)
         self.assertEqual(
@@ -581,11 +728,12 @@ class OpenClawMigrationTests(unittest.TestCase):
         )
 
     def test_proposal_prompt_uses_non_mandatory_tool_language(self):
-        instruction = orch.propose_instruction("ap1", "joint")
-        vote = orch.vote_instruction("ap2", "ap1", "joint", decision_for("joint"), 1)
+        instruction = orch.propose_instruction("ap1", "co_edca")
+        vote = orch.vote_instruction("ap2", "ap1", "co_edca", decision_for("edca"), 1)
 
         self.assertNotIn("必须调用", instruction)
         self.assertNotIn("不得", instruction)
+        self.assertNotIn("联合调整", instruction)
         self.assertIn("编排层会在投票前执行确定性预检", instruction)
         self.assertIn("get_sta_feedback", instruction)
         self.assertIn("未实际调用工具时", vote)
@@ -651,11 +799,10 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertIn("CWmin", text)
         self.assertEqual(text.count("- 正例："), 3)
 
-    def test_structured_relay_accepts_sr_edca_joint(self):
+    def test_structured_relay_accepts_sr_and_edca(self):
         for scene_name, expected_strategy in (
             ("sr", "co_sr"),
             ("edca", "co_edca"),
-            ("joint", "joint"),
         ):
             with self.subTest(scene=scene_name):
                 state = copy.deepcopy(MOCK_SCENES[scene_name])
@@ -672,6 +819,20 @@ class OpenClawMigrationTests(unittest.TestCase):
                 for env in fake.vote_envs:
                     self.assertNotIn("MULTIAP_CURRENT_PROPOSAL", env)
                     self.assertNotIn("MULTIAP_CURRENT_STRATEGY", env)
+
+    def test_mixed_sr_edca_proposal_is_rejected(self):
+        orch.reset_session(copy.deepcopy(MOCK_SCENES["edca"]))
+        mixed = {
+            "ap1": {"tx_power_dbm": 8, "CWmin": 15, "CWmax": 63, "AIFSN": 6},
+            "ap2": {"tx_power_dbm": 8, "CWmin": 3, "CWmax": 15, "AIFSN": 2},
+            "ap3": {"tx_power_dbm": 8, "CWmin": 15, "CWmax": 63, "AIFSN": 6},
+        }
+
+        result = orch._proposal_precheck(mixed, orch.resolve_strategy(mixed))
+
+        self.assertFalse(result["approved"])
+        self.assertEqual(result["strategy"], "co_sr")
+        self.assertIn("只允许单一策略", result["global_errors"][0])
 
     def test_structured_relay_does_not_require_real_observation_when_executor_fails(self):
         state = copy.deepcopy(MOCK_SCENES["edca"])
@@ -698,6 +859,22 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertTrue(result["validation"]["approved"], result["validation"])
         self.assertFalse(result["observed_is_real"])
         self.assertEqual(result["push_results"], failed_push)
+
+    def test_qos_acceptance_requires_executor_apply(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        fake = FakeOpenClawAP(copy.deepcopy(EDCA_DECISION))
+
+        with patch.object(orch, "get_all_states", return_value=state), \
+             patch.object(orch, "drive_ap", fake):
+            result = orch.structured_relay(
+                max_turns=8,
+                observation_state_getter=lambda: orch.apply_profile(state),
+                acceptance="qos",
+            )
+
+        self.assertEqual(result["outcome"], "qos_not_applied")
+        self.assertFalse(result["validation"]["approved"])
+        self.assertIn("QoS 效果验收要求先下发决策", result["validation"]["summary"])
 
     def test_failed_real_observation_rolls_back_applied_candidate(self):
         state = copy.deepcopy(MOCK_SCENES["edca"])

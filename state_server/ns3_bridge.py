@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import subprocess
 import sys
 import threading
@@ -90,8 +91,6 @@ STRATEGY_KEYS: dict[str, list[tuple[str, str, object]]] = {
         ("VI_AIFSN", "vi_aifsn", lambda v: int(v)),
     ],
 }
-# joint = co_sr ∪ co_edca
-STRATEGY_KEYS["joint"] = STRATEGY_KEYS["co_sr"] + STRATEGY_KEYS["co_edca"]
 
 APPLY_RAW_KEYS = {
     "tx": "tx_power_dbm",
@@ -429,6 +428,18 @@ _bridge: Ns3Bridge | None = None
 _last_result: dict = {}
 
 
+def _port_available(port: int) -> bool:
+    """Return whether Flask can bind the bridge /apply port before ns-3 starts."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 @app.route("/apply", methods=["POST"])
 def apply_endpoint():
     body = request.get_json(silent=True)
@@ -512,6 +523,17 @@ def main():
         business_types = _parse_ap_value_map(args.business_types, defaults=DEFAULT_BUSINESS_TYPES)
     except argparse.ArgumentTypeError as exc:
         parser.error(str(exc))
+
+    if not _port_available(args.port):
+        print(
+            f"[bridge] 端口 {args.port} 已被占用，未启动 ns-3 子进程。",
+            file=sys.stderr,
+        )
+        print(
+            f"[bridge] 请先停止旧 bridge：lsof -nP -iTCP:{args.port} -sTCP:LISTEN",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     global _bridge
     _bridge = Ns3Bridge(args.ns3_dir, args.state_server, args.sim_time,

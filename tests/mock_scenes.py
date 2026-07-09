@@ -1,14 +1,14 @@
 """Mock 场景与观测字段补齐 —— 纯测试夹具。
 
 自 mock 运行时模式移除后（运行时仅保留 real / ns3），本模块只被测试套件
-引用：为确定性单元测试提供固定初始状态。键名必须与 openclaw.scenes.SCENE_NAMES
-保持一致（test_openclaw_migration 有断言锁定）。
+引用：为确定性单元测试提供固定初始状态。运行时只使用 sr/edca；其它键仅为
+单元测试 fixture，不会出现在 openclaw.scenes.SCENE_NAMES。
 """
 from __future__ import annotations
 
 
 # ------------------------------------------------------------------
-# Mock 数据：三个预设场景
+# Mock 数据：运行时只暴露 sr/edca；额外 fixture 仅供单元测试覆盖冲突/SLA 行为。
 # ------------------------------------------------------------------
 
 # 场景一：Co-SR（三个 AP 功率不对称，AP1 高位干扰邻居，EDCA 正常）
@@ -205,7 +205,6 @@ MOCK_SCENE_HIDDEN_SLA = {
 MOCK_SCENES = {
     "sr":    MOCK_SCENE_SR,
     "edca":  MOCK_SCENE_EDCA,
-    "joint": MOCK_SCENE_JOINT,
     "contention": MOCK_SCENE_CONTENTION,
     "hidden_sla": MOCK_SCENE_HIDDEN_SLA,
 }

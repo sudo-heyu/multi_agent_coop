@@ -40,7 +40,7 @@ AP 可调用 `get_latest_ap_states`、Co-SR 分析/候选工具以及 `validate_
 ## 协商机制
 
 1. 广播：三台 AP 并发生成广播，系统按 ap1、ap2、ap3 顺序记录和展示；每台只陈述自己的状态。
-2. 触发判断：`determine_strategy` 返回 `co_sr`、`co_edca`、`joint` 或 `noop`，作为提案快速路径提示。
+2. 触发判断：`determine_strategy` 返回 `co_sr`、`co_edca` 或 `noop`，作为提案快速路径提示；同时出现两类证据时选择主导问题先处理，不再生成 `joint`。
 3. 提案：首轮由 ap1 发起。AP 获取最新状态、调用必要工具并输出候选 JSON。
 4. 投票：非提案 AP 逐一投票；反对者必须给出反提案并接管。反提案无法解析时允许一次纯 JSON 修复轮。
 5. 决策与验收：全票通过后直接采用已通过的提案作为最终决策，不再增加一次 LLM 决策回合；Validator 验收通过后才允许下发。

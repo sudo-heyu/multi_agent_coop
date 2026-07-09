@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,7 +36,6 @@ if str(REPO_ROOT) not in sys.path:
 from openclaw.mcp.proposal_utils import (
     _infer_strategy_from_proposal,
     _extract_proposal,
-    _extract_json,
     _with_sr_concurrent_group,
 )
 from src.tools import sr as _sr
@@ -44,7 +44,13 @@ from src.profile import agent_view, apply_profile
 from src.state_client import get_all_states
 from src.validator import validate_decision as _validate_decision
 from src.memory import SessionMemory, SessionMemoryManager
+from src.memory.outcome import classify as _classify_qos_delta
+from src.memory.outcome import evaluate_deltas as _evaluate_qos_deltas
 from src.memory.workspace import load_current_session, read_prompt_memory, save_current_session
+try:
+    import tool_policy
+except ImportError:  # pragma: no cover - package import fallback
+    from . import tool_policy  # type: ignore
 
 AP_IDS = ["ap1", "ap2", "ap3"]
 STATE_SERVER = os.environ.get("MULTIAP_STATE_SERVER", "http://localhost:5001")
@@ -56,6 +62,12 @@ OPENCLAW_BIN = (
 )
 DRIVE_RETRIES = int(os.environ.get("MULTIAP_DRIVE_RETRIES", "3"))
 GATEWAY_PORT_ENV = os.environ.get("MULTIAP_GATEWAY_PORT")  # 显式覆盖；否则从 profile 配置读
+DEFAULT_AGENT_TOTAL_CONTEXT_CHARS = 26_000
+MIN_AGENT_TOTAL_CONTEXT_CHARS = 6_000
+CONTEXT_OVERFLOW_MARKERS = (
+    "Context overflow: prompt too large",
+    "prompt too large for the model",
+)
 _EDCA_CW_VALUES = (3, 7, 15, 31, 63, 127, 255, 511, 1023)
 _EDCA_GROUP_ALIASES = {
     "BE": {
@@ -113,6 +125,25 @@ def _env_flag(env: dict[str, str] | None, name: str, default: str = "0") -> bool
     return _truthy(os.environ.get(name, default))
 
 
+def _ollama_allowed_env(env: dict[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    model_ref = str(source.get("MULTIAP_MODEL_REF") or "").strip().lower()
+    return model_ref.startswith("ollama/") or _truthy(source.get("MULTIAP_ALLOW_OLLAMA"))
+
+
+def _is_context_overflow_reply(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(marker.lower() in lowered for marker in CONTEXT_OVERFLOW_MARKERS)
+
+
+def _agent_context_budget_for_attempt(base_budget: int, attempt: int) -> int:
+    """Shrink prompt context on retries after provider/runtime context overflow."""
+    if attempt <= 0:
+        return max(MIN_AGENT_TOTAL_CONTEXT_CHARS, int(base_budget))
+    ratio = 0.6 ** attempt
+    return max(MIN_AGENT_TOTAL_CONTEXT_CHARS, int(int(base_budget) * ratio))
+
+
 def _raw_stream_enabled(
     on_text_delta: Callable[[str], None] | None,
     env: dict[str, str] | None = None,
@@ -156,6 +187,9 @@ def _tool_event_path(env: dict[str, str] | None = None) -> Path:
 _tool_callback: Callable | None = None
 # 活跃协商的 SessionLogger：MCP 工具调用/回合重试经它落盘（展示回调之外的持久副本）。
 _tool_logger = None
+# AP 发言运行时注入点。默认 None 表示继续使用 OpenClaw agent；run.py 会注入
+# PPIO stream runtime，保持同一套 structured_relay / memory / validator / executor。
+_agent_driver: Callable | None = None
 
 
 def _log_mcp_tool(ap_id: str, name: str, args, result, dur_ms) -> None:
@@ -305,8 +339,12 @@ def reset_session(ap_state: dict | None = None) -> dict:
     _SESSION.ap_state = apply_profile(raw_state)
     for agent in AP_IDS:
         _SESSION.sync_agent_workspace(agent)
-    return {"ok": True, "ap_states": agent_view(_SESSION.ap_state),
+    return {"ok": True, "ap_states": _agent_visible_state(),
             "ap_ids": AP_IDS, "next": "对 ap1→ap2→ap3 依次调用 broadcast"}
+
+
+def _agent_visible_state() -> dict:
+    return tool_policy.transform_agent_state(agent_view(_SESSION.ap_state))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -335,13 +373,9 @@ def drive_ap(
     # OpenClaw reads this agent's MEMORY.md and memory/*.md during bootstrap.
     # Flush the deterministic local view immediately before spawning the turn.
     _SESSION.sync_agent_workspace(ap)
-    msg = _build_agent_message(
-        ap, transcript, instruction, shared_warnings=_SESSION.recalled_warnings,
-        shared_positive=_SESSION.recalled_episodes,
-        shared_rules=_SESSION.recalled_rules,
-    )
     env = dict(os.environ)
-    env.setdefault("OLLAMA_API_KEY", "ollama-local")
+    if _ollama_allowed_env(env):
+        env.setdefault("OLLAMA_API_KEY", "ollama-local")
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
     env["no_proxy"] = env["NO_PROXY"]
     if extra_env:
@@ -357,7 +391,18 @@ def drive_ap(
     # 云端/本地模型偶发「incomplete terminal response」（payloads=0），多为瞬时；重试。
     last_err = ""
     sid = None
+    base_context_budget = int(os.environ.get(
+        "MULTIAP_AGENT_TOTAL_CONTEXT_CHARS",
+        str(DEFAULT_AGENT_TOTAL_CONTEXT_CHARS),
+    ))
     for attempt in range(DRIVE_RETRIES):
+        context_budget = _agent_context_budget_for_attempt(base_context_budget, attempt)
+        msg = _build_agent_message(
+            ap, transcript, instruction, shared_warnings=_SESSION.recalled_warnings,
+            shared_positive=_SESSION.recalled_episodes,
+            shared_rules=_SESSION.recalled_rules,
+            total_budget=context_budget,
+        )
         sid = f"{ap}-{uuid.uuid4().hex[:12]}"
         cmd = [OPENCLAW_BIN, "--profile", PROFILE, "agent"]
         if not use_gateway:
@@ -384,9 +429,13 @@ def drive_ap(
                 reply = _reply_text(json.loads(stdout))
             except json.JSONDecodeError:
                 reply = stdout.strip()
-            if reply.strip():
+            if reply.strip() and not _is_context_overflow_reply(reply):
                 return reply
-            last_err = "空回复(payloads=0)"
+            last_err = (
+                f"上下文超限(prompt too large)，已将注入预算降至 {context_budget} 字符"
+                if _is_context_overflow_reply(reply)
+                else "空回复(payloads=0)"
+            )
         else:
             last_err = (stderr or stdout)[-300:]
             if use_gateway:
@@ -409,6 +458,7 @@ def _build_agent_message(
     shared_warnings: list[dict] | None = None,
     shared_positive: list[dict] | None = None,
     shared_rules: list[dict] | None = None,
+    total_budget: int | None = None,
 ) -> str:
     workspace_memory = read_prompt_memory(agent_id)
     conversation = (
@@ -449,7 +499,12 @@ def _build_agent_message(
     goal_prompt = ((_SESSION.goal_context or {}).get("prompt") or "").strip()
     if goal_prompt:
         goal_block = goal_prompt + "\n\n"
-    total_budget = max(8_000, int(os.environ.get("MULTIAP_AGENT_TOTAL_CONTEXT_CHARS", "26000")))
+    if total_budget is None:
+        total_budget = int(os.environ.get(
+            "MULTIAP_AGENT_TOTAL_CONTEXT_CHARS",
+            str(DEFAULT_AGENT_TOTAL_CONTEXT_CHARS),
+        ))
+    total_budget = max(MIN_AGENT_TOTAL_CONTEXT_CHARS, int(total_budget))
     # Low → high priority ordering; tail truncation preserves current task, goal
     # attribution, public facts, agent-local memory, then warnings. Shared positive
     # experience is discarded first.
@@ -732,6 +787,31 @@ def _reply_text(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+def _iter_json_objects(text: str):
+    """Yield JSON objects embedded in an agent reply.
+
+    投票阶段需要扫描所有 JSON，而不是只看第一个 JSON：反对票的合法格式是
+    vote JSON 后面再跟完整反提案 JSON。
+    """
+    text = text or ""
+    for m in re.finditer(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL):
+        try:
+            parsed = json.loads(m.group(1).strip())
+            if isinstance(parsed, dict):
+                yield parsed
+        except json.JSONDecodeError:
+            pass
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            parsed, _ = decoder.raw_decode(text[match.start():])
+            if isinstance(parsed, dict):
+                yield parsed
+        except json.JSONDecodeError:
+            pass
+
+
 # ──────────────────────────────────────────────────────────────────────
 # OpenClaw 会话文件定位（仅用于 raw-stream 文本事件的 runId 映射）
 # ──────────────────────────────────────────────────────────────────────
@@ -766,19 +846,48 @@ def _trajectory_path_for(ap_id: str, session_id: str) -> Path | None:
 # 表决解析
 # ──────────────────────────────────────────────────────────────────────
 
-def read_vote(content: str) -> str:
-    """返回 'agree' | 'reject' | 'abstain'（移植自 orchestrator._vote_result）。"""
-    vote = _extract_json(content)
-    if isinstance(vote, dict):
-        agreed = vote.get("agreed")
-        if agreed == "abstain":
+def _extract_vote_json(content: str) -> dict | None:
+    for candidate in _iter_json_objects(content):
+        if "agreed" in candidate:
+            return candidate
+    return None
+
+
+def _vote_from_agreed(value) -> str | None:
+    if isinstance(value, bool):
+        return "agree" if value else "reject"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"abstain", "neutral", "弃权", "中立"}:
             return "abstain"
-        if isinstance(agreed, bool):
-            return "agree" if agreed else "reject"
+        if normalized in {"true", "agree", "agreed", "approve", "approved", "yes", "同意", "赞成"}:
+            return "agree"
+        if normalized in {"false", "reject", "rejected", "disagree", "no", "反对", "不同意", "否决"}:
+            return "reject"
+    return None
+
+
+def read_vote(content: str) -> str:
+    """返回 'agree' | 'reject' | 'abstain' | 'invalid'。
+
+    只要回复中出现 JSON，就必须有显式 agreed 字段。否则裸参数 JSON、
+    伪工具调用 JSON 等内容不能被默认解释为 reject，避免误提升为反提案。
+    """
+    vote = _extract_vote_json(content)
+    if isinstance(vote, dict):
+        result = _vote_from_agreed(vote.get("agreed"))
+        return result or "invalid"
+
+    if any(True for _ in _iter_json_objects(content)):
+        return "invalid"
+
     if "弃权" in content:
         return "abstain"
-    without_negative = content.replace("不同意", "").replace("反对", "")
-    return "agree" if "同意" in without_negative else "reject"
+    if any(token in content for token in ("不同意", "反对", "拒绝", "否决")):
+        return "reject"
+    if any(token in content for token in ("同意", "赞成")):
+        return "agree"
+    return "invalid"
 
 
 def _deterministic_vote_fallback(voter_id: str, error: Exception) -> str | None:
@@ -830,7 +939,7 @@ def _proposal_precheck(proposal: dict | None, strategy: str | None) -> dict:
             "global_errors": ["提案未解析出合法参数 JSON"],
             "summary": "提案预检失败：未解析出合法参数 JSON",
         }
-    if strategy not in {"co_sr", "co_edca", "joint"}:
+    if strategy not in {"co_sr", "co_edca"}:
         return {
             "approved": False,
             "strategy": strategy,
@@ -838,6 +947,25 @@ def _proposal_precheck(proposal: dict | None, strategy: str | None) -> dict:
             "per_ap": {},
             "global_errors": [f"无法识别提案策略: {strategy}"],
             "summary": f"提案预检失败：无法识别提案策略 {strategy}",
+        }
+    if _proposal_has_mixed_strategy_fields(proposal):
+        return {
+            "approved": False,
+            "strategy": strategy,
+            "parse_ok": True,
+            "per_ap": {},
+            "global_errors": ["提案同时包含 Co-SR 与 Co-EDCA 字段；当前只允许单一策略 co_sr 或 co_edca"],
+            "summary": "提案预检失败：请在 Co-SR 与 Co-EDCA 中选择一种策略，不要输出联合提案",
+        }
+    challenge_errors = _memory_challenge_edca_gate(proposal, strategy)
+    if challenge_errors:
+        return {
+            "approved": False,
+            "strategy": strategy,
+            "parse_ok": True,
+            "per_ap": {},
+            "global_errors": challenge_errors,
+            "summary": "提案预检失败：弱状态档位下 EDCA 参数过度保守，需给出更小改动或明确记忆证据",
         }
     result = _validate_decision(
         _SESSION.ap_state,
@@ -848,6 +976,95 @@ def _proposal_precheck(proposal: dict | None, strategy: str | None) -> dict:
     )
     result["stage"] = "proposal_precheck"
     return result
+
+
+def _proposal_has_mixed_strategy_fields(proposal: dict | None) -> bool:
+    if not isinstance(proposal, dict):
+        return False
+    has_sr = False
+    has_edca = False
+    for value in proposal.values():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            has_sr = True
+            continue
+        if not isinstance(value, dict):
+            continue
+        if value.get("tx_power_dbm") is not None or value.get("obss_pd_dbm") is not None:
+            has_sr = True
+        if any(value.get(key) is not None for key in (
+            "CWmin", "CWmax", "AIFSN",
+            "cwmin", "cwmax", "aifsn",
+            "BE_CWmin", "BE_CWmax", "BE_AIFSN",
+            "be_cwmin", "be_cwmax", "be_aifsn",
+            "VI_CWmin", "VI_CWmax", "VI_AIFSN",
+            "vi_cwmin", "vi_cwmax", "vi_aifsn",
+        )):
+            has_edca = True
+        for nested_key in ("edca", "EDCA", "co_edca", "Co-EDCA", "coEDCA"):
+            nested = value.get(nested_key)
+            if isinstance(nested, dict) and any(nested.get(k) is not None for k in (
+                "CWmin", "CWmax", "AIFSN", "cwmin", "cwmax", "aifsn",
+                "BE_CWmin", "BE_CWmax", "BE_AIFSN", "be_cwmin", "be_cwmax", "be_aifsn",
+                "VI_CWmin", "VI_CWmax", "VI_AIFSN", "vi_cwmin", "vi_cwmax", "vi_aifsn",
+            )):
+                has_edca = True
+    return has_sr and has_edca
+
+
+def _param_int(params: dict, *keys: str) -> int | None:
+    for key in keys:
+        if key not in params or params.get(key) is None:
+            continue
+        try:
+            return int(params[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _memory_challenge_edca_gate(proposal: dict | None, strategy: str | None) -> list[str]:
+    """Reject over-conservative EDCA guesses in coarse-state experiments.
+
+    This is a conversation-stage evidence gate only.  It does not relax or
+    replace the final deterministic Validator.
+    """
+    profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    if not tool_policy.coarsens_state(profile) or strategy != "co_edca":
+        return []
+    if not isinstance(proposal, dict):
+        return []
+
+    anchors = {
+        "high": {"CWmin": 3, "AIFSN": 2},
+        "medium": {"CWmin": 7, "AIFSN": 3},
+        "low": {"CWmin": 15, "AIFSN": 3},
+    }
+    errors: list[str] = []
+    for ap_id, state in _SESSION.ap_state.items():
+        if not isinstance(state, dict):
+            continue
+        params = proposal.get(ap_id)
+        if not isinstance(params, dict):
+            continue
+        priority = str(state.get("traffic_priority") or "medium").lower()
+        anchor = anchors.get(priority)
+        if not anchor:
+            continue
+        cwmin = _param_int(params, "CWmin", "cwmin", "BE_CWmin", "be_cwmin")
+        aifsn = _param_int(params, "AIFSN", "aifsn", "BE_AIFSN", "be_aifsn")
+        if cwmin is not None and cwmin > anchor["CWmin"]:
+            errors.append(
+                f"{ap_id}({priority}) CWmin={cwmin} 过度保守；"
+                f"memory_challenge 下无精确状态/可信记忆支撑时通常不应劣于 {anchor['CWmin']}"
+            )
+        if aifsn is not None and aifsn > anchor["AIFSN"]:
+            errors.append(
+                f"{ap_id}({priority}) AIFSN={aifsn} 过度保守；"
+                f"memory_challenge 下无精确状态/可信记忆支撑时通常不应劣于 {anchor['AIFSN']}"
+            )
+    return errors
 
 
 def _first_present_key(params: dict, keys: tuple[str, ...]) -> str | None:
@@ -983,7 +1200,7 @@ def resolve_strategy(proposal: dict | None) -> str | None:
 
 
 def determine_strategy(ap_state: dict) -> str:
-    """与 Python orchestrator 的确定性触发判断保持一致。"""
+    """Choose one of the two supported strategies: co_sr or co_edca."""
     sr_triggered = bool(_sr.analyze_interference(ap_state).get("co_sr_triggered"))
     priorities = {
         state.get("traffic_priority", "medium")
@@ -992,8 +1209,6 @@ def determine_strategy(ap_state: dict) -> str:
     }
     edca_triggered = len(priorities) > 1
 
-    if sr_triggered and edca_triggered:
-        return "joint"
     if sr_triggered:
         return "co_sr"
     if edca_triggered:
@@ -1019,7 +1234,7 @@ def _proposer_declares_noop(reply: str) -> bool:
 # ──────────────────────────────────────────────────────────────────────
 
 def broadcast_instruction(ap_id: str) -> str:
-    visible = agent_view(_SESSION.ap_state)
+    visible = _agent_visible_state()
     state_json = json.dumps(visible[ap_id], ensure_ascii=False, indent=2)
     return (
         f"请广播你（{ap_id.upper()}）的当前状态。\n"
@@ -1048,28 +1263,101 @@ def propose_instruction(
     recalled_rules: list[dict] | None = None,
     recalled_warnings: list[dict] | None = None,
 ) -> str:
-    state_summary = json.dumps(agent_view(_SESSION.ap_state), ensure_ascii=False, indent=2)
-    if strategy_hint == "co_edca":
+    state_summary = json.dumps(_agent_visible_state(), ensure_ascii=False, indent=2)
+    tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    tools_available = bool(tool_policy.allowed_tools(tool_profile))
+    if tool_profile != "full":
+        if not tools_available:
+            tool_policy_hint = (
+                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={tool_profile}，"
+                "本回合没有任何可调用工具。请只基于已给状态、对话记录、历史正例/失败警告"
+                "和自身推理提出候选；不要声称调用过工具，也不要把推理估计写成工具结论。\n\n"
+            )
+        else:
+            tool_policy_hint = (
+                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={tool_profile}。"
+                "部分会直接给出推荐答案、排序或完整有效性判断的工具可能不可用，"
+                "或只返回范围/合法性结果。请优先利用历史正例/失败警告提出候选，"
+                "再用可用的状态、STA 反馈和候选验算工具确认硬约束；不要把缺失的工具结果"
+                "伪造成已调用结论。\n\n"
+            )
+        if tool_policy.coarsens_state(tool_profile):
+            tool_policy_hint += (
+                "【状态可见性限制】当前档位会隐藏精确 EDCA/TX/QoS/RSSI 数值，只保留业务、"
+                "优先级、SLA 状态和粗粒度干扰等级。不要声称知道被隐藏的当前参数；"
+                "若引用历史动作，请明确它是记忆假设，并说明如何规避历史失败警告。\n\n"
+            )
+    else:
+        tool_policy_hint = ""
+    if tool_policy.coarsens_state(tool_profile) or not tools_available:
+        tool_path_hint = ""
+    elif strategy_hint == "co_edca":
         tool_path_hint = (
             "【本轮快速路径提示】当前全网证据已显示：邻居 RSSI 未触发 Co-SR，"
             "但业务优先级/EDCA 存在差异化需求。可以优先考虑 Co-EDCA；"
-            "如发现最新状态中同时出现明显干扰，也可以转为联合调整。"
+            "如发现最新状态中出现更明显干扰，应改选 Co-SR，而不是混合两类字段。"
             "你可按需要使用 get_latest_ap_states、get_sta_feedback、validate_edca_proposal 或 SR 相关工具补充证据。\n\n"
         )
     elif strategy_hint == "co_sr":
         tool_path_hint = (
             "【本轮快速路径提示】当前全网证据显示邻居 RSSI 触发 Co-SR，且 EDCA 差异化证据不强。"
-            "可以优先考虑 Co-SR；如最新状态同时显示业务优先级或 QoS 竞争问题，也可以转为联合调整。"
+            "可以优先考虑 Co-SR；如最新状态显示 SR 并非主导问题，应改选 Co-EDCA，而不是混合两类字段。"
             "你可按需要使用 get_latest_ap_states、get_sta_feedback、analyze_sr_interference、select_sr_concurrent_groups、"
             "evaluate_sr_candidate 或 validate_edca_proposal 补充证据。\n\n"
         )
-    elif strategy_hint == "joint":
-        tool_path_hint = (
-            "【本轮快速路径提示】当前全网证据同时支持 Co-SR 与 Co-EDCA。请走联合调整，"
-            "但只调用能支撑最终提案的必要工具，避免重复评估无关候选。\n\n"
-        )
     else:
         tool_path_hint = ""
+    if tools_available:
+        state_update_hint = (
+            "可结合 get_latest_ap_states 获取最新状态，也可以基于已给出的状态和对话记录先形成判断。"
+        )
+        sr_trigger_hint = "邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true"
+        sr_guidance = (
+            "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。若采用该路径，建议先判断"
+            "可用并发组：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups；"
+            "再用 evaluate_sr_candidate（传入 proposed_powers，部分并发再传 concurrent_group）辅助自检。"
+            "功率取最大必要降幅且为整数 dBm。提案 JSON 只含每个 AP 的 tx_power_dbm，并附 "
+            '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。'
+        )
+        edca_guidance = (
+            "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
+            "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
+            "同优先级或未知优先级时不要强行制造梯度。可用 validate_edca_proposal（传 proposed_edca）辅助自检。"
+        )
+        sta_guidance = (
+            "【STA 反馈】如果状态或 get_sta_feedback 显示关联 STA 的 SLA/QoE 约束，"
+            "请把它作为提案的边界条件：STA 可反馈吞吐、时延、jitter、丢包、RSSI/SINR 和 SLA 状态；"
+            "STA 不直接给控制参数，AP 需要把这些反馈转化为 TX Power/EDCA 的可执行调整。"
+        )
+        evidence_wording = (
+            "如调用验算工具，请把你打算提的参数显式作为工具参数传入；"
+            "未实际调用工具时，请把判断表述为基于当前状态和参数的推理估计，避免和真实工具结果混淆；"
+        )
+    else:
+        state_update_hint = (
+            "当前没有任何可调用工具；请只基于上方状态、对话记录和历史记忆形成判断，不要输出工具调用 JSON。"
+        )
+        sr_trigger_hint = "邻居 RSSI 偏强"
+        sr_guidance = (
+            "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。若采用该路径，请基于已给邻居 RSSI、"
+            "STA RSSI/SINR/SLA 和对话记录推理可用并发组；功率取最大必要降幅且为整数 dBm。"
+            "提案 JSON 只含每个 AP 的 tx_power_dbm，并附 "
+            '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。'
+        )
+        edca_guidance = (
+            "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
+            "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
+            "同优先级或未知优先级时不要强行制造梯度。"
+        )
+        sta_guidance = (
+            "【STA 反馈】如果状态显示关联 STA 的 SLA/QoE 约束，请把它作为提案的边界条件："
+            "STA 可反馈吞吐、时延、jitter、丢包、RSSI/SINR 和 SLA 状态；"
+            "STA 不直接给控制参数，AP 需要把这些反馈转化为 TX Power/EDCA 的可执行调整。"
+        )
+        evidence_wording = (
+            "当前没有工具可用；请把判断表述为基于当前状态、对话记录和历史记忆的推理估计，"
+            "避免和真实工具结果混淆；"
+        )
     memory_hint = ""
     if recalled_episodes:
         lines = [
@@ -1133,35 +1421,27 @@ def propose_instruction(
     return (
         f"你（{proposer_id.upper()}）是本轮的提案方，请发起参数调整提案。\n\n"
         f"{history_hint}"
+        f"{tool_policy_hint}"
         f"{tool_path_hint}"
         f"所有 AP 的初始状态数据（供参考）：\n{state_summary}\n\n"
-        "可结合 get_latest_ap_states 获取最新状态，也可以基于已给出的状态和对话记录先形成判断。\n\n"
+        f"{state_update_hint}\n\n"
         "【路径选择规则（基于实时证据，不按 AP 编号或固定业务身份预设）】\n"
-        "  · 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 可选 Co-SR。\n"
+        f"  · 若存在强干扰（{sr_trigger_hint}）→ 可选 Co-SR。\n"
         "  · 若 traffic_priority、QoS 或当前 EDCA 参数显示需要差异化竞争机会 → 可选 Co-EDCA。\n"
         "  · 若 STA 反馈显示某业务 SLA 已违反或接近边界，应把它作为 QoE 约束，而不是只看 AP 聚合指标。\n"
-        "  · 若两类问题同时成立 → 可选联合调整；若证据不足 → 说明暂不调整或提出最小改动方案。\n"
+        "  · 若两类问题同时成立 → 选择当前更主导的一类先处理；本轮只允许 Co-SR 或 Co-EDCA 单一路径。\n"
+        "  · 若证据不足 → 说明暂不调整或提出最小改动方案。\n"
         "  · 不要为了完成协商强行制造 SR 或 EDCA 问题。\n\n"
-        "【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。若采用该路径，建议先判断"
-        "可用并发组：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups；"
-        "再用 evaluate_sr_candidate（传入 proposed_powers，部分并发再传 concurrent_group）辅助自检。"
-        "功率取最大必要降幅且为整数 dBm。提案 JSON 只含每个 AP 的 tx_power_dbm，并附 "
-        '`"_sr": {"concurrent_group": [...], "non_concurrent_aps": [...]}`。\n\n'
-        "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
-        "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
-        "同优先级或未知优先级时不要强行制造梯度。可用 validate_edca_proposal（传 proposed_edca）辅助自检。\n"
+        f"{sr_guidance}\n\n"
+        f"{edca_guidance}\n"
         "【重要】若各 AP 优先级确实不同（如 high/medium/low）但当前 EDCA 参数相同（未差异化），"
         "这本身就是需要 Co-EDCA 的证据：应让高优先级获得更小的 CWmin/CWmax/AIFSN、低优先级更大，"
         "切勿以『统一参数已平凡满足单调性』为由判定无需调整——未体现优先级差异即未达成本场景目标。\n\n"
-        "【联合调整】只有当强干扰与 EDCA 竞争问题同时有证据支持时使用，"
-        "可结合 Co-SR 和 Co-EDCA 的相关验算工具，提案 JSON 可同时包含两类字段。\n\n"
-        "【STA 反馈】如果状态或 get_sta_feedback 显示关联 STA 的 SLA/QoE 约束，"
-        "请把它作为提案的边界条件：STA 可反馈吞吐、时延、jitter、丢包、RSSI/SINR 和 SLA 状态；"
-        "STA 不直接给控制参数，AP 需要把这些反馈转化为 TX Power/EDCA 的可执行调整。\n\n"
+        f"{sta_guidance}\n\n"
         "提案须简洁说明：选哪条路径及原因、每个 AP 的最终参数与依据、预期改善与权衡。\n"
-        "如调用验算工具，请把你打算提的参数显式作为工具参数传入；"
-        "未实际调用工具时，请把判断表述为基于当前状态和参数的推理估计，避免和真实工具结果混淆；"
+        f"{evidence_wording}"
         "编排层会在投票前执行确定性预检，未通过会把具体问题写回协商记录。\n"
+        "当前只支持两种策略：Co-SR 或 Co-EDCA。提案 JSON 不要同时包含 tx_power_dbm/obss_pd_dbm 与 EDCA 字段。\n"
         "提案末尾请用 ```json 代码块附参数摘要，顶层键为 ap1/ap2/ap3，"
         "每个 AP 的值使用对象（参数写在对象内部，避免裸数值）。"
     )
@@ -1169,11 +1449,30 @@ def propose_instruction(
 
 def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
                      proposal: dict, proposal_num: int) -> str:
-    verify_hint = {
-        "co_sr":   "关注你自己的 TX Power、关联 STA 的 RSSI/SINR/SLA、CCA 余量；如有真实工具结果，再参考 evaluate_sr_candidate 的 valid/errors",
-        "co_edca": "关注你自己的 traffic_priority、关联 STA QoE/SLA、当前 EDCA 参数与优先级排序；如有真实工具结果，再参考 valid/errors",
-        "joint":   "关注你自己的 TX Power、EDCA 建议值与关联 STA QoE/SLA，以及组合调整是否可接受；如有真实工具结果，再参考 valid/errors",
-    }.get(strategy, "关注参数对你的影响；如有真实工具结果，再参考 valid/errors")
+    tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    tools_available = bool(tool_policy.allowed_tools(tool_profile))
+    if tools_available:
+        verify_hint = {
+            "co_sr":   "关注你自己的 TX Power、关联 STA 的 RSSI/SINR/SLA、CCA 余量；如有真实工具结果，再参考 evaluate_sr_candidate 的 valid/errors",
+            "co_edca": "关注你自己的 traffic_priority、关联 STA QoE/SLA、当前 EDCA 参数与优先级排序；如有真实工具结果，再参考 valid/errors",
+        }.get(strategy, "关注参数对你的影响；如有真实工具结果，再参考 valid/errors")
+        tool_vote_hint = (
+            "可结合 get_latest_ap_states、get_sta_feedback 或验算工具检查该提案。"
+            "如果调用验算工具，请把上方提案中针对各 AP 的参数"
+            "（Co-SR 传 proposed_powers，部分并发连同 concurrent_group；Co-EDCA 传 proposed_edca）"
+            "显式填入工具参数；编排层也会执行确定性安全验证。"
+            "未实际调用工具时，请把相关判断表述为基于当前状态和参数的推理估计，避免和真实工具结果混淆。"
+        )
+    else:
+        verify_hint = {
+            "co_sr":   "关注你自己的 TX Power、关联 STA 的 RSSI/SINR/SLA、CCA 余量，并基于已给状态和对话记录推理",
+            "co_edca": "关注你自己的 traffic_priority、关联 STA QoE/SLA、当前 EDCA 参数与优先级排序，并基于已给状态和对话记录推理",
+        }.get(strategy, "关注参数对你的影响，并基于已给状态和对话记录推理")
+        tool_vote_hint = (
+            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具。"
+            "请不要输出工具调用 JSON，也不要声称调用过 get_latest_ap_states、get_sta_feedback 或验算工具；"
+            "只能基于上方状态、对话记录和最新提案参数进行推理。编排层会执行确定性安全验证。"
+        )
     if proposal_num >= 4:
         stall_hint = (f"\n\n【死锁警告：已是第 {proposal_num} 个提案】若各方在重复相似参数，"
                       "应选择弃权让当前折中方案通过，而不是再提一个同样无法满足约束的新方案。")
@@ -1181,16 +1480,25 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
         stall_hint = f"\n\n【注意：已是第 {proposal_num} 个提案】若出现重复请考虑弃权，避免死锁。"
     else:
         stall_hint = ""
+    challenge_hint = ""
+    if tool_policy.coarsens_state(tool_profile):
+        challenge_hint = (
+            "\n\n【弱状态提示】当前档位隐藏精确参数与效果指标。"
+            "如果提案只通过弱校验，未报错只代表没有明显格式/范围硬错误，"
+            "不代表效果已经被工具证明。投票时请区分：真实状态、历史记忆、"
+            "弱工具结果和推理估计。"
+            "若提案把你自己的 EDCA 设置得明显过度保守，且没有可信历史记忆、"
+            "当前 SLA 风险或明确失败警告支撑，不应仅因范围合法就同意；"
+            "应反对并给出更小改动的反提案。经验锚点：high 通常不应劣于 "
+            "CWmin=3/AIFSN=2，medium 通常不应劣于 CWmin=7/AIFSN=3，"
+            "low 通常不应劣于 CWmin=15/AIFSN=3。"
+        )
     proposal_json = json.dumps(proposal, ensure_ascii=False, indent=2)
     return (
         "【第一步】请完整阅读上方对话记录，梳理此前所有提案及每次拒绝的原因。\n\n"
         f"【第二步】验算 {proposer_id.upper()} 的最新提案（提案#{proposal_num}）中针对你自己（{voter_id.upper()}）的参数。\n\n"
         f"最新提案参数：\n{proposal_json}\n\n"
-        "可结合 get_latest_ap_states、get_sta_feedback 或验算工具检查该提案。"
-        "如果调用验算工具，请把上方提案中针对各 AP 的参数"
-        "（Co-SR 传 proposed_powers，部分并发连同 concurrent_group；Co-EDCA 传 proposed_edca）"
-        "显式填入工具参数；编排层也会执行确定性安全验证。"
-        "未实际调用工具时，请把相关判断表述为基于当前状态和参数的推理估计，避免和真实工具结果混淆。"
+        f"{tool_vote_hint}\n"
         "然后用自然语言给出判断。"
         f"重点参考：{verify_hint}。\n\n"
         "三种表态：\n"
@@ -1198,25 +1506,67 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
         "【弃权】未完全满足但找不到更好方案，或协商已重复。等同同意，无需反提案。末尾附 "
         "```json\n{\"agreed\": \"abstain\", \"reason\": \"...\"}\n```\n"
         "【反对】你有具体替代方案。同一条回复中先附 ```json\n{\"agreed\": false, \"reason\": \"...\"}\n``` "
-        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 或联合，"
+        "再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR，"
         "建议说明并发组依据并写 _sr.concurrent_group。"
+        f"{challenge_hint}"
         f"{stall_hint}"
+    )
+
+
+def repair_vote_instruction(
+    voter_id: str,
+    proposer_id: str,
+    strategy: str,
+    proposal: dict,
+    proposal_num: int,
+) -> str:
+    proposal_json = json.dumps(proposal, ensure_ascii=False, indent=2)
+    tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    no_tool_hint = ""
+    if not tool_policy.allowed_tools(tool_profile):
+        no_tool_hint = (
+            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具；"
+            "不要输出 {\"tool\": ...} 或 {\"arguments\": ...} 形式的伪工具调用。\n"
+        )
+    return (
+        "上一条投票回复格式无效：编排层没有找到明确的 agreed 表态 JSON，"
+        "或回复中出现了裸参数 JSON/伪工具调用 JSON。\n"
+        f"你仍然是 {voter_id.upper()}，正在表决 {proposer_id.upper()} 的提案#{proposal_num}。\n"
+        f"{no_tool_hint}"
+        f"策略={strategy}，当前提案参数如下：\n{proposal_json}\n\n"
+        "请只补充本次投票，不要重新广播状态。\n"
+        "若同意，输出一个 JSON 代码块：{\"agreed\": true, \"reason\": \"...\"}。\n"
+        "若弃权，输出一个 JSON 代码块：{\"agreed\": \"abstain\", \"reason\": \"...\"}。\n"
+        "若反对，先输出一个 JSON 代码块：{\"agreed\": false, \"reason\": \"...\"}，"
+        "再输出一个完整反提案 JSON 代码块（顶层键 ap1/ap2/ap3）。"
     )
 
 
 def repair_counter_instruction() -> str:
     """反对者回复中未解析出反提案 JSON 时的「修复轮」指令（移植自
     orchestrator._phase_counter_propose）。"""
+    tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    if tool_policy.allowed_tools(tool_profile):
+        evidence_hint = (
+            "如果选择 Co-SR，请说明可用并发组依据；可使用 get_latest_ap_states、"
+            "analyze_sr_interference、select_sr_concurrent_groups 辅助判断，"
+            "并在 JSON 中写入 _sr.concurrent_group。\n"
+        )
+    else:
+        evidence_hint = (
+            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具；"
+            "请只基于已给状态、对话记录和历史记忆推理，不要输出伪工具调用。"
+            "如果选择 Co-SR，请在 JSON 中写入你基于现有证据推理出的 _sr.concurrent_group。\n"
+        )
     return (
         "你已表示反对，但回复中未找到可解析的参数 JSON。\n"
         "请回顾上方完整协商历史，综合所有 AP 此前提出的约束和顾虑，"
         "给出一个能兼顾所有人需求的反提案。\n"
         "你可以根据实时证据选择协商路径：Co-SR 使用 tx_power_dbm 字段，"
-        "Co-EDCA 使用 CWmin/CWmax/AIFSN 字段，联合路径两类字段均出现；"
+        "Co-EDCA 使用 CWmin/CWmax/AIFSN 字段；当前只允许选择其中一种单一路径，"
+        "不要同时输出 TX Power/OBSS_PD 与 EDCA 字段；"
         "证据不足时不要为了形成反提案强行改变无关参数。\n"
-        "如果选择 Co-SR 或联合路径，请说明可用并发组依据；可使用 get_latest_ap_states、"
-        "analyze_sr_interference、select_sr_concurrent_groups 辅助判断，"
-        "并在 JSON 中写入 _sr.concurrent_group。\n"
+        f"{evidence_hint}"
         "请只输出一个 ```json 代码块，JSON 顶层键为 ap1、ap2、ap3。不要写解释。"
     )
 
@@ -1290,7 +1640,8 @@ def _run_agent_turn(
             "semantic_rule_ids": [r.get("rule_id") for r in s.recalled_rules],
         })
     try:
-        reply = drive_ap(
+        driver = _agent_driver or drive_ap
+        reply = driver(
             ap_id,
             instruction,
             thinking=thinking,
@@ -1300,7 +1651,8 @@ def _run_agent_turn(
     except TypeError as exc:
         if "on_text_delta" not in str(exc):
             raise
-        reply = drive_ap(
+        driver = _agent_driver or drive_ap
+        reply = driver(
             ap_id,
             instruction,
             thinking=thinking,
@@ -1423,6 +1775,48 @@ def run_vote(
             counter = _with_sr_concurrent_group(counter, s.ap_state)
     return {"voter": voter_id, "reply": reply, "vote": vote,
             "counter_proposal": counter}
+
+
+def run_repair_vote(
+    voter_id: str,
+    *,
+    logger=None,
+    on_event_start: Callable | None = None,
+    on_event_chunk: Callable | None = None,
+) -> dict:
+    """修复格式无效的投票回复。
+
+    与反提案修复不同，这一步仍处于投票阶段：只有补充的投票显式
+    agreed=false 时，才允许解析并提升反提案。
+    """
+    s = _SESSION
+    if s.proposal is None or s.proposer is None:
+        return {"error": "当前无有效提案，请先 run_propose"}
+    instruction = repair_vote_instruction(
+        voter_id,
+        s.proposer,
+        s.strategy or "co_edca",
+        s.proposal,
+        s.proposal_num,
+    )
+    reply, _ = _run_agent_turn(
+        voter_id,
+        4,
+        "vote_json_repair",
+        instruction,
+        logger=logger,
+        on_event_start=on_event_start,
+        on_event_chunk=on_event_chunk,
+    )
+    s.record(voter_id.upper(), reply, kind="vote")
+    vote = read_vote(reply)
+    counter = None
+    if vote == "reject":
+        counter = _extract_proposal(reply)
+        if counter is not None:
+            counter = _with_sr_concurrent_group(counter, s.ap_state)
+    return {"voter": voter_id, "reply": reply, "vote": vote,
+            "counter_proposal": counter, "repair": True}
 
 
 def run_repair_counter(
@@ -1668,9 +2062,6 @@ _ROLLBACK_FIELDS_BY_STRATEGY: dict[str, set[str]] = {
         "vi_cwmin", "vi_cwmax", "vi_aifsn",
     },
 }
-_ROLLBACK_FIELDS_BY_STRATEGY["joint"] = (
-    _ROLLBACK_FIELDS_BY_STRATEGY["co_sr"] | _ROLLBACK_FIELDS_BY_STRATEGY["co_edca"]
-)
 
 
 def _rollback_decision_for_failed_candidate(
@@ -1749,6 +2140,36 @@ def _collect_observed_state(
         return apply_profile(observation_state_getter()), None, True
     except Exception as exc:  # noqa: BLE001
         return {}, f"观测状态获取失败: {exc}", False
+
+
+def _qos_acceptance_result(
+    baseline_state: dict,
+    observed_state: dict | None,
+    *,
+    observed_is_real: bool,
+) -> dict:
+    if not observed_is_real or not observed_state:
+        return {
+            "approved": False,
+            "verdict": "inconclusive",
+            "confidence": 0.0,
+            "deltas": {"coverage": 0.0, "score": 0.0},
+            "summary": "QoS 效果验收失败：没有真实下发后的观测状态",
+        }
+    deltas = _evaluate_qos_deltas(baseline_state, observed_state)
+    verdict, confidence = _classify_qos_delta(deltas)
+    score = float(deltas.get("score") or 0.0)
+    approved = verdict == "improved"
+    return {
+        "approved": approved,
+        "verdict": verdict,
+        "confidence": confidence,
+        "deltas": deltas,
+        "summary": (
+            f"QoS 效果验收{'通过' if approved else '未通过'}："
+            f"verdict={verdict}, score={score:.4f}, confidence={confidence:.4f}"
+        ),
+    }
 
 
 def _finish(logger, outcome: str, rounds: int, started_at: float) -> None:
@@ -1867,15 +2288,19 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
                      initial_state: dict | None = None,
                      resume_projection: dict | None = None,
                      evaluation_windows: tuple[float, ...] | None = None,
-                     goal_context: dict | None = None) -> dict:
+                     goal_context: dict | None = None,
+                     agent_driver: Callable | None = None,
+                     on_proposal_precheck: Callable | None = None,
+                     acceptance: str = "validator") -> dict:
     """阶段级快速协商。on_tool：进程内 structured_relay 路径传入工具调用展示回调，
     在 drive_ap 每次 AP 发言后从 trajectory 提取并回调；coordinator 路径
     （run_fast_negotiation）不传，保持 None。"""
-    global _tool_callback, _tool_logger
+    global _tool_callback, _tool_logger, _agent_driver
     if not _relay_lock.acquire(blocking=False):
         raise RuntimeError("当前进程已有协商运行；全局 MCP 会话暂不支持并发 structured_relay")
     _tool_callback = on_tool
     _tool_logger = logger
+    _agent_driver = agent_driver
     memory_sink = None
     if logger is not None:
         def persist_memory(
@@ -1907,10 +2332,13 @@ def structured_relay(max_validation_retries: int = 3, max_turns: int = 30,
             evaluation_windows=evaluation_windows,
             memory_callback=memory_sink,
             goal_context=goal_context,
+            on_proposal_precheck=on_proposal_precheck,
+            acceptance=acceptance,
         )
     finally:
         _tool_callback = None
         _tool_logger = None
+        _agent_driver = None
         _SESSION.memory_callback = None
         _relay_lock.release()
 
@@ -1927,14 +2355,29 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                      resume_projection: dict | None = None,
                      evaluation_windows: tuple[float, ...] | None = None,
                      memory_callback: Callable[[str | None, SessionMemory, str], None] | None = None,
-                     goal_context: dict | None = None) -> dict:
+                     goal_context: dict | None = None,
+                     on_proposal_precheck: Callable | None = None,
+                     acceptance: str = "validator") -> dict:
     global _tool_callback
 
     def emit(phase, who, reply):
         if on_event:
             on_event(phase, who, reply)
 
+    def emit_proposal_precheck(
+        proposer: str, proposal_num: int, strategy: str | None, result: dict
+    ) -> None:
+        if on_proposal_precheck is None:
+            return
+        try:
+            on_proposal_precheck(proposer, proposal_num, strategy, result)
+        except Exception:
+            pass
+
     started_at = time.time()
+    acceptance_mode = str(acceptance or "validator").strip().lower()
+    if acceptance_mode not in {"validator", "qos"}:
+        acceptance_mode = "validator"
     if resume_projection:
         s = _restore_projection(resume_projection)
     else:
@@ -2048,6 +2491,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
         and s.proposal is not None
         and s.proposer is not None
     )
+    last_validation = None
     for retry in range(start_retry, max_validation_retries):
         if use_saved_proposal:
             proposer = s.proposer or "ap1"
@@ -2096,6 +2540,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
             strategy=s.strategy,
             result=proposal_check,
         )
+        emit_proposal_precheck(s.proposer or proposer, s.proposal_num, s.strategy, proposal_check)
         if not proposal_check.get("approved"):
             _save_checkpoint(
                 logger, "broadcast_complete", retry=retry + 1,
@@ -2128,6 +2573,68 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                 emit("vote", voter, rv["reply"])
             if logger is not None:
                 logger.vote(voter, s.proposal_num, rv["vote"], rv["reply"])
+
+            if rv["vote"] == "invalid":
+                invalid_msg = (
+                    f"[投票格式无效] {voter.upper()} 对提案#{s.proposal_num}的回复缺少显式 "
+                    '`{"agreed": ...}` 表态，或包含裸参数/伪工具 JSON；'
+                    "本回复不会被解释为反提案，编排层要求同一 AP 补投票。"
+                )
+                s.record("VALIDATOR", invalid_msg, kind="validator")
+                repaired = run_repair_vote(
+                    voter,
+                    logger=logger,
+                    on_event_start=on_event_start,
+                    on_event_chunk=on_event_chunk,
+                )
+                if not on_event_start and not on_event_chunk:
+                    emit("vote", voter, repaired["reply"])
+                if logger is not None:
+                    logger.vote(
+                        voter, s.proposal_num, repaired["vote"], repaired["reply"]
+                    )
+                rv = repaired
+
+                if rv["vote"] == "invalid":
+                    fallback_reply = _deterministic_vote_fallback(
+                        voter, ValueError("vote reply missing explicit agreed JSON")
+                    )
+                    if fallback_reply is None:
+                        payload = {
+                            "agreed": "abstain",
+                            "reason": (
+                                f"{voter.upper()} 连续输出无效投票格式；"
+                                "为避免协议错位，编排层按弃权处理且不提升任何反提案。"
+                            ),
+                            "fallback": "invalid_vote_abstain",
+                        }
+                        fallback_reply = (
+                            "投票格式持续无效，按弃权处理。\n"
+                            "```json\n"
+                            f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
+                            "```"
+                        )
+                    fallback_vote = read_vote(fallback_reply)
+                    s.record(
+                        "VALIDATOR",
+                        (
+                            f"[投票格式兜底] {voter.upper()} 的修复投票仍无效；"
+                            "使用确定性兜底票，不解析原回复中的任何反提案。"
+                        ),
+                        kind="validator",
+                    )
+                    s.record(voter.upper(), fallback_reply, kind="vote")
+                    if not on_event_start and not on_event_chunk:
+                        emit("vote", voter, fallback_reply)
+                    if logger is not None:
+                        logger.vote(voter, s.proposal_num, fallback_vote, fallback_reply)
+                    rv = {
+                        "voter": voter,
+                        "reply": fallback_reply,
+                        "vote": fallback_vote,
+                        "counter_proposal": None,
+                        "fallback": True,
+                    }
 
             if rv["vote"] in ("agree", "abstain"):
                 agree.add(voter)
@@ -2166,6 +2673,50 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                         session_id = logger.session_id if logger is not None else ""
                         push_results = _push_decision(
                             decision, strategy or "", executor_endpoints, session_id, logger)
+                        if acceptance_mode == "qos" and not push_results:
+                            val = {
+                                **precheck,
+                                "approved": False,
+                                "global_errors": [
+                                    "QoS 效果验收要求先下发决策，但当前未配置 executor /apply 端点"
+                                ],
+                                "summary": (
+                                    f"验证失败（策略={strategy}）：QoS 效果验收要求先下发决策，"
+                                    "请使用 --ap-config config/ap_endpoints.json 或 --ap-endpoints"
+                                ),
+                            }
+                            if logger is not None:
+                                logger.validation_result(val)
+                            _finish(logger, "qos_not_applied", s.proposal_num, started_at)
+                            s.decision = decision
+                            return {"outcome": "qos_not_applied", "decision": decision,
+                                    "strategy": strategy, "validation": val,
+                                    "push_results": push_results,
+                                    "observed_is_real": False,
+                                    "transcript_turns": len(s.transcript)}
+                        if (
+                            acceptance_mode == "qos"
+                            and push_results
+                            and not all(item.get("ok") for item in push_results.values())
+                        ):
+                            val = {
+                                **precheck,
+                                "approved": False,
+                                "global_errors": ["QoS 效果验收要求所有 executor 下发成功"],
+                                "summary": (
+                                    f"验证失败（策略={strategy}）：executor 下发未全部成功，"
+                                    "无法进行 QoS 效果验收"
+                                ),
+                            }
+                            if logger is not None:
+                                logger.validation_result(val)
+                            _finish(logger, "qos_apply_failed", s.proposal_num, started_at)
+                            s.decision = decision
+                            return {"outcome": "qos_apply_failed", "decision": decision,
+                                    "strategy": strategy, "validation": val,
+                                    "push_results": push_results,
+                                    "observed_is_real": False,
+                                    "transcript_turns": len(s.transcript)}
                         require_observation = bool(push_results) and all(
                             item.get("ok") for item in push_results.values()
                         )
@@ -2191,6 +2742,19 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                             val["approved"] = False
                             val["global_errors"].insert(0, obs_error)
                             val["summary"] = f"验证失败（策略={strategy}）：{obs_error}"
+                        if val["approved"] and acceptance_mode == "qos":
+                            qos = _qos_acceptance_result(
+                                s.ap_state,
+                                observed,
+                                observed_is_real=obs_real,
+                            )
+                            val["qos_acceptance"] = qos
+                            if not qos["approved"]:
+                                val["approved"] = False
+                                val["global_errors"].insert(0, qos["summary"])
+                                val["summary"] = (
+                                    f"验证失败（策略={strategy}）：{qos['summary']}"
+                                )
                         if require_observation and not val["approved"]:
                             rollback_result = _rollback_failed_candidate(
                                 s.ap_state,
@@ -2237,17 +2801,17 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                                 "observed_is_real": False,
                                 "transcript_turns": len(s.transcript)}
                     # 验收未过：写入对话记录，外层从 ap1 重提案
+                    last_validation = val
                     errs = "；".join((val or {}).get("global_errors") or []) if val else "无法解析决策"
                     s.record("VALIDATOR", f"[验证未通过] {(val or {}).get('summary','')}\n具体问题：{errs}", kind="validator")
                     _save_checkpoint(
                         logger, "broadcast_complete", retry=retry + 1,
                     )
                     break
-            else:  # reject
+            elif rv["vote"] == "reject":
                 counter = rv["counter_proposal"]
                 if counter is None:
                     # 修复轮：反对者未给出可解析反提案，再驱动一次让其补纯 JSON
-                    repair_inst = repair_counter_instruction()
                     rep = run_repair_counter(
                         voter,
                         logger=logger,
@@ -2281,6 +2845,9 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                         strategy=s.strategy,
                         result=proposal_check,
                     )
+                    emit_proposal_precheck(
+                        voter, promoted["proposal_num"], s.strategy, proposal_check
+                    )
                     if not proposal_check.get("approved"):
                         _save_checkpoint(
                             logger, "broadcast_complete", retry=retry + 1,
@@ -2292,6 +2859,12 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                         agree=agree, vote_cursor=vote_cursor,
                     )
                 # 修复后仍解析失败则跳过本轮，继续轮转
+            else:
+                _save_checkpoint(
+                    logger, "vote_progress", retry=retry,
+                    agree=agree, vote_cursor=vote_cursor,
+                )
+                continue
         else:
             _finish(logger, "max_turns_exceeded", s.proposal_num, started_at)
             return {"outcome": "max_turns_exceeded", "decision": None,
@@ -2301,6 +2874,6 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
 
     _finish(logger, "max_retries_exceeded", s.proposal_num, started_at)
     return {"outcome": "max_retries_exceeded", "decision": None,
-            "strategy": s.strategy, "validation": None, "push_results": {},
+            "strategy": s.strategy, "validation": last_validation, "push_results": {},
             "observed_is_real": False,
             "transcript_turns": len(s.transcript)}

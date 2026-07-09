@@ -13,7 +13,7 @@ OpenClaw 是 AP agent 的托管与工具运行时；默认阶段编排入口是�
 - `setup.sh`：创建隔离 profile `multiap`、四个 agent、模型 provider 和 MCP 注册。
 - `serve.sh`：管理常驻 state server、gateway、Dashboard 和学术曲线窗。
 
-模型默认使用 PPIO `qwen80binstruct`；未配置 PPIO key 时回退本地 Ollama `qwen3:14b`。配置位于 `~/.openclaw-multiap/`，不影响默认 profile。
+模型默认使用 PPIO API（`qwen80binstruct` alias，当前指向 PPIO 可用的后继模型）；未配置 PPIO key 时 setup 直接失败，不再回退本地 Ollama。只有显式 `MULTIAP_MODEL_REF=ollama/...` 并在运行时加 `--allow-ollama` / `MULTIAP_ALLOW_OLLAMA=1`，才允许使用本地 Ollama。配置位于 `~/.openclaw-multiap/`，不影响默认 profile。
 
 ## 一次性配置
 
@@ -28,7 +28,7 @@ MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh
 ```bash
 bash openclaw/serve.sh start
 bash openclaw/serve.sh status
-.venv/bin/python run_openclaw.py --mode ns3 --scene joint
+.venv/bin/python run_openclaw.py --mode ns3 --scene sr
 ```
 
 `run_openclaw.py` 强制复用常驻服务：state server 必须在线；默认路径要求 gateway 在线；未传 `--no-dashboard` 时 Dashboard 也必须在线。plot 是可选服务，缺失只提示、不阻塞。

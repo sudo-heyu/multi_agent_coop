@@ -44,6 +44,27 @@ class TestMcpEdcaInput(unittest.TestCase):
         self.assertTrue(all(result[ap]["valid"] for ap in ("ap1", "ap2", "ap3")))
         self.assertEqual(result["ap1"]["VI_CWmin"], 7)
 
+    def test_edca_tool_reports_self_harm_guard(self):
+        state = {
+            "ap1": {"cwmin": 15, "cwmax": 1023, "aifsn": 3,
+                    "traffic_priority": "low", "sta_feedback_summary": {"status": "satisfied"}},
+            "ap2": {"cwmin": 15, "cwmax": 1023, "aifsn": 3,
+                    "traffic_priority": "high", "sta_feedback_summary": {"status": "satisfied"}},
+            "ap3": {"cwmin": 15, "cwmax": 1023, "aifsn": 3,
+                    "traffic_priority": "medium", "sta_feedback_summary": {"status": "satisfied"}},
+        }
+        proposal = {
+            "AP1": {"CWmin": 15, "CWmax": 63, "AIFSN": 6},
+            "AP2": {"CWmin": 3, "CWmax": 15, "AIFSN": 2},
+            "AP3": {"CWmin": 7, "CWmax": 31, "AIFSN": 3},
+        }
+        with patch.object(multiap_mcp, "get_all_states", return_value=state):
+            result = multiap_mcp.validate_edca_proposal(proposal)
+
+        self.assertFalse(result["all_ok"], result)
+        self.assertFalse(result["safety_validation"]["approved"], result)
+        self.assertIn("自伤", ";".join(result["ap1"]["errors"]))
+
     def test_empty_edca_call_requires_explicit_argument(self):
         result = multiap_mcp.validate_edca_proposal()
 

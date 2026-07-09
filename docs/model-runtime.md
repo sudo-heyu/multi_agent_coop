@@ -1,8 +1,9 @@
 # 模型运行时与早期 Ollama 实测记录
 
 > **现行架构说明**：项目由 OpenClaw 托管 AP agent，模型不再由本项目直连
-> Ollama，而是经 OpenClaw 的 provider 机制调用（默认 PPIO `qwen80binstruct`，无 PPIO key
-> 时回退本地 ollama `qwen3:14b`）。本文保留为**早期直连 Ollama 运行时的实测记录**，其中的
+> Ollama，而是经 OpenClaw 的 provider 机制调用；默认必须使用 PPIO API
+> `qwen80binstruct`（当前 alias 指向 PPIO 可用的后继模型），无 PPIO key 时 setup 失败，
+> 不再自动回退本地 Ollama。本文保留为**早期直连 Ollama 运行时的实测记录**，其中的
 > `/api/chat`、`think`、模型选型与耗时数据仍可作为本地模型行为的参考。
 
 以下内容均为历史实测，不代表当前默认 provider 配置。历史测试中的本地模型通过 Ollama 运行：

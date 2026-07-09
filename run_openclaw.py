@@ -2,10 +2,10 @@
 OpenClaw AP agent + 确定性阶段编排入口。
 
 用法：
-  python run_openclaw.py --mode ns3 --scene joint   # ns-3 仿真（需 ns3_bridge 在跑）
+  python run_openclaw.py --mode ns3 --scene sr      # ns-3 仿真（需 ns3_bridge 在跑）
   python run_openclaw.py --mode real --ap-endpoints ap1=...
 
-前置：openclaw 已装、ollama 运行、已执行过 `bash openclaw/setup.sh`。
+前置：openclaw 已装、PPIO_API_KEY 已配置、已执行过 `bash openclaw/setup.sh`。
 mock 已从运行时移除，仅保留为测试夹具（tests/mock_scenes.py、tests/mock_feeder.py）。
 """
 import argparse
@@ -32,6 +32,7 @@ from src.console_style import (
     status_ok, status_fail, dim, tool_prefix, tool_name,
 )
 from openclaw.mcp.tool_console import _format_tool_console
+from openclaw.mcp import tool_policy
 import orchestration as orch
 
 
@@ -81,6 +82,23 @@ def _print_tool(name, args, result, dur_ms):
     with _STREAM_PRINT_LOCK:
         prefix = "" if _STREAM_AT_LINE_START else "\n"
         _stream_write(prefix + line + "\n")
+
+
+def _print_proposal_precheck(proposer, proposal_num, strategy, result):
+    if result.get("approved"):
+        return
+    summary = strip_md(str(result.get("summary") or "提案预检未通过")).strip()
+    errors = result.get("global_errors") or []
+    with _STREAM_PRINT_LOCK:
+        prefix = "" if _STREAM_AT_LINE_START else "\n"
+        _stream_write(
+            prefix
+            + f"{status_label('Validator')} {status_fail('提案预检未通过')} "
+            + f"proposal#{proposal_num} {str(proposer).upper()} {strategy or 'unknown'}"
+            + f" — {summary}\n"
+        )
+        for error in errors[:3]:
+            _stream_write(f"  {status_fail('[FAIL]')} {strip_md(str(error)).strip()}\n")
 
 
 # ── coordinator 路径的实时对话流式输出（tail 会话 JSONL）──────────────────────
@@ -305,7 +323,7 @@ def main():
     ap.add_argument("--mode", choices=["real", "ns3"], required=True,
                     help="real 等待香蕉派 reporter（source=ap）；ns3 等待 ns3_bridge（source=ns3）。"
                          "两种模式都只消费外部持续上报，不生成数据")
-    ap.add_argument("--scene", choices=sorted(SCENE_NAMES), default="joint",
+    ap.add_argument("--scene", choices=sorted(SCENE_NAMES), default="sr",
                     help="场景标签（仅用于日志/记忆归组，不影响数据来源）")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
@@ -314,8 +332,8 @@ def main():
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
-    ap.add_argument("--observation-wait", type=float, default=0.0,
-                    help="最终 Validator 读取观测状态前等待秒数")
+    ap.add_argument("--observation-wait", type=float, default=None,
+                    help="最终 Validator/QoS 验收读取观测状态前等待秒数")
     ap.add_argument("--ap-endpoints", default="",
                     help="协商成功后推送决策的执行服务地址，格式 ap1=host:port,ap2=...")
     ap.add_argument("--ap-config", default="",
@@ -329,6 +347,8 @@ def main():
     ap.add_argument("--plot-interval", type=float, default=1.0)
     ap.add_argument("--require-qwen80b", action="store_true",
                     help="强制要求 multiap profile 默认模型为 qwen80binstruct")
+    ap.add_argument("--allow-ollama", action="store_true",
+                    help="显式允许 multiap profile 使用本地 Ollama 模型；默认拒绝 ollama/... primary")
     ap.add_argument("--exit-after-run", action="store_true",
                     help="兼容选项：real/ns3 模式协商结束后本就直接退出，评估窗口由常驻 harvester 结算")
     ap.add_argument("--resume-run", default="",
@@ -343,6 +363,20 @@ def main():
     ap.add_argument("--goal", default="",
                     help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
                          "（目标经 memory_admin.py goal create 创建）")
+    ap.add_argument("--acceptance", choices=["validator", "qos"],
+                    default=os.environ.get("MULTIAP_ACCEPTANCE", "validator"),
+                    help="验收模式：validator=参数合法即成功；qos=下发后观测 QoS 必须 improved")
+    ap.add_argument(
+        "--tool-profile",
+        choices=list(tool_policy.PROFILES),
+        default=os.environ.get("MULTIAP_TOOL_PROFILE", "full"),
+        help=(
+            "AP 可见工具能力档位：none/no_tools=完全无工具；basic=基础状态/反馈/验算；"
+            "rich/full=完整工具；diagnostic=隐藏答案型 SR 工具；"
+            "validator_only=只保留状态/反馈/候选验算；state_only=只保留状态和 STA 反馈；"
+            "memory_challenge=粗粒度状态+弱验算，突出记忆作用"
+        ),
+    )
     args = ap.parse_args()
     if args.context_budget_chars < 2000:
         ap.error("--context-budget-chars 不能小于 2000")
@@ -350,6 +384,7 @@ def main():
         ap.error("--context-recent-turns 不能小于 2")
     os.environ["MULTIAP_CONTEXT_BUDGET_CHARS"] = str(args.context_budget_chars)
     os.environ["MULTIAP_CONTEXT_RECENT_TURNS"] = str(args.context_recent_turns)
+    os.environ["MULTIAP_TOOL_PROFILE"] = args.tool_profile
 
     goal = None
     if args.goal:
@@ -389,6 +424,13 @@ def main():
 
     os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
+    allow_ollama = _ollama_allowed_from_env() or args.allow_ollama
+    if args.allow_ollama:
+        os.environ["MULTIAP_ALLOW_OLLAMA"] = "1"
+    _require_openclaw_config(
+        require_qwen80b=args.require_qwen80b,
+        allow_ollama=allow_ollama,
+    )
 
     try:
         eval_windows = _resolve_eval_windows(args.eval_windows, args.mode)
@@ -396,7 +438,18 @@ def main():
         ap.error(f"--eval-windows 非法: {exc}")
 
     os.environ["MULTIAP_SCENE"] = args.scene
-    print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
+    observation_wait = (
+        args.observation_wait
+        if args.observation_wait is not None
+        else (_default_qos_acceptance_wait(args.mode) if args.acceptance == "qos" else 0.0)
+    )
+
+    print(
+        f"[run_openclaw] scene={args.scene} server={args.server} "
+        f"max_steps={args.max_steps} tool_profile={args.tool_profile} "
+        f"acceptance={args.acceptance}",
+        flush=True,
+    )
 
     executor_endpoints = _load_executor_endpoints(args.ap_config, args.ap_endpoints)
     if args.mode == "real":
@@ -527,13 +580,15 @@ def main():
                 on_event_chunk=_print_event_stream_chunk,
                 on_tool=_print_tool,
                 logger=logger,
-                observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
-                observation_wait_seconds=args.observation_wait,
+                observation_state_getter=lambda: orch.get_all_states(args.server),
+                observation_wait_seconds=observation_wait,
                 executor_endpoints=executor_endpoints,
                 resume_projection=resume_projection,
                 evaluation_windows=eval_windows,
                 initial_state=initial_ap_state,
                 goal_context=goal_context,
+                on_proposal_precheck=_print_proposal_precheck,
+                acceptance=args.acceptance,
             )
         except BaseException as exc:
             # 失败原因落盘（此前只在终端滚屏里）；run 保持 incomplete 可恢复。
@@ -548,13 +603,12 @@ def main():
                 pass
             raise
     else:
-        _require_openclaw_config(require_qwen80b=args.require_qwen80b)
         result = _run_via_coordinator(
             args.max_steps,
             mode=args.mode,
             scene=args.scene,
             server=args.server,
-            observation_wait=args.observation_wait,
+            observation_wait=observation_wait,
             executor_endpoints=executor_endpoints,
             eval_windows=eval_windows,
         )
@@ -574,6 +628,14 @@ def main():
     if v:
         flag = status_ok("通过") if v["approved"] else status_fail("未通过")
         print(f"{status_label('Validator')} {flag} — {v['summary']}")
+        qos = v.get("qos_acceptance") if isinstance(v, dict) else None
+        if isinstance(qos, dict):
+            qflag = status_ok("通过") if qos.get("approved") else status_fail("未通过")
+            score = (qos.get("deltas") or {}).get("score")
+            print(
+                f"{status_label('QoS')} {qflag} — verdict={qos.get('verdict')} "
+                f"score={score} confidence={qos.get('confidence')}"
+            )
     else:
         print(f"{status_label('Validator')} {dim('无可验收决策（协商未收敛或未解析出决策 JSON）')}")
 
@@ -607,6 +669,16 @@ def _resolve_eval_windows(spec: str, mode: str) -> tuple[float, ...] | None:
     if spec:
         return parse_windows(spec)
     return DEFAULT_WINDOWS[mode]
+
+
+def _default_qos_acceptance_wait(mode: str) -> float:
+    raw = os.environ.get("MULTIAP_QOS_ACCEPTANCE_WAIT", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return 10.0 if mode == "ns3" else 60.0
 
 
 def _event_store_enabled() -> bool:
@@ -712,7 +784,8 @@ def _run_via_coordinator(
     eval_windows: tuple[float, ...] | None = None,
 ) -> dict:
     env = dict(os.environ)
-    env.setdefault("OLLAMA_API_KEY", "ollama-local")
+    if _ollama_allowed_from_env(env):
+        env.setdefault("OLLAMA_API_KEY", "ollama-local")
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
     env["no_proxy"] = env["NO_PROXY"]
     env["MULTIAP_STATE_SERVER"] = server
@@ -793,7 +866,39 @@ def _merge_no_proxy(current: str | None) -> str:
     return ",".join(values)
 
 
-def _require_openclaw_config(require_qwen80b: bool = False) -> None:
+def _truthy_env(value: str | None) -> bool:
+    return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _model_ref_uses_ollama(model_ref: str | None) -> bool:
+    return str(model_ref or "").strip().lower().startswith("ollama/")
+
+
+def _ollama_allowed_from_env(env: dict[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    return (
+        _truthy_env(source.get("MULTIAP_ALLOW_OLLAMA"))
+        or _model_ref_uses_ollama(source.get("MULTIAP_MODEL_REF"))
+    )
+
+
+def _resolve_config_model_ref(primary: str | None, models: dict) -> str:
+    primary = str(primary or "").strip()
+    if not primary:
+        return ""
+    if "/" in primary:
+        return primary
+    for ref, spec in (models or {}).items():
+        if isinstance(spec, dict) and spec.get("alias") == primary:
+            return str(ref)
+    return primary
+
+
+def _require_openclaw_config(
+    require_qwen80b: bool = False,
+    *,
+    allow_ollama: bool = False,
+) -> None:
     if not Path(OPENCLAW_BIN).exists():
         print(f"[错误] 未找到 OpenClaw 可执行文件：{OPENCLAW_BIN}")
         print("请先安装 OpenClaw，或通过 OPENCLAW_BIN 指定路径。")
@@ -806,23 +911,53 @@ def _require_openclaw_config(require_qwen80b: bool = False) -> None:
         print("请先运行：bash openclaw/setup.sh")
         sys.exit(1)
 
-    if not require_qwen80b:
-        return
-
     defaults = data.get("agents", {}).get("defaults", {})
     primary = (defaults.get("model") or {}).get("primary")
     models = defaults.get("models") or {}
+    resolved_primary = _resolve_config_model_ref(primary, models)
+    providers = data.get("models", {}).get("providers", {})
+    ppio_provider = providers.get("ppio") if isinstance(providers, dict) else None
+    ppio_key = ""
+    if isinstance(ppio_provider, dict):
+        ppio_key = str(ppio_provider.get("apiKey") or "").strip()
+
+    primary_is_ollama = _model_ref_uses_ollama(resolved_primary)
+    if primary_is_ollama and not allow_ollama:
+        print("[错误] 当前 multiap profile 默认模型是本地 Ollama，但运行入口默认禁止使用 Ollama。")
+        print(f"当前 primary={primary!r}（解析为 {resolved_primary!r}）。")
+        print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
+        print("如确实要使用本地 Ollama，请显式加 --allow-ollama，或设置 MULTIAP_ALLOW_OLLAMA=1。")
+        sys.exit(1)
+
+    if not primary_is_ollama:
+        if not resolved_primary:
+            print("[错误] 当前 multiap profile 未配置默认回复模型。")
+            print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
+            sys.exit(1)
+        if not resolved_primary.startswith("ppio/"):
+            print("[错误] 当前 multiap profile 默认回复模型不是 PPIO API。")
+            print(f"当前 primary={primary!r}（解析为 {resolved_primary!r}）。")
+            print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
+            sys.exit(1)
+        if not ppio_key:
+            print("[错误] 当前 multiap profile 缺少 PPIO provider/apiKey。")
+            print("请在环境变量或 .env 中配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
+            sys.exit(1)
+
+    if not require_qwen80b:
+        return
+
     alias_refs = {
         ref for ref, spec in models.items()
         if isinstance(spec, dict) and spec.get("alias") == "qwen80binstruct"
     }
-    ppio_models = data.get("models", {}).get("providers", {}).get("ppio", {}).get("models", [])
+    ppio_models = (ppio_provider or {}).get("models", []) if isinstance(ppio_provider, dict) else []
     has_ppio_80b = any(
         isinstance(m, dict)
         and (m.get("name") == "qwen80binstruct" or "80b" in str(m.get("id", "")).lower())
         for m in ppio_models
     )
-    primary_ok = primary == "qwen80binstruct" or primary in alias_refs
+    primary_ok = primary == "qwen80binstruct" or resolved_primary in alias_refs
     if not primary_ok or not has_ppio_80b:
         print("[错误] 当前 multiap profile 未配置为 qwen80binstruct 默认模型。")
         print(f"当前 primary={primary!r}，qwen80binstruct refs={sorted(alias_refs)!r}")

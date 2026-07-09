@@ -206,8 +206,13 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
     # ── evaluate_sr_candidate / validate_sr_proposal ──────────────────
     if tname in ("validate_sr_proposal", "evaluate_sr_candidate"):
-        all_ok = result.get("valid", False)
-        flag   = status_ok("全部OK") if all_ok else status_fail("FAIL")
+        verdict = result.get("valid", False)
+        if verdict is True:
+            flag = status_ok("全部OK")
+        elif verdict == "unknown":
+            flag = status_warn("未给通过结论")
+        else:
+            flag = status_fail("FAIL")
         lines  = [f"{hdr}  {flag}"]
         group = result.get("concurrent_group")
         non_concurrent = result.get("non_concurrent_aps")
@@ -216,13 +221,13 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
             non_text = ",".join(non_concurrent or []) or "—"
             lines.append(f"{dim('并发组:')} {group_text}  {dim('非并发:')} {non_text}")
 
-        if not all_ok:
+        if verdict is not True:
             per_ap = result.get("per_ap", {})
             for ap_id in AP_IDS:
                 if not isinstance(per_ap, dict) or ap_id not in per_ap:
                     continue
                 item = per_ap.get(ap_id, {})
-                if not item.get("valid"):
+                if item.get("valid") is False:
                     errors   = item.get("errors") or []
                     err_text = "; ".join(e[:60] for e in errors[:2]) if errors else "未知"
                     lines.append(f"{status_fail(ap_id + ' FAIL:')} {err_text}")
@@ -263,14 +268,24 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
         ap_entries = [ap_id for ap_id in AP_IDS if isinstance(result.get(ap_id), dict)]
         per_ap_ok = all(
-            result.get(ap_id, {}).get("valid", True)
+            result.get(ap_id, {}).get("valid") is True
             for ap_id in ap_entries
         )
+        per_ap_unknown = bool(ap_entries) and all(
+            result.get(ap_id, {}).get("valid") in {True, "unknown"}
+            for ap_id in ap_entries
+        ) and any(result.get(ap_id, {}).get("valid") == "unknown" for ap_id in ap_entries)
         effectiveness = result.get("effectiveness") or {}
+        safety = result.get("safety_validation") or {}
         has_warn = not effectiveness.get("all_ok", True)
+        safety_ok = safety.get("approved", True)
 
         if not ap_entries:
             flag = status_fail("参数缺失（工具调用格式有误，缺少 proposed_edca 字段）")
+        elif result.get("policy_redactions") and per_ap_unknown:
+            flag = status_warn("弱化结果：仅范围/格式检查")
+        elif not safety_ok:
+            flag = status_fail("安全预检失败")
         elif not per_ap_ok:
             flag = status_fail("参数违规")
         elif has_warn:
@@ -288,10 +303,18 @@ def _format_tool_console(tname: str, raw_args: dict, result: dict, dur_ms: float
 
         for ap_id in ap_entries:
             item = result.get(ap_id, {})
-            if not item.get("valid"):
+            if item.get("valid") is False:
                 lines.append(
                     f"{status_fail('[FAIL]')} {ap_id}: {'; '.join(item.get('errors') or [])}"
                 )
+        if result.get("policy_note"):
+            lines.append(f"  {dim(result['policy_note'])}")
+        if safety and not safety_ok:
+            summary = safety.get("summary")
+            if summary:
+                lines.append(f"{status_fail('[VALIDATOR]')} {summary}")
+            for error in (safety.get("global_errors") or [])[:3]:
+                lines.append(f"{status_fail('[FAIL]')} {error}")
 
         for ap_id, eff in (effectiveness.get("per_ap") or {}).items():
             for w in eff.get("warnings") or []:

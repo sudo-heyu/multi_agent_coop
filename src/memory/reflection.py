@@ -259,7 +259,7 @@ def predict_decision_verdicts(
     from ..tools import edca as _edca
 
     predictions: dict[str, str] = {}
-    if strategy in ("co_edca", "joint"):
+    if strategy == "co_edca":
         for ac in ("BE", "VI"):
             shares = _edca.predict_access_share(ap_state, decision, ac=ac)
             for ap_id, item in shares.items():
@@ -278,7 +278,7 @@ def predict_decision_verdicts(
                 else:
                     verdict = "neutral"
                 predictions[f"{ap_id}:{ac}"] = verdict
-    if strategy in ("co_sr", "joint"):
+    if strategy == "co_sr":
         for ap_id, state in ap_state.items():
             if not isinstance(state, dict):
                 continue

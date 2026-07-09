@@ -67,7 +67,6 @@ DGX 协商完成后主动调用，香蕉派收到后立即执行参数变更。
 |---|---|
 | `co_sr` | `tx_power_dbm` |
 | `co_edca` | `CWmin`、`CWmax`、`AIFSN` |
-| `joint` | `tx_power_dbm`、`CWmin`、`CWmax`、`AIFSN` |
 
 **响应**：
 
@@ -166,7 +165,7 @@ hostapd_cli -i wlan0 set_edca_params 0 3 15 63 0
 hostapd_cli -i wlan0 get_edca_params 0
 ```
 
-**joint** — 两条命令都执行，顺序为先功率后 EDCA。
+当前不支持 `joint`。需要同时处理干扰与 EDCA 竞争时，应拆成两轮协商，先处理主导问题。
 
 ### 3.4 权限与常见错误
 
@@ -195,7 +194,7 @@ bash openclaw/serve.sh status
 
 .venv/bin/python run_openclaw.py \
   --mode real \
-  --scene joint \
+  --scene sr \
   --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002
 ```
@@ -217,7 +216,7 @@ python state_server/executor.py --ap-id ap2 --mock --port 5003 &
 python state_server/executor.py --ap-id ap3 --mock --port 5004 &
 
 # 终端 4
-.venv/bin/python run_openclaw.py --mode real --scene joint \
+.venv/bin/python run_openclaw.py --mode real --scene sr \
   --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
 ```
 

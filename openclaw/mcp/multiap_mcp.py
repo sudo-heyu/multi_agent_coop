@@ -41,7 +41,9 @@ from src.tools import edca as _edca
 from src.profile import apply_profile, agent_view
 from src.state_client import get_all_states, StateStaleError
 from src.sta_feedback import summarize_sta_feedback
+from src.validator import validate_decision as _validate_decision
 import orchestration as _orch
+import tool_policy
 
 STATE_SERVER = os.environ.get("MULTIAP_STATE_SERVER", "http://localhost:5001")
 PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
@@ -212,7 +214,12 @@ def _guard(fn, *, tool_name: str | None = None, args: dict | None = None):
     """工具异常时返回结构化错误，避免中断 agent 回合。"""
     started = time.perf_counter()
     try:
-        result = fn()
+        if tool_name is not None and not tool_policy.is_tool_allowed(tool_name):
+            result = tool_policy.blocked_result(tool_name)
+        else:
+            result = fn()
+            if tool_name is not None:
+                result = tool_policy.transform_result(tool_name, result)
     except StateStaleError as exc:
         result = {"error": f"状态服务器数据缺失或过期: {exc}"}
     except Exception as exc:  # noqa: BLE001
@@ -340,7 +347,8 @@ def rank_sr_candidates(candidates: dict, objective: str = "balanced") -> dict:
 def validate_edca_proposal(proposed_edca: dict | str | None = None) -> dict:
     """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin）
     + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
-    并评估拥塞匹配度。traffic_priority 不是 AP 固定身份；同优先级时不要强行制造梯度。
+    并执行与编排层一致的 Validator 安全预检（含 Co-EDCA 自伤门）。traffic_priority
+    不是 AP 固定身份；同优先级时不要强行制造梯度。
     proposed_edca 可传对象或该对象的 JSON 字符串，形如
     {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}。
     Per-AC EDCA 也支持 BE_CWmin/BE_CWmax/BE_AIFSN 与
@@ -356,6 +364,32 @@ def validate_edca_proposal(proposed_edca: dict | str | None = None) -> dict:
             valid, errors = _edca.validate(params)
             result[str(ap_id).lower()] = {"valid": valid, "errors": errors, **params}
         result["effectiveness"] = _edca.evaluate_edca_effectiveness(state, proposed)
+        safety = _validate_decision(
+            state,
+            proposed,
+            "co_edca",
+            observed_state=state,
+            observed_is_real=False,
+        )
+        result["safety_validation"] = safety
+        result["all_ok"] = (
+            bool(result["effectiveness"].get("all_ok", True))
+            and bool(safety.get("approved"))
+            and all(
+                item.get("valid", False)
+                for key, item in result.items()
+                if key.startswith("ap") and isinstance(item, dict)
+            )
+        )
+        if not safety.get("approved"):
+            for ap_id, item in (safety.get("per_ap") or {}).items():
+                errors = item.get("errors") or []
+                if not errors:
+                    continue
+                target = result.setdefault(str(ap_id).lower(), {"valid": True, "errors": []})
+                target["valid"] = False
+                target.setdefault("errors", []).extend(errors)
+                target.setdefault("safety_errors", []).extend(errors)
         return result
     return _guard(
         _run,

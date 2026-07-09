@@ -23,7 +23,7 @@ DEFAULT_AP_CONFIG = REPO_ROOT / "config" / "ap_endpoints.json"
 
 # 场景标签（--scene）：仅用于日志与记忆归组；mock 场景数据本体已降级为
 # 测试夹具（tests/mock_scenes.py），运行时状态一律来自 real/ns3 上报。
-SCENE_NAMES = ("sr", "edca", "joint", "contention", "hidden_sla")
+SCENE_NAMES = ("sr", "edca")
 
 
 # ------------------------------------------------------------------

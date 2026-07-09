@@ -48,7 +48,7 @@
 | `latency_ms` | >= 200 ms | 延迟超出可接受范围 |
 | `packet_loss_pct` | >= 1.0 % | 丢包率异常 |
 
-这些是参考阈值。现行触发逻辑由 `openclaw/mcp/proposal_utils.py` 的 `determine_strategy` 实现，并结合邻居 RSSI、业务优先级和 EDCA 状态选择 `co_sr`、`co_edca`、`joint` 或 `noop`。
+这些是参考阈值。现行触发逻辑由 `openclaw/mcp/orchestration.py` 的 `determine_strategy` 实现，并结合邻居 RSSI、业务优先级和 EDCA 状态选择 `co_sr`、`co_edca` 或 `noop`。
 
 ## 字段采集命令参考（香蕉派）
 

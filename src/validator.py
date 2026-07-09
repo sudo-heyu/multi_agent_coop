@@ -64,7 +64,7 @@ def validate_decision(
     Args:
         ap_state:        各 AP 协商前实测状态
         decision:        LLM 输出的决策字典；None 表示解析失败
-        strategy:        "co_sr" | "co_edca" | "joint"
+        strategy:        "co_sr" | "co_edca"
         observed_state:  观测周期结束后重新采集的 AP 状态；None 时回退为 ap_state
         observed_is_real: True 表示 observed_state 来自真实二次采集，
                           才执行参数生效检查；
@@ -75,6 +75,8 @@ def validate_decision(
     """
     if decision is None:
         return _fail_report(strategy, "LLM 未输出合法 JSON，无法执行验证")
+    if strategy not in {"co_sr", "co_edca"}:
+        return _fail_report(strategy, f"不支持的策略: {strategy}")
 
     ap_ids = list(ap_state.keys())
     obs = observed_state if observed_state is not None else ap_state
@@ -89,7 +91,7 @@ def validate_decision(
         return _build_report(strategy, True, per_ap, global_errors)
 
     # ── 层 1 + 2：Co-SR 参数范围 & 生效检查 ──────────────────────────────────
-    if strategy in ("co_sr", "joint"):
+    if strategy == "co_sr":
         for ap_id in ap_ids:
             report = per_ap.setdefault(ap_id, _empty_ap_entry())
             entry = normalized[ap_id]
@@ -182,7 +184,7 @@ def validate_decision(
             })
 
     # ── 层 1 + 2：Co-EDCA 参数范围 & 生效检查 ────────────────────────────────
-    if strategy in ("co_edca", "joint"):
+    if strategy == "co_edca":
         for ap_id in ap_ids:
             report = per_ap.setdefault(ap_id, _empty_ap_entry())
             params_raw = normalized[ap_id]

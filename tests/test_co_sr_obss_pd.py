@@ -128,12 +128,12 @@ class BridgeApplyTableTests(unittest.TestCase):
                                    {"tx_power_dbm": 6, "obss_pd_dbm": -66})["command"]
         self.assertEqual(cmd, "APPLY ap1 tx=6.0 obss_pd=-66.0")
 
-    def test_joint_maps_both_families(self):
-        cmd = self._bridge().apply("ap3", "joint",
-                                   {"tx_power_dbm": 8, "obss_pd_dbm": -70,
-                                    "cwmin": 4, "cwmax": 10, "aifsn": 2})["command"]
-        # 指数 n=4 → 实际 CW 15；n=10 → 1023
-        self.assertEqual(cmd, "APPLY ap3 tx=8.0 obss_pd=-70.0 cwmin=15 cwmax=1023 aifsn=2")
+    def test_joint_strategy_is_rejected(self):
+        result = self._bridge().apply("ap3", "joint",
+                                      {"tx_power_dbm": 8, "obss_pd_dbm": -70,
+                                       "cwmin": 4, "cwmax": 10, "aifsn": 2})
+        self.assertFalse(result["ok"])
+        self.assertIn("unsupported strategy", result["error"])
 
     def test_per_ac_edca_maps_vi_fields(self):
         cmd = self._bridge().apply("ap1", "co_edca",
