@@ -261,3 +261,91 @@ def evaluate_edca_effectiveness(ap_states: dict, proposed_edca: dict) -> dict:
 
 def _rank_name(rank: int) -> str:
     return {0: "高", 1: "中", 2: "低"}.get(rank, "中")
+
+
+# ── 自伤幅度预警（一阶启发式，非精确碰撞模型）──────────────────────────────
+# 优先级单调性检查（evaluate_edca_effectiveness）只看排序，看不出幅度：
+# 某 AP 即便排序合规，也可能被参数拉到几乎抢不到信道。这里用一个便宜的闭式
+# 权重近似"相对抢占能力"：AIFS 时隙数 + 平均退避时隙数的倒数。不是 Bianchi
+# 碰撞概率模型的替代品，只用于方向性预警（幅度门槛），不用于绝对吞吐预测。
+_STATE_AC_ALIASES = {
+    "BE": {"CWmin": ("be_cwmin", "cwmin"), "AIFSN": ("be_aifsn", "aifsn")},
+    "VI": {"CWmin": ("vi_cwmin",), "AIFSN": ("vi_aifsn",)},
+}
+
+
+def access_weight(cwmin: int, aifsn: int) -> float:
+    """AIFS + 平均退避时隙数的倒数，作为信道抢占概率的相对权重（越大越易抢占）。"""
+    return 1.0 / (max(1, int(aifsn)) + (max(1, int(cwmin)) + 1) / 2.0)
+
+
+def _state_cw_aifsn(state: dict, ac: str) -> tuple[int, int]:
+    aliases = _STATE_AC_ALIASES.get(ac, _STATE_AC_ALIASES["BE"])
+    cwmin = _first_present(state, aliases["CWmin"])
+    aifsn = _first_present(state, aliases["AIFSN"])
+    return (int(cwmin) if cwmin is not None else 15, int(aifsn) if aifsn is not None else 3)
+
+
+def predict_access_share(
+    ap_states: dict[str, dict], proposed_edca: dict, *, ac: str = "BE",
+) -> dict[str, dict]:
+    """预测提案生效前后，各 AP 在指定 AC 上的相对信道抢占份额（假设同信道竞争）。
+
+    未出现在 proposed_edca 里的 AP 视为该 AC 参数不变，沿用 ap_states 当前值。
+    返回 {ap_id: {before_share, after_share, share_ratio, disadvantage_ratio}}；
+    share_ratio < 1 表示份额下降，disadvantage_ratio 是相对提案后最强邻居的比值。
+    """
+    before_weights: dict[str, float] = {}
+    after_weights: dict[str, float] = {}
+    for ap_id, state in (ap_states or {}).items():
+        if not isinstance(state, dict):
+            continue
+        key = ap_id.lower()
+        cur_cwmin, cur_aifsn = _state_cw_aifsn(state, ac)
+        before_weights[key] = access_weight(cur_cwmin, cur_aifsn)
+
+        params = proposed_edca.get(key) or proposed_edca.get(ap_id) or {}
+        group = extract_param_groups(params).get(ac) if isinstance(params, dict) else None
+        if group and group.get("CWmin") is not None and group.get("AIFSN") is not None:
+            after_weights[key] = access_weight(int(group["CWmin"]), int(group["AIFSN"]))
+        else:
+            after_weights[key] = before_weights[key]
+
+    total_before = sum(before_weights.values()) or 1.0
+    total_after = sum(after_weights.values()) or 1.0
+
+    result: dict[str, dict] = {}
+    for ap_id in before_weights:
+        share_before = before_weights[ap_id] / total_before
+        share_after = after_weights[ap_id] / total_after
+        rivals_after = [w for k, w in after_weights.items() if k != ap_id]
+        strongest_rival = max(rivals_after) if rivals_after else 0.0
+        result[ap_id] = {
+            "before_share": round(share_before, 6),
+            "after_share": round(share_after, 6),
+            "share_ratio": round(share_after / share_before, 6) if share_before > 0 else None,
+            "disadvantage_ratio": (
+                round(after_weights[ap_id] / strongest_rival, 6) if strongest_rival > 0 else None
+            ),
+        }
+    return result
+
+
+def detect_self_harm(
+    ap_states: dict[str, dict], proposed_edca: dict, *,
+    ac: str = "BE", share_ratio_floor: float = 0.5,
+) -> list[dict]:
+    """找出提案里"合法但自伤"的 AP：确实改了该 AC 的参数，且预测份额跌破地板。
+
+    只标记提案里显式改动了该 AC 参数的 AP（未被改动的 AP 即便份额被动下降也
+    不算"自伤"，那是别人变强的正常结果，不是它自己的决策问题）。
+    """
+    shares = predict_access_share(ap_states, proposed_edca, ac=ac)
+    flagged = []
+    for ap_id, item in shares.items():
+        params = proposed_edca.get(ap_id) or proposed_edca.get(ap_id.upper()) or {}
+        touched = bool(extract_param_groups(params).get(ac)) if isinstance(params, dict) else False
+        ratio = item.get("share_ratio")
+        if touched and ratio is not None and ratio < share_ratio_floor:
+            flagged.append({"ap_id": ap_id, "ac": ac, **item})
+    return flagged

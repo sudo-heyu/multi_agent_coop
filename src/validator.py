@@ -4,13 +4,22 @@
 验收分三层：
   1. 参数范围检查：proposed 值在合法区间内（始终执行）
   2. 参数生效检查：观测值与 proposed 吻合（仅真实观测时执行）
+  3. 自伤幅度门：合法但会把提案方自己压垮的参数组合（始终执行，纯闭式估算，
+     不依赖观测）——Co-EDCA 按预测信道抢占份额跌幅，Co-SR 按预测 STA RSSI
+     安全下界。两者都只是方向性预警，不是精确仿真；Co-EDCA 一侧允许"邻居确有
+     SLA 违规"作为自我牺牲的正当理由，Co-SR 一侧是硬性连接安全底线，不设例外。
 
-KPI 指标不再作为 Validator 的通过条件。
-只要最终参数合法且真实观测时确认已正常下发，即判定通过。
+聚合 KPI（吞吐/时延等）仍不作为 Validator 的通过条件——那类判断留给
+迭代/反思模块的事后评估窗口；本模块只挡"提案本身在结构上就会自伤"这一类、
+凭当前状态和提案参数就能确定性算出来的风险，不等真实观测。
 """
 from __future__ import annotations
 
+import os
+
 from .sta_feedback import evaluate_sta_qoe
+from .tools import edca as _edca
+from .tools import sr as _sr
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 硬性参数约束
@@ -32,6 +41,11 @@ EDCA_LIMITS = {
     "CWmax": (7, 1023),
     "AIFSN": (1, 15),
 }
+# Co-EDCA 自伤幅度门：提案方自己在某 AC 上的预测信道抢占份额，跌到协商前的
+# 这个比例以下就判定不通过（除非有邻居 SLA 违规可以正当化这次牺牲）。
+EDCA_SELF_HARM_SHARE_RATIO_FLOOR = float(
+    os.environ.get("MULTIAP_EDCA_SELF_HARM_FLOOR", "0.5") or 0.5
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 公开接口
@@ -146,6 +160,27 @@ def validate_decision(
                 "errors": [f"{ap_id.upper()}: {e}" for e in ap_errors],
             })
 
+        # ── 层 3：Co-SR 自伤门（预测降功率后 STA RSSI 是否跌破安全下界）──────
+        proposed_powers = {
+            ap_id: normalized[ap_id].get("tx_power_dbm")
+            for ap_id in ap_ids
+            if normalized[ap_id].get("tx_power_dbm") is not None
+        }
+        for warn in _sr.detect_self_harm(ap_state, proposed_powers):
+            ap_id = warn["ap_id"]
+            if ap_id not in ap_ids:
+                continue
+            report = per_ap.setdefault(ap_id, _empty_ap_entry())
+            msg = (
+                f"{ap_id.upper()}: Co-SR 自伤——预测降功率后 STA RSSI="
+                f"{warn['sta_rssi_after']} dBm < 安全下界 {warn['floor']} dBm，"
+                f"STA 可能断连（硬性安全底线，无例外）"
+            )
+            report["errors"].append(msg)
+            report["checks"].append({
+                "check": "Co-SR self-harm guard", "ok": False, "errors": [msg],
+            })
+
     # ── 层 1 + 2：Co-EDCA 参数范围 & 生效检查 ────────────────────────────────
     if strategy in ("co_edca", "joint"):
         for ap_id in ap_ids:
@@ -200,6 +235,28 @@ def validate_decision(
                 "ok": len(edca_errors) == 0,
                 "errors": [f"{ap_id.upper()}: {e}" for e in edca_errors],
             })
+
+        # ── 层 3：Co-EDCA 自伤门（预测信道抢占份额跌幅；优先级排序合规也拦）──
+        proposed_edca_all = {ap_id: normalized[ap_id] for ap_id in ap_ids}
+        for ac in ("BE", "VI"):
+            for warn in _edca.detect_self_harm(
+                ap_state, proposed_edca_all, ac=ac,
+                share_ratio_floor=EDCA_SELF_HARM_SHARE_RATIO_FLOOR,
+            ):
+                ap_id = warn["ap_id"]
+                if ap_id not in ap_ids or _has_justifying_sla_violation(ap_state, exclude=ap_id):
+                    continue
+                report = per_ap.setdefault(ap_id, _empty_ap_entry())
+                msg = (
+                    f"{ap_id.upper()}: Co-EDCA 自伤（{ac}）——预测信道抢占份额从 "
+                    f"{warn['before_share']:.3f} 降到 {warn['after_share']:.3f}"
+                    f"（相对最强邻居劣势比 {warn.get('disadvantage_ratio')}），"
+                    f"且无邻居处于 SLA 违规可解释此牺牲"
+                )
+                report["errors"].append(msg)
+                report["checks"].append({
+                    "check": f"Co-EDCA self-harm guard ({ac})", "ok": False, "errors": [msg],
+                })
 
     # ── STA QoE / SLA 反馈 ───────────────────────────────────────────────────
     sta_qoe = evaluate_sta_qoe(
@@ -260,6 +317,19 @@ def _validate_edca_range(params: dict) -> list[str]:
     if cwmax <= cwmin:
         errors.append(f"CWmax={cwmax} 必须大于 CWmin={cwmin}")
     return errors
+
+
+def _has_justifying_sla_violation(ap_state: dict, *, exclude: str) -> bool:
+    """自伤门的例外通道：有邻居正处于 SLA 违规，才允许牺牲自己去救它。"""
+    for ap_id, state in (ap_state or {}).items():
+        if ap_id == exclude or not isinstance(state, dict):
+            continue
+        if state.get("sla_violations"):
+            return True
+        summary = state.get("sta_feedback_summary") or {}
+        if summary.get("status") == "violated":
+            return True
+    return False
 
 
 def _first_present(params: dict, keys: tuple[str, ...]):

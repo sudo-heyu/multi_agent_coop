@@ -1204,3 +1204,32 @@ def rank_candidates(ap_states: dict, candidates: object, objective: str = "balan
         "best": ranked[0] if ranked else None,
         "ranked_candidates": ranked,
     }
+
+
+def detect_self_harm(
+    ap_states: dict, proposed_powers: dict, *,
+    rssi_floor: float = STA_RSSI_MIN_DBM,
+) -> list[dict]:
+    """找出提案里"合法但自伤"的 AP：确实改了自己的功率，且预测 STA RSSI 跌破安全下界。
+
+    只做 STA 连接安全性这一条自伤检查——硬性底线，不设"为了救邻居可以牺牲"的
+    例外（连接断了就没有讨价还价的余地）。CCA/SINR 等其余约束仍由
+    evaluate_sr_candidate/compute_validation 等既有工具供 Agent 自检，
+    不在此处重复，避免与既有 OBSS_PD 耦合校验产生交叉判定。
+    """
+    flagged = []
+    for ap_id in ap_states:
+        if ap_id not in proposed_powers:
+            continue  # 未被提案改动的 AP 不算自伤
+        delta = _power_delta(ap_id, proposed_powers, ap_states)
+        if abs(delta) < DELTA_INT_TOLERANCE_DB:
+            continue
+        rssi_after = _sta_rssi_after(ap_id, ap_states, proposed_powers)
+        if rssi_after < rssi_floor:
+            flagged.append({
+                "ap_id": ap_id,
+                "sta_rssi_before": ap_states[ap_id].get("sta_rssi_dbm"),
+                "sta_rssi_after": rssi_after,
+                "floor": rssi_floor,
+            })
+    return flagged
