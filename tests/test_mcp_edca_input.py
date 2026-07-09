@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from openclaw.mcp import multiap_mcp
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 
 
 class TestMcpEdcaInput(unittest.TestCase):

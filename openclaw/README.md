@@ -8,6 +8,8 @@ OpenClaw 是 AP agent 的托管与工具运行时；默认阶段编排入口是�
 - `coordinator`：保留的兼容 agent，仅供 `--use-coordinator` 对比路径使用。
 - `mcp/multiap_mcp.py`：向 AP 暴露状态、Co-SR、Co-EDCA 工具；另向 coordinator 暴露 `run_fast_negotiation`。
 - `mcp/orchestration.py`：确定性的阶段轮转和 AP 驱动，被默认入口直接调用。
+
+> mock 运行时模式已移除（2026-07）：数据来源仅 real（香蕉派）/ ns3（仿真桥）两种，`--mode` 必填；mock 场景与喂数器降级为测试夹具（tests/mock_scenes.py、tests/mock_feeder.py）。
 - `setup.sh`：创建隔离 profile `multiap`、四个 agent、模型 provider 和 MCP 注册。
 - `serve.sh`：管理常驻 state server、gateway、Dashboard 和学术曲线窗。
 
@@ -26,7 +28,7 @@ MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh
 ```bash
 bash openclaw/serve.sh start
 bash openclaw/serve.sh status
-.venv/bin/python run_openclaw.py --scene joint
+.venv/bin/python run_openclaw.py --mode ns3 --scene joint
 ```
 
 `run_openclaw.py` 强制复用常驻服务：state server 必须在线；默认路径要求 gateway 在线；未传 `--no-dashboard` 时 Dashboard 也必须在线。plot 是可选服务，缺失只提示、不阻塞。
@@ -47,7 +49,7 @@ bash openclaw/serve.sh stop
 ## coordinator 兼容路径
 
 ```bash
-.venv/bin/python run_openclaw.py --scene edca --use-coordinator
+.venv/bin/python run_openclaw.py --mode ns3 --scene edca --use-coordinator
 ```
 
 此路径用 `--local` 启动 coordinator，后者调用一次 `run_fast_negotiation`。它与默认路径共享同一套 `structured_relay`，但多一次 coordinator 模型启动和汇总，因此只用于兼容与性能对比。

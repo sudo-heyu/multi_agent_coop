@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import run_openclaw
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from openclaw.mcp import orchestration as orch
 import copy
 
@@ -22,23 +22,21 @@ class RealModeTests(unittest.TestCase):
             "ap3": "http://10.0.0.3:5002",
         })
 
-    def test_real_mode_never_constructs_mock_feeder(self):
-        with patch.object(run_openclaw, "MockTelemetryFeeder") as feeder:
-            result = run_openclaw._start_telemetry(
-                "real", False, "http://localhost:5001", {}, 1.0
-            )
+    def test_runtime_has_no_mock_feeder_path(self):
+        """mock 已降级为测试夹具：运行时入口不得再引用 feeder 或 mock 模式。"""
+        self.assertFalse(hasattr(run_openclaw, "MockTelemetryFeeder"))
+        self.assertFalse(hasattr(run_openclaw, "_start_telemetry"))
+        source = open(run_openclaw.__file__, encoding="utf-8").read()
+        self.assertNotIn("MockTelemetryFeeder(", source)
 
-        self.assertIsNone(result)
-        feeder.assert_not_called()
+    def test_mode_choices_exclude_mock(self):
+        source = open(run_openclaw.__file__, encoding="utf-8").read()
+        self.assertIn('choices=["real", "ns3"]', source)
+        self.assertNotIn('choices=["mock"', source)
 
-    def test_ns3_mode_never_constructs_mock_feeder(self):
-        with patch.object(run_openclaw, "MockTelemetryFeeder") as feeder:
-            result = run_openclaw._start_telemetry(
-                "ns3", False, "http://localhost:5001", {}, 1.0
-            )
-
-        self.assertIsNone(result)
-        feeder.assert_not_called()
+    def test_scene_names_match_test_fixtures(self):
+        from openclaw.scenes import SCENE_NAMES
+        self.assertEqual(set(SCENE_NAMES), set(MOCK_SCENES))
 
     def test_ns3_eval_windows_default_to_short_feedback(self):
         with patch.dict(run_openclaw.os.environ, {"MULTIAP_EVAL_WINDOWS": ""}):

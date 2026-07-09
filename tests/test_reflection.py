@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from src.memory import (
     find_agent_episodes, find_episode_memory, find_matching_rules,
     find_similar_episodes, materialize_episode, memory_trust, should_quarantine,

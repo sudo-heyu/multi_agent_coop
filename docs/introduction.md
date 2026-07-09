@@ -77,7 +77,7 @@
 ```bash
 MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh  # 首次
 bash openclaw/serve.sh start
-.venv/bin/python run_openclaw.py --scene joint
+.venv/bin/python run_openclaw.py --mode ns3 --scene joint
 ```
 
 真实 AP 使用 `--mode real`，并显式提供三个 executor 端点。该模式完全禁用 feeder、要求 state server 拒收生成数据，并等待三台 reporter 状态就绪。具体见 [香蕉派接入手册](banana-pi-integration.md)。

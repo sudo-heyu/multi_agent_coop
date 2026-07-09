@@ -25,18 +25,20 @@ MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash 
 # 写 ~/.openclaw-multiap/openclaw.json + 注册 MCP multiap-tools，末尾 config validate 通过即成功
 ```
 
-**2. Mock 模式运行**（无需真实 AP，`--scene` 可选 `sr` / `edca` / `joint`）
+**2. ns-3 仿真模式运行**（无需真实 AP；`--scene` 仅为日志/记忆归组标签）
 
-> 先 `bash openclaw/serve.sh start` 拉起常驻服务（state server + gateway + Dashboard + 曲线窗），再跑 `run_openclaw.py`——默认路径强制复用它们，不在线会报错提示先 `serve.sh start`。详见下方「后台常驻服务」。
+> 🚦 **mock 运行时模式已移除（2026-07）**：数据来源只有两种——ns-3 仿真（`--mode ns3`）或真实香蕉派（`--mode real`），`--mode` 必须显式指定。mock 场景与喂数器降级为测试夹具（`tests/mock_scenes.py`、`tests/mock_feeder.py`），仅供确定性单元测试使用。
+
+> 先 `bash openclaw/serve.sh start` 拉起常驻服务（state server + gateway + Dashboard + 曲线窗），再启动 ns-3 桥，最后跑 `run_openclaw.py`——默认路径强制复用常驻服务，不在线会报错提示先 `serve.sh start`。详见下方「后台常驻服务」。
 
 ```bash
-# 演示：复用常驻曲线窗 + Dashboard，协商后曲线体现改善
-.venv/bin/python run_openclaw.py --scene joint
+# ① 启动 ns-3 桥（自行拉起 ns-3 仿真，遥测→state server，决策→ns-3 stdin）
+.venv/bin/python state_server/ns3_bridge.py --ns3-dir <ns-3 根目录>
 
-# 无头快速验证（本次三场景实测即此）
-.venv/bin/python run_openclaw.py --scene edca --no-academic-plot --no-dashboard --exit-after-run --max-steps 24
+# ② 触发协商（决策经桥的 /apply 下发回仿真）
+.venv/bin/python run_openclaw.py --mode ns3 --scene joint \
+  --ap-endpoints ap1=localhost:5003,ap2=localhost:5003,ap3=localhost:5003
 ```
-> ⚠️ **不要加 `--no-feeder`** —— 它只推一帧，长协商时状态会过期（`StateStaleError`）导致失败；需连续喂数器保持状态新鲜。
 
 > 🚦 **coordinator 已默认停用（2026-06）**：`run_openclaw.py` 现在默认**进程内直接跑阶段接力**（`structured_relay`），
 > 不再启动 coordinator LLM agent。原因：coordinator 对协商**零功能贡献**——发言顺序（广播 ap1→ap2→ap3、
@@ -47,7 +49,7 @@ MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash 
 **3. （旧路径，已停用）直接触发 coordinator**（仅做对比/调试用；默认路径无需此步）
 ```bash
 # 经薄启动器回退到 coordinator 路径：
-.venv/bin/python run_openclaw.py --scene edca --use-coordinator
+.venv/bin/python run_openclaw.py --mode ns3 --scene edca --use-coordinator
 # 或不经启动器手动触发 coordinator：
 OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
   openclaw --profile multiap agent --local --agent coordinator \
@@ -66,17 +68,17 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 # DGX：触发协商并明确配置执行端点
 .venv/bin/python run_openclaw.py --mode real --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
-#  或 --ap-config config/ap_endpoints.json（须显式指定；不再自动读取，避免 mock 演示误推到不可达 AP 而 8s 超时）
+#  或 --ap-config config/ap_endpoints.json（须显式指定；不再自动读取，避免误推到不可达 AP 而 8s 超时）
 ```
 
-`--mode real` 不创建 `MockTelemetryFeeder`，会等待 ap1/ap2/ap3 均有未过期的 `source=ap` 状态，并强制要求三个 executor 端点。若 state server 允许 mock，启动器会拒绝继续并提示按真实模式重启服务。
+`--mode real` 等待 ap1/ap2/ap3 均有未过期的 `source=ap` 状态，并强制要求三个 executor 端点；`--mode ns3` 等待 `source=ns3`。两种模式都不生成数据。若 state server 允许 mock 数据源，real 模式启动器会拒绝继续并提示按真实策略重启服务。
 
 **测试**
 ```bash
 .venv/bin/python -m unittest discover -s tests          # 当前确定性套件 246/246
 ```
 
-常用开关：`--mode {mock,real}` · `--scene {sr,edca,joint}` · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--exit-after-run`（跑完即退） · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
+常用开关：`--mode {real,ns3}`（必填） · `--scene {sr,edca,joint,contention,hidden_sla}`（仅标签） · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
 `run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
 
 ### 后台常驻服务（一条命令全开，协商零临时启动）
@@ -84,8 +86,7 @@ MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
 OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server；state server / Dashboard / 曲线窗若每次临时起也有启动开销。`serve.sh` 把**所有可常驻的服务绑成一条命令**，`run_openclaw.py` 强制复用它们——协商时零临时服务启动。OpenClaw 已为 `multiap` profile 注册 launchd 网关服务 `ai.openclaw.multiap`（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。
 
 ```bash
-MULTIAP_STATE_MODE=mock bash openclaw/serve.sh start   # mock，state 接受生成数据（默认）
-MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart # real，state 拒收生成数据
+bash openclaw/serve.sh start     # state server 以真实数据策略启动（拒收 mock/generated；ns3 来源直接放行）
 bash openclaw/serve.sh status    # 查看五者状态（state / gateway / dashboard / harvester / plot）
 bash openclaw/serve.sh stop      # 停曲线/State/Dashboard/harvester；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
 bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 gateway（否则缓存旧 MCP 连接，AP 调工具报 "tool isn't available"）
@@ -96,7 +97,7 @@ bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 ga
 - **学术曲线窗（matplotlib）也常驻**：`serve.sh start` 起一个常驻窗口，`run_openclaw.py` 检测到即复用（省每次 matplotlib 冷启动 ~2-3s），未在线则跳过提示。无桌面/SSH 环境自动跳过；`--no-academic-plot` 可主动关。
 - **Dashboard 实时对话流**：常驻 Dashboard 是独立进程，`run_openclaw.py` 把会话事件经 HTTP `POST /push` 推给它，再由 SSE 广播到浏览器——不再依赖进程内 `push_event`，常驻 Dashboard 也能看到实时对话/投票/决策（终端不再有 `Serving Flask app` 噪声）。
 - **Outcome 收割器常驻**：`serve.sh start` 拉起 `state_server/outcome_harvester.py`，每 `MULTIAP_HARVEST_INTERVAL`（默认 30s）结算到期的效果评估窗口、放弃逾期太久的窗口——real 模式长评估窗口（可达 15 分钟）不再依赖下次协商即可自动结算，是记忆效果反馈在真实部署下可靠的前提。
-- `MULTIAP_STATE_MODE=mock` 时 state server 带 `--allow-mock`；`real` 时不带。数据新鲜度分别由 feeder 或香蕉派 reporter 维持。
+- state server 一律以真实数据策略启动（不带 `--allow-mock`，该 flag 仅供测试进程内使用）。数据新鲜度由 ns-3 桥或香蕉派 reporter 维持。
 - **提速预期**：省掉每回合 runtime/provider/MCP 冷启动 + 各服务临时启动；**不缩短模型推理本身**（每回合 ~13s 不变），整体收益取决于冷启动占比。
 
 ---
@@ -130,7 +131,8 @@ run_openclaw.py（默认入口）
 | 联合 | `joint` | 高功率 + 优先级分化同时成立 | 联合调整，或先处理主导问题（由实时证据决定） |
 
 路径由提案 AP 基于实时状态与工具验算自主选择，不按 AP 编号或固定业务身份预设。
-场景定义见 `openclaw/scenes.py`（`MOCK_SCENE_SR/EDCA/JOINT`）。
+`--scene` 仅作日志/记忆归组标签（标签定义见 `openclaw/scenes.py` 的 `SCENE_NAMES`）；
+对应的合成初始状态数据已降级为测试夹具，见 `tests/mock_scenes.py`。
 
 ---
 
@@ -185,7 +187,7 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 ├── openclaw/                     # 智能体运行时
 │   ├── setup.sh                  # 配置隔离 profile multiap（providers + agent + 工具限制 + MCP 注册）
 │   ├── serve.sh                  # 常驻服务生命周期：state/gateway/Dashboard/学术曲线/harvester
-│   ├── scenes.py                 # 三套 mock 场景 + 配套服务启动器
+│   ├── scenes.py                 # 场景标签 + 配套服务启动器
 │   ├── mcp/
 │   │   ├── multiap_mcp.py        # stdio MCP 工具服务（计算/验算/状态/编排/下发工具）
 │   │   ├── orchestration.py      # 编排机制层：四阶段 structured_relay、驱动 AP、计票、反提案
@@ -194,10 +196,9 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 │   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS/MEMORY.md
 ├── state_server/                 # 遥测与执行面
 │   ├── server.py                 # Flask 状态服务器（AP 上报 / MCP 工具读取）
-│   ├── reporter.py               # AP 状态上报脚本（部署在香蕉派，或本地 mock）
+│   ├── reporter.py               # AP 状态上报脚本（部署在香蕉派）
 │   ├── executor.py               # 执行端点：接收决策并下发到硬件
 │   ├── ns3_bridge.py             # ns-3 实时桥：仿真遥测入 server + /apply 写回仿真
-│   ├── mock_feeder.py            # mock 曲线喂数器
 │   ├── outcome_harvester.py      # 常驻评估窗口收割器
 │   └── academic_plot.py          # Matplotlib 学术曲线窗口
 ├── src/                          # 确定性领域核心（被 MCP 工具与运行时复用）
@@ -255,7 +256,7 @@ SQLite 写失败会降级为只写 JSONL 并在行内标记 `store_write_failed`
 
 每次 run 结束会自动生成 Episodic Memory，保存初始环境、领域特征、决策、Validator、执行结果和观测指标。下一次同拓扑协商会检索最多 3 个高质量相似案例注入提案提示，但历史参数不能绕过最新状态读取和工具验算。可用 `memory_admin.py episodes` 和 `memory_admin.py similar <run_id>` 查询。
 
-决策生效后还会登记多时间窗口的 Outcome 评估（`--eval-windows`，默认 mock=10,30s / real=60,300,900s）：到期时与协商前基线比较吞吐/延迟/丢包，按业务优先级加权判定 `improved / degraded / neutral / inconclusive`，并把结论回写案例质量——实际恶化的案例质量封顶 0.2，不会再被当作高质量参考注入提案，同时生成恢复协商前参数的回滚建议。回滚默认只建议不执行，管理员显式审批后经幂等通道下发：`memory_admin.py rollback <run_id>`（dry-run）、加 `--ap-endpoints ... --confirm` 执行。收割不阻塞进程：常驻 harvester 定期结算、逾期太久的窗口标 abandoned，mock 保活循环实时结算，也可 `memory_admin.py evaluate --server <url>` 手动补收；`memory_admin.py evaluations <run_id>` 查看窗口结论与回滚建议。
+决策生效后还会登记多时间窗口的 Outcome 评估（`--eval-windows`，默认 ns3=10,30s / real=60,300,900s）：到期时与协商前基线比较吞吐/延迟/丢包，按业务优先级加权判定 `improved / degraded / neutral / inconclusive`，并把结论回写案例质量——实际恶化的案例质量封顶 0.2，不会再被当作高质量参考注入提案，同时生成恢复协商前参数的回滚建议。回滚默认只建议不执行，管理员显式审批后经幂等通道下发：`memory_admin.py rollback <run_id>`（dry-run）、加 `--ap-endpoints ... --confirm` 执行。收割不阻塞进程：常驻 harvester 定期结算、逾期太久的窗口标 abandoned，也可 `memory_admin.py evaluate --server <url>` 手动补收；`memory_admin.py evaluations <run_id>` 查看窗口结论与回滚建议。
 
 带真实反馈的案例进一步归纳为 **Semantic Memory（L5）语义规律**：同拓扑/场景/策略的多个有定论案例，统计出"倾向改善/恶化"的规律（带证据 run_id、支持数、一致性、置信度和典型做法），下次同拓扑提案时注入高置信规律（比单案例更可靠），仍强制按最新状态重新验算。规律随后台 harvester 收到新反馈自动重新归纳；`memory_admin.py rules [--induce]` 查看/归纳。
 

@@ -216,8 +216,8 @@ python state_server/executor.py --ap-id ap1 --mock --port 5002 &
 python state_server/executor.py --ap-id ap2 --mock --port 5003 &
 python state_server/executor.py --ap-id ap3 --mock --port 5004 &
 
-# 终端 4（使用内置 feeder 时可省略终端 2）
-.venv/bin/python run_openclaw.py --scene joint \
+# 终端 4
+.venv/bin/python run_openclaw.py --mode real --scene joint \
   --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
 ```
 

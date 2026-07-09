@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from openclaw.mcp import orchestration as orch
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from src.memory.outcome import evaluate_deltas
 
 

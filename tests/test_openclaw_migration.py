@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from openclaw.mcp import orchestration as orch
 from src.tools.edca import encode_params_edca
 

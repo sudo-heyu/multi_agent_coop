@@ -17,7 +17,7 @@ OPENCLAW="${OPENCLAW_BIN:-$(command -v openclaw || true)}"
 OPENCLAW="${OPENCLAW:-$HOME/.openclaw/bin/openclaw}"
 PY="${MULTIAP_PY:-$REPO/.venv/bin/python}"
 STATE_PORT="${MULTIAP_STATE_PORT:-5001}"
-STATE_MODE="${MULTIAP_STATE_MODE:-mock}"
+STATE_MODE="${MULTIAP_STATE_MODE:-real}"   # mock 已从运行时移除，仅接受 real
 STATE_URL="http://localhost:${STATE_PORT}"
 RUN_DIR="$HOME/.openclaw-$PROFILE/run"
 STATE_PID="$RUN_DIR/state.pid"
@@ -45,7 +45,7 @@ GW_PORT="${MULTIAP_GATEWAY_PORT:-${CFG_PORT:-18789}}"
 DASH_PORT="${MULTIAP_DASHBOARD_PORT:-5050}"
 DASH_PID="$RUN_DIR/dashboard.pid"
 DASH_LOG="$RUN_DIR/dashboard.log"
-# academic plot：matplotlib GUI 窗口（真实/mock 通用可视化）。无桌面时 start 跳过。
+# academic plot：matplotlib GUI 窗口（可视化）。无桌面时 start 跳过。
 PLOT_PID="$RUN_DIR/plot.pid"
 PLOT_LOG="$RUN_DIR/plot.log"
 # outcome harvester：常驻后台收割效果评估窗口（L4 在真实部署下可靠的前提）。
@@ -92,10 +92,8 @@ start_state() {
         echo "[serve] 端口 $STATE_PORT 被占用但 /health 不通，跳过 state server"; return 0
     fi
     local state_args=()
-    if [ "$STATE_MODE" = "mock" ]; then
-        state_args=(--allow-mock)
-    elif [ "$STATE_MODE" != "real" ]; then
-        echo "[serve] MULTIAP_STATE_MODE 仅支持 mock/real，当前为: $STATE_MODE"; return 1
+    if [ "$STATE_MODE" != "real" ]; then
+        echo "[serve] MULTIAP_STATE_MODE 仅支持 real（mock 已从运行时移除），当前为: $STATE_MODE"; return 1
     fi
     echo "[serve] 启动 state server (mode=$STATE_MODE) ..."
     NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \

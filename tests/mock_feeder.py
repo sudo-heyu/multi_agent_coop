@@ -1,13 +1,9 @@
 """
-Mock 遥测喂数器 —— 仅用于 --mock 演示。
+Mock 遥测喂数器 —— 纯测试夹具（运行时 mock 模式已移除）。
 
-mock 模式下没有真实香蕉派持续上报，state server 的 /history 为空，
-导致 academic_plot 窗口与 dashboard 曲线无数据。本模块在后台守护线程里
-周期性地把（带随机扰动的）mock 状态 POST 到 state server /state，使曲线
-"活起来"；协商完成后调用 apply_decision() 注入最终参数并把性能指标朝
-改善方向移动，让曲线体现协商前后的变化。
-
-上报时 source 固定为 "mock"，因此 state server 需以 --allow-mock 启动。
+在后台守护线程里周期性地把（带随机扰动的）mock 状态 POST 到 state server
+/state；apply_decision() 注入决策并把性能指标朝改善方向移动，用于测试
+评估/记忆闭环。source 固定为 "mock"，state server 需以 --allow-mock 启动。
 """
 from __future__ import annotations
 

@@ -2,11 +2,11 @@
 OpenClaw AP agent + 确定性阶段编排入口。
 
 用法：
-  python run_openclaw.py --scene joint            # mock A：预设场景
-  python run_openclaw.py --scene sr --max-steps 20
+  python run_openclaw.py --mode ns3 --scene joint   # ns-3 仿真（需 ns3_bridge 在跑）
   python run_openclaw.py --mode real --ap-endpoints ap1=...
 
 前置：openclaw 已装、ollama 运行、已执行过 `bash openclaw/setup.sh`。
+mock 已从运行时移除，仅保留为测试夹具（tests/mock_scenes.py、tests/mock_feeder.py）。
 """
 import argparse
 import glob
@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "openclaw" / "mcp"))
 
-from openclaw.scenes import MOCK_SCENES, _parse_executor_endpoints
+from openclaw.scenes import SCENE_NAMES, _parse_executor_endpoints
 from src.logger import SessionLogger
 from src.logger import DEFAULT_EVENT_DB
 from src.persistence import EventStore, build_checkpoint
@@ -32,7 +32,6 @@ from src.console_style import (
     status_ok, status_fail, dim, tool_prefix, tool_name,
 )
 from openclaw.mcp.tool_console import _format_tool_console
-from state_server.mock_feeder import MockTelemetryFeeder
 import orchestration as orch
 
 
@@ -235,20 +234,6 @@ def _validate_real_endpoints(endpoints: dict[str, str] | None) -> None:
         raise ValueError("real 模式执行端点必须恰好覆盖 ap1/ap2/ap3" + (f"（{'；'.join(details)}）" if details else ""))
 
 
-def _start_telemetry(mode: str, no_feeder: bool, server: str, scene: dict, interval: float):
-    """按模式启动遥测；real/ns3 路径绝不实例化 MockTelemetryFeeder。"""
-    if mode in {"real", "ns3"}:
-        return None
-    if not no_feeder:
-        feeder = MockTelemetryFeeder(server, scene, interval=interval)
-        feeder.start()
-        return feeder
-    single = MockTelemetryFeeder(server, scene, interval=interval)
-    single.start()
-    single.stop()
-    return None
-
-
 def _plot_daemon_alive() -> bool:
     """serve.sh 常驻的 academic plot 进程是否存活（matplotlib 窗口在）。"""
     pf = _plot_pid_file()
@@ -317,15 +302,15 @@ def main():
     except (AttributeError, ValueError):
         pass
     ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
-    ap.add_argument("--mode", choices=["mock", "real", "ns3"], default="mock",
-                    help="mock 使用预设场景持续喂数；real/ns3 只接受外部持续上报")
-    ap.add_argument("--scene", choices=sorted(MOCK_SCENES), default="joint")
+    ap.add_argument("--mode", choices=["real", "ns3"], required=True,
+                    help="real 等待香蕉派 reporter（source=ap）；ns3 等待 ns3_bridge（source=ns3）。"
+                         "两种模式都只消费外部持续上报，不生成数据")
+    ap.add_argument("--scene", choices=sorted(SCENE_NAMES), default="joint",
+                    help="场景标签（仅用于日志/记忆归组，不影响数据来源）")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
-    ap.add_argument("--no-feeder", action="store_true",
-                    help="mock 模式只推一帧后停止（兼容选项）；real/ns3 模式始终不创建 feeder")
     ap.add_argument("--state-wait", type=float, default=None,
-                    help="等待三台 AP 新鲜状态的最长秒数（默认 mock=5，real/ns3=90）")
+                    help="等待三台 AP 新鲜状态的最长秒数（默认 90）")
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
@@ -345,7 +330,7 @@ def main():
     ap.add_argument("--require-qwen80b", action="store_true",
                     help="强制要求 multiap profile 默认模型为 qwen80binstruct")
     ap.add_argument("--exit-after-run", action="store_true",
-                    help="协商结束后不保持 mock 曲线展示，直接退出")
+                    help="兼容选项：real/ns3 模式协商结束后本就直接退出，评估窗口由常驻 harvester 结算")
     ap.add_argument("--resume-run", default="",
                     help="从 SQLite 中指定 run_id 的安全 negotiation checkpoint 恢复")
     ap.add_argument("--context-budget-chars", type=int, default=14000,
@@ -354,7 +339,7 @@ def main():
                     help="上下文中优先保留原文的最近发言数（最小 2）")
     ap.add_argument("--eval-windows", default="",
                     help="决策生效后的效果评估窗口秒数，逗号分隔（如 60,300,900）；"
-                         "默认 mock/ns3=10,30 / real=60,300,900；传 off 关闭")
+                         "默认 ns3=10,30 / real=60,300,900；传 off 关闭")
     ap.add_argument("--goal", default="",
                     help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
                          "（目标经 memory_admin.py goal create 创建）")
@@ -395,6 +380,9 @@ def main():
         if not resume_checkpoint.can_resume:
             ap.error(f"run 不可安全恢复: {resume_checkpoint.resume_reason}")
         if resume_checkpoint.run.mode:
+            if resume_checkpoint.run.mode not in {"real", "ns3"}:
+                ap.error(f"checkpoint 的运行模式 {resume_checkpoint.run.mode!r} 已不受支持"
+                         "（mock 已从运行时移除），请启动新协商")
             args.mode = resume_checkpoint.run.mode
         if resume_checkpoint.run.scene:
             args.scene = resume_checkpoint.run.scene
@@ -407,7 +395,6 @@ def main():
     except ValueError as exc:
         ap.error(f"--eval-windows 非法: {exc}")
 
-    scene = MOCK_SCENES[args.scene]
     os.environ["MULTIAP_SCENE"] = args.scene
     print(f"[run_openclaw] scene={args.scene} server={args.server} max_steps={args.max_steps}", flush=True)
 
@@ -422,24 +409,16 @@ def main():
     else:
         print("执行推送：未配置（协商结果仅输出到控制台）")
 
-    feeder = None
     logger = None
     # 强制常驻：核心服务由 serve.sh 起好；不在线则报错提示先 `serve.sh start`，不再临时起。
     _require_state_server(args.server, args.mode)
     _require_gateway(args.use_coordinator)
 
     if args.mode == "real":
-        print("[State] real 模式：不创建 MockTelemetryFeeder，等待三台 AP reporter 真值")
-    elif args.mode == "ns3":
-        print("[State] ns3 模式：不创建 MockTelemetryFeeder，等待 ns-3 bridge 上报 source=ns3")
-    feeder = _start_telemetry(
-        args.mode,
-        args.no_feeder,
-        args.server,
-        scene,
-        args.plot_interval,
-    )
-    wait_s = args.state_wait if args.state_wait is not None else (90.0 if args.mode in {"real", "ns3"} else 5.0)
+        print("[State] real 模式：等待三台 AP reporter 真值（source=ap）")
+    else:
+        print("[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）")
+    wait_s = args.state_wait if args.state_wait is not None else 90.0
     required_source = {"real": "ap", "ns3": "ns3"}.get(args.mode)
     try:
         ready_state = _wait_state_ready(
@@ -504,14 +483,10 @@ def main():
                 "projection_version": 1,
             })
         else:
-            # initial 快照/episodic 特征/评估基线都取自这里：real 模式必须用
-            # 真实上报（ready_state 的 data 载荷），不能用 mock 场景定义。
-            if args.mode in {"real", "ns3"}:
-                initial_ap_state = {
-                    ap: ready_state[ap]["data"] for ap in ("ap1", "ap2", "ap3")
-                }
-            else:
-                initial_ap_state = scene
+            # initial 快照/episodic 特征/评估基线都取自真实上报（ready_state 的 data 载荷）。
+            initial_ap_state = {
+                ap: ready_state[ap]["data"] for ap in ("ap1", "ap2", "ap3")
+            }
             logger.session_start(
                 model="openclaw-direct", scene=args.scene, ap_state=initial_ap_state
             )
@@ -616,28 +591,10 @@ def main():
             print(f"[Goal] attempt #{attempt['sequence']} 状态={attempt['status']}；"
                   "目标进度在评估窗口结算后回填")
     pending_eval = bool(eval_windows) and result["outcome"] == "success" and run_id
-    if feeder is not None and result["decision"]:
-        feeder.apply_decision(result["decision"])
-        if not args.exit_after_run:
-            print("[Mock] 已将决策注入遥测，曲线将体现协商后改善。Ctrl-C 退出。")
-            if pending_eval:
-                print(f"[Outcome] 效果评估窗口已登记，到期自动结算：{eval_windows}s")
-            try:
-                while True:
-                    time.sleep(2)
-                    if pending_eval:
-                        collected = _harvest_due_evaluations(args.server, run_id=run_id)
-                        if collected and not _has_pending_evaluations(run_id):
-                            pending_eval = False
-                            print("[Outcome] 全部评估窗口已结算完成。Ctrl-C 退出。")
-            except KeyboardInterrupt:
-                pass
     if pending_eval:
         print(f"[Outcome] 效果评估窗口已登记（{eval_windows}s）；"
-              "到期后由下次 run_openclaw 自动收割，或手动执行 "
+              "到期后由常驻 harvester / 下次 run_openclaw 自动收割，或手动执行 "
               f".venv/bin/python memory_admin.py evaluate --server {args.server}")
-    if feeder is not None:
-        feeder.stop()
     # state server / dashboard / plot 均为 serve.sh 常驻服务，不由本进程管理，退出不动它们。
 
 

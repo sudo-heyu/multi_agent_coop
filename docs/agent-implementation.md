@@ -14,7 +14,7 @@
 ```text
 run_openclaw.py
   ├─ 检查常驻 state server / OpenClaw gateway / Dashboard
-  ├─ mock 模式持续启动 MockTelemetryFeeder；真实模式使用 --no-feeder
+  ├─ 等待外部持续上报（real：香蕉派 reporter / ns3：ns3_bridge）
   ├─ 直接调用 structured_relay
   │    ├─ drive_ap → OpenClaw gateway → ap1/ap2/ap3
   │    ├─ AP → multiap-tools MCP → 状态/Co-SR/Co-EDCA 工具
@@ -70,10 +70,10 @@ bash openclaw/serve.sh start
 bash openclaw/serve.sh status
 
 # 默认路径
-.venv/bin/python run_openclaw.py --scene edca
+.venv/bin/python run_openclaw.py --mode ns3 --scene edca
 
 # 兼容对比路径（额外经过 coordinator LLM）
-.venv/bin/python run_openclaw.py --scene edca --use-coordinator
+.venv/bin/python run_openclaw.py --mode ns3 --scene edca --use-coordinator
 ```
 
 ## 验收

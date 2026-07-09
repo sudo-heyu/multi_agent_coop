@@ -169,7 +169,7 @@ class IterationChainTests(unittest.TestCase):
 
     def _episode(self, run_id, decision):
         import copy
-        from openclaw.scenes import MOCK_SCENES
+        from tests.mock_scenes import MOCK_SCENES
         from src.memory import materialize_episode
         state = copy.deepcopy(MOCK_SCENES["edca"])
         self.store.start_run(run_id, mode="mock", scene="edca", model="openclaw")

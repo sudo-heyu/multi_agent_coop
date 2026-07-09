@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("MULTIAP_MEMORY_LLM", "0")
 
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from src.memory import (
     abandon_stale_evaluations,
     execute_rollback,

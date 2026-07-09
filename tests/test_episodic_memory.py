@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openclaw.scenes import MOCK_SCENES
+from tests.mock_scenes import MOCK_SCENES
 from src.memory import (
     encode_features, find_agent_episodes, find_episode_memory,
     find_similar_episodes, materialize_episode,

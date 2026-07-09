@@ -1,8 +1,8 @@
 import copy
 import unittest
 
-from openclaw.scenes import MOCK_SCENES
-from state_server.mock_feeder import MockTelemetryFeeder
+from tests.mock_scenes import MOCK_SCENES
+from tests.mock_feeder import MockTelemetryFeeder
 
 
 EDCA_DECISION_AP2_HIGH = {
