@@ -299,6 +299,28 @@ class IterationChainTests(unittest.TestCase):
         self.assertEqual(goal_after["status"], "blocked")
         self.assertIn("预算耗尽", goal_after["status_reason"])
 
+    def test_stop_budget_exhausted_on_failed_attempt(self):
+        """一次协商在产出决策前就失败（如提案解析失败）不会有评估窗口，
+        outcome.py 的收割永远不会触发 refresh_goal_after_evaluation；预算耗尽
+        必须在 record_attempt_result 的失败分支里补上，否则目标永远卡 active。"""
+        goal = create_goal(self.store, target=TARGET, budget_attempts=1)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        attempt = record_attempt_result(self.store, "run-a", outcome="proposal_parse_error")
+        self.assertEqual(attempt["status"], "failed")
+        goal_after = self.store.get_goal(goal["goal_id"])
+        self.assertEqual(goal_after["status"], "blocked")
+        self.assertIn("预算耗尽", goal_after["status_reason"])
+
+    def test_success_attempt_not_blocked_before_evaluation(self):
+        """成功的 attempt 在评估窗口结算前不应被提前误判 blocked，
+        即便它已经是预算内最后一次 attempt——必须留出机会被判 achieved。"""
+        goal = create_goal(self.store, target=TARGET, budget_attempts=1)
+        register_attempt(self.store, goal["goal_id"], "run-a")
+        self._episode("run-a", {"ap2": {"CWmin": 7}})
+        attempt = record_attempt_result(self.store, "run-a", outcome="success")
+        self.assertEqual(attempt["status"], "completed")
+        self.assertEqual(self.store.get_goal(goal["goal_id"])["status"], "active")
+
     def test_stop_oscillation(self):
         self.assertTrue(detect_oscillation([
             {"ap1": {"CWmin": 15}}, {"ap1": {"CWmin": 31}}, {"ap1": {"CWmin": 15}},

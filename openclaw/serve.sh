@@ -91,13 +91,12 @@ start_state() {
     if port_listening "$STATE_PORT"; then
         echo "[serve] 端口 $STATE_PORT 被占用但 /health 不通，跳过 state server"; return 0
     fi
-    local state_args=()
     if [ "$STATE_MODE" != "real" ]; then
         echo "[serve] MULTIAP_STATE_MODE 仅支持 real（mock 已从运行时移除），当前为: $STATE_MODE"; return 1
     fi
     echo "[serve] 启动 state server (mode=$STATE_MODE) ..."
     NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
-        nohup "$PY" "$REPO/state_server/server.py" "${state_args[@]}" >"$STATE_LOG" 2>&1 &
+        nohup "$PY" "$REPO/state_server/server.py" >"$STATE_LOG" 2>&1 &
     echo $! > "$STATE_PID"
     for _ in $(seq 1 15); do if state_alive; then break; fi; sleep 1; done
     if state_alive; then
@@ -127,7 +126,7 @@ start_gateway() {
         fi
         OLLAMA_API_KEY=ollama-local OPENCLAW_RAW_STREAM="$RAW_STREAM_ENABLED" OPENCLAW_RAW_STREAM_PATH="$RAW_STREAM_PATH" MULTIAP_TOOL_EVENT_PATH="$TOOL_EVENT_PATH" \
             NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1 \
-            nohup "$OPENCLAW" --profile "$PROFILE" gateway --port "$GW_PORT" --bind loopback "${raw_args[@]}" >"$GW_LOG" 2>&1 &
+            nohup "$OPENCLAW" --profile "$PROFILE" gateway --port "$GW_PORT" --bind loopback "${raw_args[@]+"${raw_args[@]}"}" >"$GW_LOG" 2>&1 &
         echo $! > "$GW_PID"
     fi
     for _ in $(seq 1 45); do if port_listening "$GW_PORT"; then break; fi; sleep 1; done

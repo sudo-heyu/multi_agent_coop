@@ -140,6 +140,13 @@ def record_attempt_result(
         progress = score_goal_progress(goal, observed_state)
     status = "completed" if outcome == "success" else "failed"
     store.update_goal_attempt(attempt["attempt_id"], status=status, progress=progress)
+    if status == "failed":
+        # 失败的 attempt（协商未产出决策，如提案解析失败）不会登记评估窗口，
+        # outcome.py 的评估收割永远不会触发 refresh_goal_after_evaluation，
+        # 预算耗尽这条停机准则（I4）就没人检查，目标会永远卡在 active。
+        # 只在失败分支补跑一次：成功分支仍必须等评估窗口结算，否则会在最后
+        # 一次 attempt 的观测结果出来之前就误判 blocked，抢在 achieved 前面。
+        refresh_goal_after_evaluation(store, run_id)
     return store.get_goal_attempt(attempt["attempt_id"])
 
 
