@@ -470,9 +470,15 @@ def apply_evaluation_to_episode(
         )
     _update_case_narrative(store, run_id, episode, summary, quality_vector)
     # R4：定论后对本次 run 依赖过的记忆逐条比对预测与实际，记矛盾/刷新验证锚点。
-    from .reflection import reconcile_memory_reliance
+    from .reflection import reconcile_decision_predictions, reconcile_memory_reliance
     summary["memory_reconciliation"] = reconcile_memory_reliance(
         store, run_id, summary.get("final_verdict")
+    )
+    # R4 补充：不管这次协商有没有依赖历史记忆、有没有挂 goal，都对"这次决策
+    # 本身"的预测方向核账一次，喂进同一张 R5 校准表（见 reflection.py 顶部
+    # 决策自预测小节的说明）。final 窗口取最近一个已收割窗口的 per-AP 明细。
+    summary["decision_reconciliation"] = reconcile_decision_predictions(
+        store, run_id, episode, collected[-1].get("deltas") if collected else None,
     )
     # I4：若本 run 属于某个目标 attempt，回填目标进度并执行停机准则。
     from .goals import refresh_goal_after_evaluation

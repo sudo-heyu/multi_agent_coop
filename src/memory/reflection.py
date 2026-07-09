@@ -184,6 +184,13 @@ def calibration_report(store: Any) -> dict[str, Any]:
 
     反思模块实用性的量化验收：高信任桶的证实率应显著高于低信任桶；
     否则说明信任模型参数需要校准。
+
+    reconciliation 表现在有两类来源，用 memory_kind 区分：
+    - episode/rule/agent_episode：复用的历史记忆，注入时有信任分，走 trust 分桶；
+    - decision_prediction：这次协商当场做的新决策，没有"信任分"这个概念
+      （不是可隔离的记忆对象），trust_at_injection 恒为 None，只落 unknown_trust
+      桶；额外按 memory_kind 补一份 by_kind 明细，避免两类数据在同一个桶里
+      混在一起看不出各自的命中率（见 reconcile_decision_predictions）。
     """
     buckets = {
         "low(<0.4)": {"range": (0.0, 0.4), "verified": 0, "contradicted": 0},
@@ -191,10 +198,15 @@ def calibration_report(store: Any) -> dict[str, Any]:
         "high(>=0.7)": {"range": (0.7, 1.01), "verified": 0, "contradicted": 0},
     }
     unknown = {"verified": 0, "contradicted": 0}
+    by_kind: dict[str, dict[str, int]] = {}
     for item in store.list_reconciliations(limit=100_000):
         result = item["result"]
         if result not in {"verified", "contradicted"}:
             continue
+        kind_bucket = by_kind.setdefault(
+            item.get("memory_kind") or "unknown", {"verified": 0, "contradicted": 0}
+        )
+        kind_bucket[result] += 1
         trust = item.get("trust_at_injection")
         if trust is None:
             unknown[result] += 1
@@ -212,7 +224,147 @@ def calibration_report(store: Any) -> dict[str, Any]:
             "hit_rate": round(bucket["verified"] / conclusive, 4) if conclusive else None,
         }
     report["unknown_trust"] = unknown
+    for kind, counts in by_kind.items():
+        conclusive = counts["verified"] + counts["contradicted"]
+        counts["hit_rate"] = round(counts["verified"] / conclusive, 4) if conclusive else None
+    report["by_kind"] = by_kind
     return report
+
+
+# ── 决策自预测（不依赖复用记忆，任何协商都能核账）─────────────────────────
+# R4 只核对"复用的历史记忆"预测是否成立；一次协商即便没有依赖任何历史记忆
+# （比如这次事故：全新的 Co-EDCA 参数组合），也应该有一条预测-实测的核账
+# 记录进入 R5 校准表，否则反思模块对"当场新决策"完全失明，只能靠迭代模块
+# 的下一次 attempt 才有机会发现问题（还得挂了 goal 才会跑）。这里复用
+# Validator 自伤门（层 3）已经算过的闭式估算（EDCA 抢占份额 / Co-SR 功率
+# delta）反推方向性预测，不新增计算路径。
+DECISION_PREDICTION_KIND = "decision_prediction"
+# Co-EDCA：预测抢占份额相对协商前的比值门槛。
+DECISION_EDCA_IMPROVE_SHARE_RATIO = 1.1
+DECISION_EDCA_DEGRADE_SHARE_RATIO = 0.9
+# Co-SR：己方功率调整量门槛（dB）。
+DECISION_SR_MARGIN_DELTA_DB = 1.0
+
+
+def predict_decision_verdicts(
+    ap_state: dict[str, Any], decision: dict[str, Any], strategy: str | None,
+) -> dict[str, str]:
+    """从这次决策本身反推方向性预测（improved/neutral/degraded）。
+
+    只对决策里确实改动了参数的 AP 出预测；未被动的 AP 不猜。
+    Key 形如 "ap1:BE"（Co-EDCA 按 AC）或 "ap1:co_sr"（Co-SR 按功率）。
+    """
+    if not isinstance(ap_state, dict) or not isinstance(decision, dict) or not strategy:
+        return {}
+    from ..tools import edca as _edca
+
+    predictions: dict[str, str] = {}
+    if strategy in ("co_edca", "joint"):
+        for ac in ("BE", "VI"):
+            shares = _edca.predict_access_share(ap_state, decision, ac=ac)
+            for ap_id, item in shares.items():
+                params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
+                group = (
+                    _edca.extract_param_groups(params).get(ac)
+                    if isinstance(params, dict) else None
+                )
+                ratio = item.get("share_ratio")
+                if not group or ratio is None or not _edca_group_changed(ap_state[ap_id], ac, group):
+                    continue
+                if ratio >= DECISION_EDCA_IMPROVE_SHARE_RATIO:
+                    verdict = "improved"
+                elif ratio <= DECISION_EDCA_DEGRADE_SHARE_RATIO:
+                    verdict = "degraded"
+                else:
+                    verdict = "neutral"
+                predictions[f"{ap_id}:{ac}"] = verdict
+    if strategy in ("co_sr", "joint"):
+        for ap_id, state in ap_state.items():
+            if not isinstance(state, dict):
+                continue
+            key = ap_id.lower()
+            params = decision.get(key) or decision.get(ap_id) or {}
+            if not isinstance(params, dict) or params.get("tx_power_dbm") is None:
+                continue
+            try:
+                current = float(state.get("tx_power_dbm", 20.0))
+                delta = float(params["tx_power_dbm"]) - current
+            except (TypeError, ValueError):
+                continue
+            if abs(delta) < 1e-9:
+                continue  # 提案值跟当前值一致：这个 AP 没被这次决策实际改动，不猜
+            if delta >= DECISION_SR_MARGIN_DELTA_DB:
+                verdict = "improved"
+            elif delta <= -DECISION_SR_MARGIN_DELTA_DB:
+                verdict = "degraded"
+            else:
+                verdict = "neutral"
+            predictions[f"{key}:co_sr"] = verdict
+    return predictions
+
+
+def _edca_group_changed(state: dict[str, Any], ac: str, group: dict[str, Any]) -> bool:
+    """提案的 CWmin/AIFSN 跟当前状态相比是否真的变了（而不只是显式重申现值）。"""
+    from ..tools.edca import state_cw_aifsn
+    cur_cwmin, cur_aifsn = state_cw_aifsn(state, ac)
+    proposed_cwmin, proposed_aifsn = group.get("CWmin"), group.get("AIFSN")
+    if proposed_cwmin is not None and int(proposed_cwmin) != cur_cwmin:
+        return True
+    if proposed_aifsn is not None and int(proposed_aifsn) != cur_aifsn:
+        return True
+    return False
+
+
+def _score_to_verdict(score: float) -> str:
+    from .outcome import DEGRADE_THRESHOLD, IMPROVE_THRESHOLD
+    if score >= IMPROVE_THRESHOLD:
+        return "improved"
+    if score <= DEGRADE_THRESHOLD:
+        return "degraded"
+    return "neutral"
+
+
+def reconcile_decision_predictions(
+    store: Any, run_id: str, episode: dict[str, Any], final_deltas: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把"这次决策本身"的预测跟最终评估窗口的 per-AP 实测得分核账。
+
+    跟 reconcile_memory_reliance 的关系：那个函数核对的是复用的历史记忆是否
+    仍可信；这个函数核对的是这次协商当场做出的新决策，不管有没有依赖任何
+    历史记忆、有没有挂 goal，只要评估窗口收割了就跑。只写 reconciliation
+    表（R5 校准证据），不写矛盾账本——预测不是"可隔离的记忆"，没有隔离的
+    对象，写矛盾账本也无处生效（红线 9：反思只降权不删除，删权对象必须是
+    记忆记录）。
+    """
+    outcome = {"processed": 0, "verified": 0, "contradicted": 0}
+    if not enabled():
+        return outcome
+    ap_state = episode.get("initial_state")
+    decision = episode.get("decision")
+    strategy = episode.get("strategy")
+    per_ap_deltas = (final_deltas or {}).get("per_ap") or {}
+    if not per_ap_deltas:
+        return outcome
+    predictions = predict_decision_verdicts(ap_state, decision, strategy)
+    for key, predicted in predictions.items():
+        ap_id = key.split(":", 1)[0]
+        ap_delta = per_ap_deltas.get(ap_id)
+        if ap_delta is None:
+            continue
+        observed = _score_to_verdict(float(ap_delta.get("score") or 0.0))
+        result = reconcile_verdicts(predicted, observed)
+        first_time = store.record_reconciliation(
+            memory_kind=DECISION_PREDICTION_KIND, memory_key=key, run_id=run_id,
+            predicted=predicted, observed=observed, result=result,
+            trust_at_injection=None,
+        )
+        outcome["processed"] += 1
+        if first_time:
+            if result == "verified":
+                outcome["verified"] += 1
+            elif result == "contradicted":
+                outcome["contradicted"] += 1
+    return outcome
 
 
 def enabled() -> bool:

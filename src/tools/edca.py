@@ -279,7 +279,7 @@ def access_weight(cwmin: int, aifsn: int) -> float:
     return 1.0 / (max(1, int(aifsn)) + (max(1, int(cwmin)) + 1) / 2.0)
 
 
-def _state_cw_aifsn(state: dict, ac: str) -> tuple[int, int]:
+def state_cw_aifsn(state: dict, ac: str) -> tuple[int, int]:
     aliases = _STATE_AC_ALIASES.get(ac, _STATE_AC_ALIASES["BE"])
     cwmin = _first_present(state, aliases["CWmin"])
     aifsn = _first_present(state, aliases["AIFSN"])
@@ -301,7 +301,7 @@ def predict_access_share(
         if not isinstance(state, dict):
             continue
         key = ap_id.lower()
-        cur_cwmin, cur_aifsn = _state_cw_aifsn(state, ac)
+        cur_cwmin, cur_aifsn = state_cw_aifsn(state, ac)
         before_weights[key] = access_weight(cur_cwmin, cur_aifsn)
 
         params = proposed_edca.get(key) or proposed_edca.get(ap_id) or {}

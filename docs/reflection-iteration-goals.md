@@ -6,6 +6,14 @@
 > 两条新红线已并入 `docs/memory-module.md` 安全原则（第 9、10 条）。
 > 本文档定义两个模块的验收目标、架构落点和分阶段路线。
 > 记忆体系现状见 `docs/memory-module.md`，演进历史见 `docs/memory-architecture.md`。
+>
+> **阶段 8 补丁（2026-07-09，真实 ns-3 联调触发）**：一次真实协商暴露出
+> R4 的结构性空当——矛盾账本只核对"复用的历史记忆"，一次协商如果完全没
+> 依赖任何历史记忆（当场想出的新参数组合），预测-实测核账就完全不会发生，
+> 不管协商结果多离谱都不会留下任何校准证据；同一次事故也让 Validator 补了
+> 第三层"自伤幅度门"（见下方"六、事后补丁"）。两个补丁都不改 schema、
+> 不新增开关，复用既有的 `reconciliation`/`memory_contradictions` 表和
+> MULTIAP_REFLECTION 总开关。
 
 ## 一、动机与现状差距
 
@@ -167,3 +175,47 @@
 阶段 1–4 只影响"注入什么记忆"，不改变协商行为本身，风险低；
 阶段 5–7 引入新行为，需配 mock 场景回归。全部开关：
 `MULTIAP_REFLECTION=0`、`MULTIAP_GOALS=0` 可整体禁用回退。
+
+## 六、阶段 8 事后补丁（真实 ns-3 联调触发，2026-07-09）
+
+跑了三轮真实 ns-3 协商 + 挂 goal 的迭代链之后，实测暴露三个问题，均已修复
+（commit `fabc5df`、`b73a273` 及本次）：
+
+1. **迭代模块停机准则漏了一条路径**（I4）：一次 attempt 如果在产出决策前
+   就失败（如 LLM context overflow 导致提案解析失败），不会登记评估窗口，
+   `refresh_goal_after_evaluation` 永远不会被触发，预算耗尽即便已经打满
+   也不会转 `blocked`，目标卡死在 `active`。修法：`goals.record_attempt_result`
+   的失败分支里补跑一次 `refresh_goal_after_evaluation`（成功分支不变，
+   避免在评估窗口结算前抢先误判 blocked，见 `src/memory/goals.py`）。
+
+2. **Validator 只做参数合法性 + 优先级排序，没有幅度检查**：一次 Co-EDCA
+   提案把 low 优先级 AP 的 CWmin/AIFSN 拉到 [32,7]，排序完全合规
+   （low 本该更保守），但幅度极端到把自己的信道抢占能力压到接近零——
+   实测 iperf 吞吐从 11.3Mbps 崩到 0，Validator 全程放行。补的是 Validator
+   第三层"自伤幅度门"：Co-EDCA 用闭式估算的信道抢占份额跌幅
+   （`src/tools/edca.py: predict_access_share/detect_self_harm`），
+   Co-SR 复用已有的 STA RSSI 安全下界逻辑但接上强制网关
+   （`src/tools/sr.py: detect_self_harm`），都在 `src/validator.py` 里
+   接成必过的第三层检查，不依赖真实观测。EDCA 一侧留了"邻居确有 SLA
+   违规"的正当牺牲例外，Co-SR 一侧是硬性安全底线不设例外。
+
+3. **反思模块对"当场新决策"完全失明**：矛盾账本（R4）只对*复用的历史
+   记忆*做预测-实测核账；本次事故那类全新参数组合，从未进入任何账本，
+   哪怕协商结果离谱到吞吐归零，也不会给 R5 校准表留下任何证据，更不会
+   有任何机制提示"这类决策该被质疑"——除非挂了 goal 靠迭代链下一次
+   attempt 才可能被归因，日常协商（不挂 goal）出同样的事故完全没有后续。
+   补的是 `src/memory/reflection.py: predict_decision_verdicts /
+   reconcile_decision_predictions`：复用 Validator 自伤门已经算出的闭式
+   估算（EDCA 份额比 / Co-SR 功率 delta）反推这次决策的方向性预测，
+   跟评估窗口的 per-AP 实测得分核账，写进已有的 `reconciliation` 表
+   （`memory_kind="decision_prediction"`，`trust_at_injection=None`）。
+   接入点是 `outcome.py: apply_evaluation_to_episode`，跟 R4 的
+   `reconcile_memory_reliance` 并列执行，**不管这次协商有没有依赖历史
+   记忆、有没有挂 goal 都会跑**——不写矛盾账本（预测不是可隔离的记忆对象，
+   红线 9 的隔离动作没有作用对象），只写 R5 校准表；`calibration_report`
+   新增按 `memory_kind` 的 `by_kind` 明细，把"记忆复用是否可信"和
+   "新决策的预测准不准"分开看。
+
+用真实事故的原始数据（run_id=`ea70736a`）回放验证：新 Validator 正确拒绝
+了当时被放行的决策；`predict_decision_verdicts` 对同一份数据算出的方向
+（ap1 degraded / ap2 improved / ap3 neutral）跟实测完全吻合。
