@@ -1,0 +1,132 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=ccefb4eb event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/basic_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_064615_ccefb4eb.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我本机的最新实测状态：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+EDCA 竞争窗口：CWmin=31、CWmax=63、AIFSN=7（BE 与 VI 类别参数一致）
+
+信道与感知指标
+邻居 AP RSSI（本机扫描）：ap2 = -80.99 dBm，ap3 = -71.96 dBm
+己方关联 STA RSSI：-45.71 dBm
+噪声底（Noise Floor）与 TX Retries Ratio：当前状态未上报，暂缺
+
+业务质量
+用户侧吞吐（throughput_mbps_user）：0.32 Mbps
+端到端时延：492.01 ms
+丢包率：0%
+抖动（Jitter）：2.15 ms
+业务类型：best_effort，流量优先级：medium
+
+STA QoE/SLA 反馈
+关联 STA（sta_ap1_user）当前 SLA 状态为 violated（违反）。
+具体违反项：吞吐量 0.32 Mbps 低于 SLA 下限 0.5 Mbps；时延 492.01 ms 超过 SLA 上限 300 ms。丢包已恢复至 0%（此前曾出现高丢包）。
+
+状态简述
+本节点 STA 信号强度良好（-45.71 dBm），但业务 SLA 仍因吞吐不足和时延超标而违规。邻居干扰方面，ap3 的 RSSI（-71.96 dBm）相对较强，可能对并发造成一定压力；ap2 距离较远（-80.99 dBm），干扰较弱。整体信道竞争参数（CW/AIFSN）较为保守，但未能有效缓解时延问题，后续需结合全局状态评估是否引入 Co-SR 或 Co-EDCA 调整。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我本机的最新实测状态：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+EDCA 竞争窗口：CWmin=7、CWmax=15、AIFSN=2（BE 与 VI 类别参数一致）
+
+信道与感知指标
+邻居 AP RSSI（本机扫描）：ap1 = -80.99 dBm，ap3 = -71.96 dBm
+己方关联 STA RSSI：-45.71 dBm
+噪声底（Noise Floor）：当前状态未上报，暂缺
+TX Retries Ratio：当前状态未上报，暂缺
+
+业务质量
+用户侧吞吐（throughput_mbps_user）：8.33 Mbps
+端到端时延：11.46 ms
+丢包率：0%
+抖动（Jitter）：1.99 ms
+业务类型：best_effort，流量优先级：medium
+
+STA QoE/SLA 反馈
+关联 STA（sta_ap2_user）当前 SLA 状态为 satisfied（满足）。
+吞吐量 8.33 Mbps 远高于 SLA 下限 0.5 Mbps；时延 11.46 ms 远低于 SLA 上限 300 ms；无丢包。
+
+状态简述
+本节点 STA 信号强度良好（-45.71 dBm），业务质量稳定且 SLA 完全满足。邻居干扰方面，ap3 的 RSSI（-71.96 dBm）相对较强，可能对并发造成一定压力；ap1 距离较远（-80.99 dBm），干扰较弱。整体信道竞争参数较为宽松（CWmin=7/CWmax=15），当前无需紧急调整。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我本机的最新实测状态：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+EDCA 竞争窗口：CWmin=15、CWmax=31、AIFSN=3（BE 与 VI 类别参数一致）
+
+信道与感知指标
+邻居 AP RSSI（本机扫描）：ap1 = -71.96 dBm，ap2 = -71.96 dBm
+己方关联 STA RSSI：-45.71 dBm
+
+业务质量
+用户侧吞吐（throughput_mbps_user）：8.08 Mbps
+端到端时延：6.56 ms
+丢包率：25.35%
+抖动（Jitter）：1.95 ms
+业务类型：best_effort，流量优先级：medium
+
+STA QoE/SLA 反馈
+关联 STA（sta_ap3_user）当前 SLA 状态为 violated（违反）。
+具体违反项：丢包率 25.35% 远超 SLA 上限 5%；吞吐与时延均满足要求。
+
+状态简述
+本节点 STA 信号强度良好（-45.71 dBm），吞吐与时延表现正常，但丢包率高达 25.35%，严重违反 SLA。邻居干扰方面，ap1 和 ap2 的 RSSI 均为 -71.96 dBm，距离相近且干扰较强，可能是导致高丢包的主要原因之一。整体信道竞争参数较为保守，后续需结合全局状态评估是否引入 Co-SR 或 Co-EDCA 调整以缓解干扰。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.331335
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.331335；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.331335；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 227s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=-0.0435, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=-0.043514 confidence=0.75

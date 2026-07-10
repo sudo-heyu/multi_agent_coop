@@ -1,0 +1,7 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=576c982c event_db=logs/experiments/probe_4profiles_2rep_current2/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_214607_576c982c.jsonl

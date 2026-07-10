@@ -1,0 +1,32 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=e9b02219 event_db=logs/experiments/probe_script_retry_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_164447_e9b02219.jsonl
+
+[1m[96mAP1[0m:
+我是AP1，以下是我的实测状态：
+
+MAC与信道参数：
+TX Power：10 dBm
+EDCA参数：CWmin=15，CWmax=63，AIFSN=7（BE类别）；VI类别为CWmin=7，CWmax=15，AIFSN=2
+
+感知指标：
+邻居AP RSSI：ap2为-80.99 dBm，ap3为-71.96 dBm
+己方STA RSSI：-45.71 dBm
+噪声底噪：未在当前状态中提供
+
+业务质量：
+业务类型：大文件下载（bulk_download），优先级为low
+用户侧吞吐：约1.03 Mbps
+延迟：约5.57 ms
+抖动：约4.87 ms
+丢包率：0%
+
+STA反馈：
+我关联的STA（sta_ap1_user）SLA状态为"satisfied"，无违反项。该STA的流量类型为bulk_download，优先级low，接入类别AC_VI，其测量值显示吞吐1.03 Mbps、延迟5.57 ms、丢包0%，均满足SLA要求（最大延迟500ms、最大丢包10%、最小吞吐1Mbps）。
+
+状态简述：
+当前信道负载情况正常，STA连接质量良好（RSSI -45.71 dBm，SINR 48.29 dB），业务SLA完全满足。邻居干扰方面，ap3的信号较强（-71.96 dBm），可能对Co-SR并发产生一定影响；ap2信号较弱（-80.99 dBm），干扰较小。整体网络状态稳定，暂无SLA违规。

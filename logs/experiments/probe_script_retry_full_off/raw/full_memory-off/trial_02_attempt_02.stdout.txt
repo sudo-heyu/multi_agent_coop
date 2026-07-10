@@ -1,0 +1,64 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=3987523c event_db=logs/experiments/probe_script_retry_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_164542_3987523c.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测参数与状态：
+
+MAC 参数：TX Power 为 10 dBm；CWmin=15、CWmax=63、AIFSN=7（BE 类别）。
+
+感知指标：本机扫描到的邻居 AP 信号强度为 ap2=-80.99 dBm、ap3=-71.96 dBm；己方关联 STA 的 RSSI 为 -45.71 dBm。
+
+业务质量：当前业务为大文件下载（bulk_download），优先级 low；用户侧吞吐约 1.02 Mbps，时延约 6.18 ms，丢包率 0%。
+
+STA 反馈：当前有 1 个关联 STA，SLA 状态为 satisfied，无违反或告警记录。
+
+状态简述：信道负载情况正常，邻居信号中 ap3 相对较强（-71.96 dBm），但 ap2 较弱（-80.99 dBm）；本节点业务质量稳定，STA 体验良好，暂无明显干扰或拥塞问题。
+
+[1m[92mAP2[0m:
+我是 AP2。当前状态如下：
+
+MAC 与信道参数：TX Power 为 10 dBm；EDCA 参数 CWmin=7、CWmax=15、AIFSN=2（BE/VI 队列一致）。
+
+业务质量：承载 live_stream（直播）业务，优先级 high。用户侧吞吐约 4.04 Mbps，时延约 7.5 ms，抖动约 3.86 ms，丢包率 0%。
+
+感知指标：己方 STA RSSI 为 -45.71 dBm，信号良好；噪声底噪未单独列出但 SINR 表现正常。邻居 AP RSSI 方面，本机扫描到 ap1 为 -80.99 dBm、ap3 为 -71.96 dBm。
+
+STA 反馈：关联 STA（sta_ap2_user）SLA 全部满足，无违反项，QoE 稳定。
+
+简述：本节点业务运行平稳，STA 链路质量优秀；对 ap1 的干扰较弱（-81 dBm），对 ap3 的中度干扰需关注（-72 dBm），整体信道负载不高。
+
+[1m[93mAP3[0m:
+我是AP3。以下是我的实测状态：
+
+MAC与信道参数：
+TX Power：10 dBm
+EDCA参数：CWmin=15，CWmax=31，AIFSN=3（BE业务）；VI业务的CWmin=7，CWmax=15，AIFSN=2
+
+业务质量指标：
+用户侧吞吐：约1.53 Mbps
+延迟：约6.9 ms
+抖动：约5.8 ms
+丢包率：0%
+
+感知指标：
+己方STA RSSI：-45.7 dBm
+噪声底噪：未检测到异常
+邻居AP RSSI（本机扫描）：AP1为-72.0 dBm，AP2为-72.0 dBm
+
+当前状态简述：
+我的信道负载处于正常水平，邻居AP的信号强度在可接受范围内（约-72 dBm），未出现强干扰迹象。业务质量稳定，无丢包，延迟和抖动均在合理范围。
+
+STA QoE/SLA反馈：
+我关联的STA（sta_ap3_user）运行best_effort类型的普通业务，优先级为medium。该STA的所有SLA指标均满足要求：吞吐量1.53 Mbps高于最低要求0.5 Mbps，延迟6.9 ms远低于300 ms上限，丢包率0%低于5%上限。未发现任何SLA违规或告警。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.1ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.07Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.53Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(2.9ms)[0m  [1m[92m全部合规[0m  [90map1=15/63/7  ap2=7/15/2  ap3=10/31/3[0m

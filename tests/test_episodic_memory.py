@@ -12,12 +12,20 @@ from src.persistence import EventStore
 
 
 class EpisodicMemoryTests(unittest.TestCase):
-    def _run(self, store, run_id, state, *, outcome="success", latency_delta=-20):
+    def _run(
+        self, store, run_id, state, *, outcome="success", latency_delta=-20,
+        qos_acceptance=None, validation_extra=None,
+    ):
         store.start_run(run_id, mode="mock", scene="edca", model="openclaw")
         store.append_event(run_id, "session_start", {"model": "openclaw", "scene": "edca", "ap_state": state})
         decision = {ap: {"CWmin": 7, "CWmax": 31, "AIFSN": 3} for ap in ("ap1", "ap2", "ap3")}
         store.append_event(run_id, "final_decision", {"decision": decision, "raw_response": "{}"})
-        store.append_event(run_id, "validation_result", {"approved": outcome == "success", "strategy": "co_edca", "summary": outcome})
+        validation = {"approved": outcome == "success", "strategy": "co_edca", "summary": outcome}
+        if qos_acceptance is not None:
+            validation["qos_acceptance"] = qos_acceptance
+        if validation_extra:
+            validation.update(validation_extra)
+        store.append_event(run_id, "validation_result", validation)
         observed = copy.deepcopy(state)
         for row in observed.values():
             row["latency_ms"] = row.get("latency_ms", 100) + latency_delta
@@ -36,6 +44,128 @@ class EpisodicMemoryTests(unittest.TestCase):
         self.assertEqual(loaded["decision"], episode["decision"])
         self.assertTrue(loaded["metrics"]["available"])
         self.assertGreaterEqual(loaded["quality_score"], 0.9)
+
+    def test_qos_acceptance_materializes_immediate_degraded_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "qos-inline.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(
+                store, "bad-qos", state,
+                qos_acceptance={
+                    "verdict": "degraded",
+                    "confidence": 0.82,
+                    "approved": False,
+                    "reason": "score below threshold",
+                    "deltas": {"score": -0.12},
+                },
+            )
+            loaded = store.get_episode(run_id="bad-qos")
+            agent_case = store.list_agent_episodes("ap1", min_quality=0.0)[0]
+            recalled = find_episode_memory(store, state)
+            store.close()
+
+        self.assertEqual(loaded["evaluation"]["final_verdict"], "degraded")
+        self.assertEqual(loaded["evaluation"]["source"], "qos_acceptance")
+        self.assertTrue(loaded["evaluation"]["needs_rollback"])
+        self.assertEqual(loaded["lifecycle"], "warning")
+        self.assertGreater(loaded["quality_vector"]["outcome_confidence"], 0.8)
+        self.assertEqual(agent_case["evaluation"]["final_verdict"], "degraded")
+        self.assertEqual([item["run_id"] for item in recalled["warnings"]], ["bad-qos"])
+
+    def test_qos_acceptance_materializes_immediate_positive_memory(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "qos-positive.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(
+                store, "good-qos", state,
+                qos_acceptance={
+                    "verdict": "improved",
+                    "confidence": 0.9,
+                    "approved": True,
+                    "deltas": {"score": 0.08},
+                },
+            )
+            recalled = find_episode_memory(store, state)
+            loaded = store.get_episode(run_id="good-qos")
+            store.close()
+
+        self.assertEqual(loaded["evaluation"]["final_verdict"], "improved")
+        self.assertEqual(loaded["lifecycle"], "trusted")
+        self.assertEqual([item["run_id"] for item in recalled["positive"]], ["good-qos"])
+
+    def test_failed_neutral_qos_acceptance_is_recalled_as_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "qos-neutral-warning.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(
+                store, "neutral-failed-qos", state,
+                qos_acceptance={
+                    "verdict": "neutral",
+                    "confidence": 0.75,
+                    "approved": False,
+                    "deltas": {"score": -0.03},
+                },
+            )
+            recalled = find_episode_memory(store, state)
+            loaded = store.get_episode(run_id="neutral-failed-qos")
+            store.close()
+
+        self.assertEqual(
+            [item["run_id"] for item in recalled["warnings"]],
+            ["neutral-failed-qos"],
+        )
+        self.assertEqual(loaded["lifecycle"], "warning")
+        self.assertLessEqual(loaded["quality_score"], 0.45)
+
+    def test_positive_near_miss_qos_acceptance_is_recalled_as_reference(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "qos-near-miss.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(
+                store, "neutral-near-miss", state,
+                qos_acceptance={
+                    "verdict": "neutral",
+                    "confidence": 0.75,
+                    "approved": False,
+                    "deltas": {"score": 0.04},
+                },
+            )
+            recalled = find_episode_memory(store, state)
+            loaded = store.get_episode(run_id="neutral-near-miss")
+            store.close()
+
+        self.assertEqual(
+            [item["run_id"] for item in recalled["positive"]],
+            ["neutral-near-miss"],
+        )
+        self.assertEqual(recalled["warnings"], [])
+        self.assertEqual(loaded["lifecycle"], "evaluated")
+        self.assertGreaterEqual(loaded["quality_score"], 0.55)
+
+    def test_observed_sla_validation_failure_materializes_degraded_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = EventStore(Path(td) / "sla-warning.sqlite3")
+            state = copy.deepcopy(MOCK_SCENES["edca"])
+            self._run(
+                store, "sla-failed",
+                state,
+                validation_extra={
+                    "approved": False,
+                    "summary": "验证失败：决策后引入新的 STA SLA 违规",
+                    "global_errors": ["决策后引入新的 STA SLA 违规: ['sta_ap1_user']"],
+                    "sta_qoe": {"checked": True, "approved": False},
+                    "new_violations": [{"sta_id": "sta_ap1_user"}],
+                },
+            )
+            loaded = store.get_episode(run_id="sla-failed")
+            recalled = find_episode_memory(store, state)
+            store.close()
+
+        self.assertEqual(loaded["evaluation"]["source"], "validation_result")
+        self.assertEqual(loaded["evaluation"]["final_verdict"], "degraded")
+        self.assertTrue(loaded["evaluation"]["needs_rollback"])
+        self.assertEqual(loaded["lifecycle"], "warning")
+        self.assertEqual([item["run_id"] for item in recalled["warnings"]], ["sla-failed"])
 
     def test_materialization_creates_agent_scoped_long_term_cases(self):
         with tempfile.TemporaryDirectory() as td:

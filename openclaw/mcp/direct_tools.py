@@ -53,7 +53,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "rank_sr_candidates": "对多个 Co-SR 候选功率方案按目标排序。",
     "validate_edca_proposal": (
-        "校验 EDCA 提案范围和 high/medium/low 优先级单调性。"
+        "校验 EDCA 提案范围、可下发 CW 离散值（3/7/15/31/63/127/255/511/1023）"
+        "和 high/medium/low 优先级单调性。"
     ),
 }
 
@@ -148,7 +149,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "proposed_edca": {
                 "type": ["object", "string"],
                 "description": (
-                    'EDCA 提案，如 {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}'
+                    'EDCA 提案，如 {"ap1": {"CWmin":15,"CWmax":63,"AIFSN":3}, ...}；'
+                    "CWmin/CWmax 必须取 2^n-1 离散值，如 3/7/15/31/63/127。"
                 ),
             },
         },

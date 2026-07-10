@@ -314,6 +314,13 @@ def _validate_edca_range(params: dict) -> list[str]:
             errors.append(f"{key} 缺失")
         elif not (lo <= val <= hi):
             errors.append(f"{key}={val} 超出范围 [{lo}, {hi}]")
+        elif key in {"CWmin", "CWmax"} and not _edca.is_valid_cw_value(val):
+            nearest = _edca.ecw_to_cw(_edca.cw_to_ecw(int(val)))
+            errors.append(
+                f"{key}={int(val)} 不是可下发竞争窗口值；"
+                f"必须取 2^n-1（如 {_edca.CANONICAL_CW_VALUES}），"
+                f"最接近会被编码为 {nearest}"
+            )
     cwmin = params.get("CWmin", 0)
     cwmax = params.get("CWmax", 0)
     if cwmax <= cwmin:

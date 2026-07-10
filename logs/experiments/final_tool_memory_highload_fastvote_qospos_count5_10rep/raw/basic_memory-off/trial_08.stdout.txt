@@ -1,0 +1,54 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=7d694bde event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/basic_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_052354_7d694bde.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态：
+
+MAC 与信道参数：当前 TX Power 为 10 dBm；EDCA 参数 CWmin=31、CWmax=63、AIFSN=7（BE 和 VI 队列一致）。
+
+业务质量：当前用户侧吞吐约 0.16 Mbps，平均时延约 492 ms，抖动约 2.3 ms，丢包率高达 92.16%。
+
+感知指标：己方关联 STA 的 RSSI 为 -45.7 dBm，信号良好；本机扫描到的邻居 AP 中，ap2 的 RSSI 约为 -81.0 dBm，ap3 的 RSSI 约为 -72.0 dBm。
+
+STA 反馈：我关联的唯一 STA（sta_ap1_user）当前 SLA 状态为 violated。该 STA 同时违反了三项指标：吞吐不足（实际 0.16 Mbps < 阈值 0.5 Mbps）、时延超标（492 ms > 300 ms）、丢包严重（92.16% > 5%），反馈信息为 throughput_mbps=0.1599 violates throughput>=0.5; latency_ms=492.453 violates latency<=300; packet_loss_pct=92.1569 violates loss<=5。
+
+状态简述：本节点信道竞争参数偏保守（CWmin/CWmax 较大），STA 端出现严重的吞吐瓶颈和高丢包，SLA 全面违约；邻居 ap3 的信号相对较强（-72 dBm），可能存在一定干扰影响。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测参数与状态：
+
+MAC/信道参数：发射功率（TX Power）为 10 dBm；EDCA 参数方面，CWmin=7、CWmax=15、AIFSN=2（BE 和 VI 队列均为此配置）。
+
+信道质量：当前 STA RSSI 为 -45.71 dBm，信号强度良好；本机扫描到的邻居 AP 中，ap1 的 RSSI 为 -80.99 dBm，ap3 的 RSSI 为 -71.96 dBm，干扰水平处于中等偏弱范围。
+
+业务质量：用户侧吞吐约 8.08 Mbps，平均时延约 7.96 ms，抖动约 1.98 ms，丢包率为 0%。
+
+STA 反馈：关联 STA（sta_ap2_user）的 SLA 状态为 satisfied，未检测到任何违反项（violated_count=0），QoE 表现稳定。
+
+简述：本节点当前运行平稳，STA 连接质量良好，SLA 完全满足；邻居干扰适中（ap3 相对较强但仍在可接受范围），信道竞争压力不大，整体状态健康。
+
+[1m[93mAP3[0m:
+我是 AP3，以下是我的实测状态：
+
+MAC 与信道参数：当前 TX Power 为 10 dBm；EDCA 参数 CWmin=15、CWmax=31、AIFSN=3（BE 和 VI 队列一致）。
+
+业务质量：当前用户侧吞吐约 4.96 Mbps，平均时延约 488.5 ms，抖动约 2.1 ms，丢包率约 23.2%。
+
+感知指标：己方关联 STA 的 RSSI 为 -45.7 dBm，信号良好；本机扫描到的邻居 AP 中，ap1 的 RSSI 约为 -72.0 dBm，ap2 的 RSSI 约为 -72.0 dBm。
+
+STA 反馈：我关联的唯一 STA（sta_ap3_user）当前 SLA 状态为 violated。该 STA 违反了时延和丢包两项指标：时延超标（488.5 ms > 300 ms阈值）、丢包严重（23.2% > 5%阈值）；吞吐指标正常（4.96 Mbps > 0.5 Mbps阈值）。
+
+状态简述：本节点 EDCA 参数相对激进（退避窗口较小），但 STA 端仍出现高时延和高丢包，SLA 违约；邻居 ap1 和 ap2 的信号强度相当且较强（均约 -72 dBm），可能存在同频干扰影响。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(3.3ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.17Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=6.88Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(3.9ms)[0m  [1m[33m弱化结果：仅范围/格式检查[0m  [90map1=7/15/2  ap2=7/15/2  ap3=15/31/3[0m
+  [90m弱工具档位只返回参数范围/格式合法性；优先级排序、QoE 权衡和历史效果需要结合状态与记忆自行判断，最终系统 Validator/评估窗口仍会验收。[0m

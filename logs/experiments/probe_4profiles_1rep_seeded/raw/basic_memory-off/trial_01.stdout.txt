@@ -1,0 +1,20 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=basic memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=55e894b4 event_db=logs/experiments/probe_4profiles_1rep_seeded/db/basic_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_012715_55e894b4.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态：
+
+MAC/信道参数：发射功率 10 dBm；BE 队列 CWmin=31、CWmax=63、AIFSN=7；VI 队列 CWmin=7、CWmax=15、AIFSN=2。
+
+感知指标：本机扫描到邻居 AP2 的 RSSI 为 -80.99 dBm，邻居 AP3 的 RSSI 为 -71.96 dBm；己方关联 STA 的 RSSI 为 -45.71 dBm。
+
+业务质量：当前运行 bulk_download（大文件下载）业务，优先级 low。实测用户侧吞吐约 0.97 Mbps，时延约 5.67 ms，抖动约 5.55 ms，丢包率 0%。
+
+STA 反馈：关联 STA 的 SLA 出现一项违反——吞吐量 0.971 Mbps 略低于 SLA 要求的 1.0 Mbps 下限，其余指标（时延、丢包等）均正常。
+
+状态简述：信道竞争参数处于中等水平，邻居信号强度适中（ap3 相对较强），但当前吞吐刚好触及 SLA 下界，存在轻微违规风险。

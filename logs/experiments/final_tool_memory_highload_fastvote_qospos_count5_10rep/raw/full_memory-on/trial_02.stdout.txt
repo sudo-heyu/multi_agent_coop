@@ -1,0 +1,34 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=full memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=e195c94e event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/full_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_071624_e195c94e.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态广播：
+
+MAC 与信道参数
+发射功率 (TX Power)：10 dBm
+EDCA 参数：CWmin=31、CWmax=63、AIFSN=7（BE 与 VI 队列一致）
+当前业务优先级：medium（best_effort / 普通业务）
+
+干扰与信号感知
+己方关联 STA RSSI：-45.71 dBm（信号良好）
+噪声底噪：约 -94 dBm
+邻居 AP 扫描 RSSI：ap2 ≈ -81.0 dBm，ap3 ≈ -72.0 dBm（ap3 相对较强，存在一定同频干扰风险）
+
+业务质量指标
+用户侧吞吐：≈ 0.32 Mbps
+端到端时延：≈ 487 ms
+丢包率：0%
+抖动：≈ 1.8 ms
+
+STA QoE/SLA 反馈
+本机关联 1 个 STA，SLA 状态为 violated。主要违反项：
+吞吐量 0.32 Mbps < SLA 下限 0.5 Mbps；
+时延 487 ms > SLA 上限 300 ms。
+
+状态简述
+本节点 STA 信号强度充足，但吞吐与时延均未达标；ap3 的邻居 RSSI 偏强（-72 dBm），信道竞争压力较大，EDCA 退避窗口已设至 31/63 仍未能有效缓解拥塞，整体处于高负载低效状态，亟需通过 Co-SR 或 Co-EDCA 协作优化。

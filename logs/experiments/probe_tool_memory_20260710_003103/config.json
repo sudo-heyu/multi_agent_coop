@@ -1,0 +1,23 @@
+{
+  "mode": "ns3",
+  "scene": "sr",
+  "server": "http://127.0.0.1:5001",
+  "ap_config": "config/ap_endpoints.json",
+  "acceptance": "qos",
+  "profiles": "none,basic,full,faulty",
+  "memories": "off,on",
+  "repetitions": 1,
+  "max_steps": 12,
+  "state_wait": 10.0,
+  "observation_wait": 5.0,
+  "eval_windows": "off",
+  "model": "",
+  "base_url": "",
+  "stream_timeout": null,
+  "max_tool_rounds": null,
+  "timeout": 360.0,
+  "out_dir": "logs/experiments/probe_tool_memory_20260710_003103",
+  "plot_only": "",
+  "dry_run": false,
+  "stop_on_failure": false
+}

@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 383, in <module>
+    main()
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 310, in main
+    result = orch.structured_relay(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2374, in structured_relay
+    return _structured_relay_impl(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2560, in _structured_relay_impl
+    p = run_propose(
+        ^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1756, in run_propose
+    reply, _ = _run_agent_turn(
+               ^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1698, in _run_agent_turn
+    reply = driver(
+            ^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 175, in speak
+    return self._chat_loop(ap, messages, on_text_delta)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 249, in _chat_loop
+    text, tool_calls = self._stream_once(messages, on_text_delta)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 298, in _stream_once
+    raise RuntimeError(f"PPIO stream API HTTP {resp.status_code}: {body}")
+RuntimeError: PPIO stream API HTTP 429: {"message":"server overload, please try again later trace_id: 37849588e081c7969a96c51896b1ef5c","type":"server_overload"}
+

@@ -1,0 +1,87 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=c5486fb0 event_db=logs/experiments/probe_none_on_fastvote_qosoverride_count5_5rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_042804_c5486fb0.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率为 10 dBm，EDCA 竞争参数统一设置为 CWmin=31、CWmax=63、AIFSN=7（BE 与 VI 访问类别保持一致）。
+
+信道与干扰感知：本机扫描到的邻居 AP 信号强度为 ap2 (-81.0 dBm) 和 ap3 (-72.0 dBm)，处于中等干扰距离；己方关联 STA 的接收信号强度为 -45.7 dBm，本地链路质量良好。
+
+业务质量与 STA 反馈：当前承载 best_effort 普通业务，实测用户侧吞吐仅约 0.16 Mbps，平均延迟高达 492.12 ms，丢包率接近 49.6%。关联 STA (sta_ap1_user) 触发全面 SLA 违约，吞吐、延迟、丢包三项指标均严重超出约定阈值，QoE 极差。
+
+状态简述：当前信道竞争压力极大，高延迟与高丢包表明网络处于严重拥塞状态，业务质量极不稳定，亟需通过多 AP 协作优化缓解信道冲突与资源竞争。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率为 10 dBm，EDCA 竞争参数（CWmin/CWmax/AIFSN）统一设置为 7/15/2，BE 与 VI 访问类别保持一致。
+
+信道与干扰感知：本机扫描到的邻居 AP 信号强度为 ap1 (-81.0 dBm) 和 ap3 (-72.0 dBm)，处于中等干扰距离；己方关联 STA 的接收信号强度为 -45.7 dBm，本地链路质量良好。
+
+业务质量与 STA 反馈：当前承载 best_effort 普通业务，实测用户侧吞吐约 8.1 Mbps，平均延迟 13.5 ms，丢包率为 0%。关联 STA (sta_ap2_user) 的 SLA 状态为满足，未触发任何违约或警告，QoE 表现稳定。
+
+状态简述：本节点当前运行平稳，STA 体验良好且无 SLA 违约；邻居信号处于中等干扰范围，整体信道环境可控。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率为 10 dBm，EDCA 竞争参数（CWmin/CWmax/AIFSN）统一设置为 15/31/3，BE 与 VI 访问类别保持一致。
+
+信道与干扰感知：本机扫描到的邻居 AP 信号强度为 ap1 (-72.0 dBm) 和 ap2 (-72.0 dBm)，处于中等干扰距离；己方关联 STA 的接收信号强度为 -45.7 dBm，本地链路质量良好。（注：当前本地快照未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体数值。）
+
+业务质量与 STA 反馈：当前承载 best_effort 普通业务，实测用户侧吞吐约 6.52 Mbps，平均延迟 124.52 ms，丢包率为 6.72%。关联 STA (sta_ap3_user) 触发 SLA 违约，核心问题在于丢包率（6.72%）超出了 5% 的约定上限，QoE 受到一定影响。
+
+状态简述：本节点当前 STA 连接稳定且延迟处于合理范围，但丢包率略超 SLA 阈值。结合中等强度的邻居干扰信号，表明信道竞争仍对传输可靠性造成了一定压力，整体运行平稳但存在优化空间。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.435993
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.435993；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.435993；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 43s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=0.0137, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=0.013733 confidence=0.75

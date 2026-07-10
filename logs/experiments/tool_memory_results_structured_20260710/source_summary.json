@@ -1,0 +1,109 @@
+{
+  "conditions": [
+    {
+      "profile": "basic",
+      "memory": "off",
+      "n": 10,
+      "success_rate": 0.7,
+      "avg_turns": 7.3,
+      "avg_effect_score": 0.058201800000000005,
+      "avg_wall_duration_s": 161.5629
+    },
+    {
+      "profile": "basic",
+      "memory": "on",
+      "n": 10,
+      "success_rate": 0.7,
+      "avg_turns": 8.3,
+      "avg_effect_score": 0.1261225,
+      "avg_wall_duration_s": 62.9942
+    },
+    {
+      "profile": "faulty",
+      "memory": "off",
+      "n": 10,
+      "success_rate": 0.7,
+      "avg_turns": 6.9,
+      "avg_effect_score": 0.026066799999999998,
+      "avg_wall_duration_s": 108.0248
+    },
+    {
+      "profile": "faulty",
+      "memory": "on",
+      "n": 10,
+      "success_rate": 0.8,
+      "avg_turns": 8.2,
+      "avg_effect_score": 0.1837327,
+      "avg_wall_duration_s": 40.7643
+    },
+    {
+      "profile": "full",
+      "memory": "off",
+      "n": 10,
+      "success_rate": 0.7,
+      "avg_turns": 7.3,
+      "avg_effect_score": 0.1122238,
+      "avg_wall_duration_s": 126.4059
+    },
+    {
+      "profile": "full",
+      "memory": "on",
+      "n": 10,
+      "success_rate": 0.9,
+      "avg_turns": 8.1,
+      "avg_effect_score": 0.1874594,
+      "avg_wall_duration_s": 41.8647
+    },
+    {
+      "profile": "none",
+      "memory": "off",
+      "n": 10,
+      "success_rate": 0.3,
+      "avg_turns": 7.7,
+      "avg_effect_score": -0.0541139,
+      "avg_wall_duration_s": 152.7791
+    },
+    {
+      "profile": "none",
+      "memory": "on",
+      "n": 10,
+      "success_rate": 0.8,
+      "avg_turns": 8.2,
+      "avg_effect_score": 0.225418,
+      "avg_wall_duration_s": 51.6191
+    }
+  ],
+  "memory_gaps": [
+    {
+      "profile": "basic",
+      "turn_reduction": -1.0000000000000009,
+      "duration_reduction_s": 98.5687,
+      "success_rate_gain": 0.0,
+      "effect_gain": 0.0679207
+    },
+    {
+      "profile": "faulty",
+      "turn_reduction": -1.299999999999999,
+      "duration_reduction_s": 67.26050000000001,
+      "success_rate_gain": 0.10000000000000009,
+      "effect_gain": 0.1576659
+    },
+    {
+      "profile": "full",
+      "turn_reduction": -0.7999999999999998,
+      "duration_reduction_s": 84.5412,
+      "success_rate_gain": 0.20000000000000007,
+      "effect_gain": 0.0752356
+    },
+    {
+      "profile": "none",
+      "turn_reduction": -0.4999999999999991,
+      "duration_reduction_s": 101.16,
+      "success_rate_gain": 0.5,
+      "effect_gain": 0.2795319
+    }
+  ],
+  "rows": 92,
+  "valid_rows": 80,
+  "infra_rows": 12
+}

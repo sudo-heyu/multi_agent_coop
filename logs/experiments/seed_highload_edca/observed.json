@@ -1,0 +1,279 @@
+{
+  "ap1": {
+    "be_cwmin": 15.0,
+    "be_cwmax": 31.0,
+    "sr_reset_count": 0.0,
+    "sta_feedback_summary": {
+      "warning_count": 0.0,
+      "ap_id": "ap1",
+      "violated_count": 1.0,
+      "sta_count": 1.0,
+      "violations": [
+        {
+          "sta_id": "sta_ap1_user",
+          "flow_type": "best_effort",
+          "feedback": "throughput_mbps=0.0 violates throughput>=0.5; packet_loss_pct=100.0 violates loss<=5",
+          "violations": [
+            {
+              "metric": "throughput_mbps",
+              "rule": "throughput>=0.5",
+              "actual": 0.0,
+              "limit": 0.5
+            },
+            {
+              "metric": "packet_loss_pct",
+              "rule": "loss<=5",
+              "actual": 100.0,
+              "limit": 5.0
+            }
+          ]
+        }
+      ],
+      "status": "violated"
+    },
+    "cwmin": 15.0,
+    "neighbor_rssi_dbm": {
+      "ap2": -80.9913,
+      "ap3": -71.9604
+    },
+    "cwmax": 31.0,
+    "jitter_ms": 0.0,
+    "sla_violations": [
+      {
+        "sta_id": "sta_ap1_user",
+        "flow_type": "best_effort",
+        "feedback": "throughput_mbps=0.0 violates throughput>=0.5; packet_loss_pct=100.0 violates loss<=5",
+        "violations": [
+          {
+            "metric": "throughput_mbps",
+            "rule": "throughput>=0.5",
+            "actual": 0.0,
+            "limit": 0.5
+          },
+          {
+            "metric": "packet_loss_pct",
+            "rule": "loss<=5",
+            "actual": 100.0,
+            "limit": 5.0
+          }
+        ]
+      }
+    ],
+    "vi_cwmin": 7.0,
+    "bss_color": 1.0,
+    "service_name": "best_effort",
+    "aifsn": 3.0,
+    "obss_pd_dbm": -82.0,
+    "tx_power_dbm": 10.0,
+    "throughput_mbps_user": 0.0,
+    "sta_rssi_dbm": -45.7086,
+    "be_aifsn": 3.0,
+    "vi_cwmax": 15.0,
+    "noise_floor_dbm": -94.0,
+    "vi_aifsn": 2.0,
+    "traffic_priority": "medium",
+    "business_type": "普通业务",
+    "packet_loss_pct": 99.97204,
+    "latency_ms": 0.0,
+    "stas": [
+      {
+        "sta_id": "sta_ap1_user",
+        "associated_ap": "ap1",
+        "flow_type": "best_effort",
+        "business_type": "普通业务",
+        "traffic_priority": "medium",
+        "access_category": "AC_VI",
+        "sla": {
+          "max_latency_ms": 300.0,
+          "max_packet_loss_pct": 5.0,
+          "min_throughput_mbps": 0.5
+        },
+        "measurements": {
+          "throughput_mbps": 0.0,
+          "latency_ms": 0.0,
+          "jitter_ms": 0.0,
+          "packet_loss_pct": 100.0,
+          "rssi_dbm": -45.7086,
+          "sinr_db": 48.2914
+        },
+        "sla_status": "violated",
+        "violations": [
+          {
+            "metric": "throughput_mbps",
+            "rule": "throughput>=0.5",
+            "actual": 0.0,
+            "limit": 0.5
+          },
+          {
+            "metric": "packet_loss_pct",
+            "rule": "loss<=5",
+            "actual": 100.0,
+            "limit": 5.0
+          }
+        ],
+        "feedback": "throughput_mbps=0.0 violates throughput>=0.5; packet_loss_pct=100.0 violates loss<=5"
+      }
+    ]
+  },
+  "ap2": {
+    "be_cwmin": 15.0,
+    "be_cwmax": 31.0,
+    "sr_reset_count": 0.0,
+    "sta_feedback_summary": {
+      "warning_count": 0.0,
+      "ap_id": "ap2",
+      "violated_count": 0.0,
+      "sta_count": 1.0,
+      "violations": [],
+      "status": "satisfied"
+    },
+    "cwmin": 15.0,
+    "neighbor_rssi_dbm": {
+      "ap3": -71.9604,
+      "ap1": -80.9913
+    },
+    "cwmax": 31.0,
+    "jitter_ms": 1.830556,
+    "sla_violations": [],
+    "vi_cwmin": 7.0,
+    "bss_color": 3.0,
+    "service_name": "best_effort",
+    "aifsn": 3.0,
+    "obss_pd_dbm": -82.0,
+    "tx_power_dbm": 10.0,
+    "throughput_mbps_user": 8.165876,
+    "sta_rssi_dbm": -45.7086,
+    "be_aifsn": 3.0,
+    "vi_cwmax": 15.0,
+    "noise_floor_dbm": -94.0,
+    "vi_aifsn": 2.0,
+    "traffic_priority": "medium",
+    "business_type": "普通业务",
+    "packet_loss_pct": 0.0,
+    "latency_ms": 4.5933340000000005,
+    "stas": [
+      {
+        "sta_id": "sta_ap2_user",
+        "associated_ap": "ap2",
+        "flow_type": "best_effort",
+        "business_type": "普通业务",
+        "traffic_priority": "medium",
+        "access_category": "AC_VI",
+        "sla": {
+          "max_latency_ms": 300.0,
+          "max_packet_loss_pct": 5.0,
+          "min_throughput_mbps": 0.5
+        },
+        "measurements": {
+          "throughput_mbps": 8.2367,
+          "latency_ms": 4.70279,
+          "jitter_ms": 1.83677,
+          "packet_loss_pct": 0.0,
+          "rssi_dbm": -45.7086,
+          "sinr_db": 48.2914
+        },
+        "sla_status": "satisfied",
+        "violations": [],
+        "feedback": "STA SLA satisfied"
+      }
+    ]
+  },
+  "ap3": {
+    "be_cwmin": 15.0,
+    "be_cwmax": 31.0,
+    "sr_reset_count": 0.0,
+    "sta_feedback_summary": {
+      "warning_count": 0.0,
+      "ap_id": "ap3",
+      "violated_count": 1.0,
+      "sta_count": 1.0,
+      "violations": [
+        {
+          "sta_id": "sta_ap3_user",
+          "flow_type": "best_effort",
+          "feedback": "packet_loss_pct=8.2633 violates loss<=5",
+          "violations": [
+            {
+              "metric": "packet_loss_pct",
+              "rule": "loss<=5",
+              "actual": 8.2633,
+              "limit": 5.0
+            }
+          ]
+        }
+      ],
+      "status": "violated"
+    },
+    "cwmin": 15.0,
+    "neighbor_rssi_dbm": {
+      "ap2": -71.9604,
+      "ap1": -71.9604
+    },
+    "cwmax": 31.0,
+    "jitter_ms": 1.808336,
+    "sla_violations": [
+      {
+        "sta_id": "sta_ap3_user",
+        "flow_type": "best_effort",
+        "feedback": "packet_loss_pct=8.2633 violates loss<=5",
+        "violations": [
+          {
+            "metric": "packet_loss_pct",
+            "rule": "loss<=5",
+            "actual": 8.2633,
+            "limit": 5.0
+          }
+        ]
+      }
+    ],
+    "vi_cwmin": 7.0,
+    "bss_color": 2.0,
+    "service_name": "best_effort",
+    "aifsn": 3.0,
+    "obss_pd_dbm": -82.0,
+    "tx_power_dbm": 10.0,
+    "throughput_mbps_user": 8.408064,
+    "sta_rssi_dbm": -45.7086,
+    "be_aifsn": 3.0,
+    "vi_cwmax": 15.0,
+    "noise_floor_dbm": -94.0,
+    "vi_aifsn": 2.0,
+    "traffic_priority": "medium",
+    "business_type": "普通业务",
+    "packet_loss_pct": 16.035924,
+    "latency_ms": 7.897087999999999,
+    "stas": [
+      {
+        "sta_id": "sta_ap3_user",
+        "associated_ap": "ap3",
+        "flow_type": "best_effort",
+        "business_type": "普通业务",
+        "traffic_priority": "medium",
+        "access_category": "AC_VI",
+        "sla": {
+          "max_latency_ms": 300.0,
+          "max_packet_loss_pct": 5.0,
+          "min_throughput_mbps": 0.5
+        },
+        "measurements": {
+          "throughput_mbps": 8.19101,
+          "latency_ms": 4.8864,
+          "jitter_ms": 1.83826,
+          "packet_loss_pct": 8.26331,
+          "rssi_dbm": -45.7086,
+          "sinr_db": 48.2914
+        },
+        "sla_status": "violated",
+        "violations": [
+          {
+            "metric": "packet_loss_pct",
+            "rule": "loss<=5",
+            "actual": 8.2633,
+            "limit": 5.0
+          }
+        ],
+        "feedback": "packet_loss_pct=8.2633 violates loss<=5"
+      }
+    ]
+  }
+}

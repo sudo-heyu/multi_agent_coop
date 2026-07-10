@@ -1,0 +1,266 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=a41156d6 event_db=logs/experiments/probe_4profiles_1rep_reset/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_183112_a41156d6.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）设定为 10 dBm。EDCA 竞争参数方面，AC_BE 队列的 CWmin/CWmax/AIFSN 分别为 31/63/7，AC_VI 队列为 7/15/2。
+
+感知与信道指标：己方关联 STA 的接收信号强度（RSSI）约为 -45.7 dBm，链路质量良好。本机扫描到的邻居 AP 信号中，AP2 约为 -81.0 dBm，AP3 约为 -72.0 dBm。当前状态快照中未包含信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。
+
+业务质量：当前承载 bulk_download（大文件下载）业务，用户侧吞吐量实测为 0 Mbps，延迟 0 ms，丢包率高达 98.89%。关联 STA 的 SLA 状态为严重违规，核心问题在于吞吐量远低于 1 Mbps 的下限，且丢包率超出 10% 的安全阈值。
+
+状态简述：本节点 STA 信号强度充足，但业务传输完全停滞且丢包率极高，网络实际处于不可用状态。同时，本机探测到 AP3 的信号强度达到 -72 dBm，属于较强干扰水平，结合当前极高的丢包表现，推测存在严重的同频干扰或信道竞争冲突，亟需通过协作优化恢复基础连通性。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）设定为 10 dBm。EDCA 竞争参数方面，AC_BE 与 AC_VI 队列的 CWmin/CWmax/AIFSN 均为 7/15/2。
+
+感知与信道指标：己方关联 STA 的接收信号强度（RSSI）约为 -45.7 dBm，链路质量良好。本机扫描到的邻居 AP 信号中，AP1 约为 -81.0 dBm，AP3 约为 -72.0 dBm。当前状态快照中未包含信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。
+
+业务质量：当前承载 live_stream（直播）业务，用户侧吞吐量实测为 4.14 Mbps，延迟约 6.09 ms，丢包率为 0%。
+
+STA 反馈：关联 STA 的 SLA 状态为“满足”（satisfied），各项指标均在阈值内，无违规记录。
+
+状态简述：本节点自身直播业务传输稳定且 SLA 完全达标。但本机探测到 AP3 信号强度达 -72 dBm 左右，属于较强干扰水平；结合当前较高的邻区信号强度，信道环境存在一定碰撞风险，后续需关注干扰协调与信道竞争优化。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）设定为 10 dBm。EDCA 竞争参数方面，AC_BE 队列的 CWmin/CWmax/AIFSN 分别为 15/31/3，AC_VI 队列为 7/15/2。
+
+感知与信道指标：己方关联 STA 的接收信号强度（RSSI）约为 -45.7 dBm，链路质量良好。本机扫描到的邻居 AP 信号中，AP1 与 AP2 的信号强度均约为 -72.0 dBm，属于较强干扰水平。当前状态快照中未包含信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。
+
+业务质量：当前承载 best_effort（普通业务），用户侧吞吐量实测为 1.53 Mbps，延迟约 5.46 ms，丢包率为 0%。
+
+STA 反馈：关联 STA 的 SLA 状态为“满足”（satisfied），各项指标均在阈值内（最低吞吐要求 0.5 Mbps，最大延迟 300 ms，最大丢包率 5%），无违规记录。
+
+状态简述：本节点自身业务传输稳定且 SLA 完全达标。但本机探测到 AP1 与 AP2 的信号强度均达 -72 dBm 左右，邻区干扰较强，信道环境存在一定碰撞风险，后续需关注干扰协调与信道竞争优化。
+
+[1m[96mAP1[0m:
+### 路径选择与现状分析
+本轮选择 Co-SR 路径。
+核心问题：AP1 承载的 bulk_download 业务出现 98.89% 丢包与 0 Mbps 吞吐，SLA 严重违规。结合本机扫描数据，AP3 信号强度达 -72.0 dBm，属于强干扰水平；AP2 与 AP3 之间同样存在 -72.0 dBm 的强耦合。高邻区 RSSI 导致信道竞争时 CCA 阈值偏高，引发大量碰撞与重传失败。
+为何不选 Co-EDCA：当前各 AP 的 EDCA 参数已按优先级呈现差异化（AP2 high: 7/15/2，AP3 medium: 15/31/3，AP1 low: 31/63/7），单调性约束已满足。AP1 的极端丢包主要源于物理层干扰而非退避不公平，因此优先通过功率协调降低干扰底噪。
+
+### 参数方案与依据
+TX Power：三台 AP 统一降至 7 dBm（降幅 3 dB）。当前 STA RSSI 均为 -45.7 dBm，链路余量充足，降至 7 dBm 后预估 STA RSSI 仍优于 -50 dBm，完全满足安全下界。
+- OBSS_PD：统一设为 -72 dBm。根据协议耦合约束 `tx ≤ 23 -(obss_pd+82)`，当 obss_pd=-72 时允许的最大 TX Power 为 13 dBm，当前 7 dBm 处于合法窗口内，可有效收紧 CCA 检测范围，抑制远端 AP 的无效载波感知。
+并发组：`["ap1", "ap2", "ap3"]`。三节点间距较近且相互干扰较强，在同等降功率后具备空间复用条件，无需拆分非并发节点。
+
+预期效果与权衡预期改善：TX Power 下降将直接降低 AP 间耦合干扰，提升 SINR，预计可大幅削减 AP1 的重传率与丢包率，恢复基础连通性。
+- 权衡说明：适度降功率会略微缩小覆盖半径，但当前 STA 距离极近（RSSI > -45 dBm），不影响实际接入质量；同时 OBSS_PD 同步下调可避免 AP 误判空闲信道，进一步减少隐藏终端冲突。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "AP2": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "AP3": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2", "ap3"],
+    "non_concurrent_aps": []
+  }
+}
+```
+
+[1m[92mAP2[0m:
+针对 AP1 的提案#1，我已完成对 AP2 自身参数的验算与影响评估：
+
+TX Power：提议从 10 dBm 降至 7 dBm，降幅 3 dB，符合整数调整要求。
+2. STA RSSI 与安全阈值：当前己方关联 STA RSSI 为 -45.7 dBm，链路余量极宽。降功率 3 dB 后预估 RSSI 约为 -48.7 dBm，远高于 -75 dBm 的强制反对红线，直播业务 SLA 可完全维持。OBSS_PD 与协议耦合：统一设为 -72 dBm，落在协议合法窗口 [-82, -62] 内，且严格满足耦合约束 `tx_power_dbm ≤ 23 - (obss_pd_dbm + 82)`（即 7 ≤ 13）。收紧 CCA 门限有助于抑制远端无效载波感知，降低碰撞概率。并发组与整体权衡：三节点同入并发组在同等降功率后具备空间复用条件。对我方而言，邻区强干扰（AP3 -72 dBm）的底噪会随发射功率下降而改善，信道竞争压力减轻，且不会牺牲实际覆盖范围。
+
+该方案在确保我方链路安全与 SLA 达标的前提下，能直接修复 AP1 的 98.89% 丢包故障，符合多 AP 协作优化整体性能的原则。我同意该提案。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 7 dBm（降幅 3 dB 整数合规），降功率后预估 STA RSSI 约 -48.7 dBm，远高于 -75 dBm 安全阈值，SLA 不受影响；OBSS_PD 设为 -72 dBm 处于合法窗口且满足耦合约束。全节点并发在降功率后可行，能有效降低邻区干扰并恢复 AP1 连通性，对我方无负面影响，故同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案与拒绝情况梳理
+当前协商仅存在 AP1 发起的提案#1（Co-SR 路径），AP2 已投同意票。尚未出现任何反对票或反提案，因此无历史拒绝原因需追溯。
+
+【第二步】针对 AP3 参数的验算与判断
+基于已给状态与提案参数，对 AP3 自身指标进行逐项核对：
+1. TX Power 调整：提议从 10 dBm 降至 7 dBm，降幅为 3 dB，符合“功率调整量必须为整数 dB”的硬性约束。
+2. STA RSSI 与安全阈值：本机关联 STA 当前 RSSI 为 -45.7 dBm。降功率 3 dB 后预估 STA RSSI 约为 -48.7 dBm，远高于协议强制反对红线（-75 dBm），链路覆盖余量充足，不会触发 SLA 违规。
+3. OBSS_PD 与协议耦合：统一设为 -72 dBm，严格落在 SR 合法窗口 [-82, -62] dBm 内。耦合约束校验：`tx_power_dbm ≤ 23 - (obss_pd_dbm + 82) → 7 ≤ 23 - (-72 + 82) = 13`，完全合规。下调 OBSS_PD 可配合降功率收紧 CCA 检测范围，有效抑制 AP1/AP2 相对强度达 -72 dBm 的强干扰，提升 SINR。
+4. 业务与权衡：本节点承载 best_effort 业务，当前吞吐 1.53 Mbps、延迟 5.46 ms、丢包 0%，SLA 已满足。适度降功率虽略缩覆盖半径，但鉴于 STA 距离极近，实际接入质量不受影响；同时邻区干扰底噪降低将改善整体信道竞争环境，符合多 AP 协作优化目标。
+
+结论：提案参数对我方完全合规，STA 余量充足，且能直接缓解 AP1 的极端丢包问题并改善本节点信道环境。无更优替代方案，予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 从 10 降至 7 dBm（降幅 3 dB 整数合规），降功率后预估 STA RSSI 约 -48.7 dBm，远高于 -75 dBm 安全红线，覆盖余量充足；OBSS_PD 设为 -72 dBm 处于合法窗口且满足耦合约束 `7 ≤ 13`。收紧 CCA 门限可有效抑制 AP1/AP2 的强干扰（相对 RSSI -72 dBm），提升 SINR 并恢复 AP1 连通性。本节点 best_effort 业务当前 SLA 已满足，降功率不影响实际吞吐，方案合法且兼顾全局性能，故同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束
+
+[1m[96mAP1[0m:
+针对上一轮全节点并发（`["ap1","ap2","ap3"]`）导致验证得分下降（`degraded`）的情况，分析认为主要原因为 AP2 与 AP3 之间信号耦合较强（-72 dBm），同时发射易引发空间复用碰撞，拖累了整体 QoS。本轮调整为 Co-SR 部分并发 策略，隔离强干扰链路，并针对性调整功率以优先恢复 AP1 的连通性。
+
+### 现状分析与策略选择
+- 核心问题：AP1 丢包率高达 98.89%，主因是 AP3 强干扰（-72 dBm）。上一轮三节点同频并发加剧了 AP2-AP3 间的冲突，导致全局评分不升反降。
+路径选择：继续采用 Co-SR，但改为部分并发。利用 AP1 与 AP2 相对距离较远（-81 dBm）的特性建立安全并发对，AP3 独立操作以避免与 AP2 碰撞。
+
+参数方案与依据
+- 并发分组：`concurrent_group: ["ap1", "ap2"]`，`non_concurrent_aps: ["ap3"]`。物理隔离强干扰对，降低信道竞争冲突概率。
+- TX Power：
+  - AP1、AP2 降至 8 dBm（降幅 2 dB）。己方 STA RSSI 预估降至约 -47.7 dBm，仍远高于 -75 dBm 强制红线，覆盖余量充足。AP3 降至 6 dBm（降幅 4 dB）。进一步压低对 AP1 接收端的干扰底噪，直接缓解 AP1 的极端丢包问题。OBSS_PD：统一设为 -72 dBm。落在协议合法窗口内，配合降功率收紧 CCA 检测范围，抑制远端无效载波感知。
+
+### 预期效果与权衡
+部分并发有效规避了 AP2-AP3 的直接碰撞，预计可修复上一轮的全局性能退化。AP3 额外降功率将显著改善 AP1 的 SINR，有望使 bulk_download 业务脱离严重违规状态。
+- 所有节点 STA 链路质量均保持在 -48 dBm 左右，不影响实际接入与 SLA 达标。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -72
+  },
+  "AP2": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -72
+  },
+  "AP3": {
+    "tx_power_dbm": 6,
+    "obss_pd_dbm": -72
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2"],
+    "non_concurrent_aps": ["ap3"]
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】提案与拒绝情况梳理
+上一轮提案#1（Co-SR 全节点并发，TX Power 统一 7 dBm）因三台 AP 在同一时刻发射，导致 AP2 与 AP3 之间强耦合（-72 dBm）引发空间复用碰撞，Validator 验收判定为 degraded（QoS 效果下降）。本轮 AP1 发起提案#2，调整为 Co-SR 部分并发 策略，利用 AP1 与 AP2 相对距离较远（-81 dBm）的特性建立安全并发对，并将强干扰源 AP3 隔离至非并发节点，旨在消除直接碰撞并优先恢复 AP1 连通性。
+
+【第二步】针对 AP2 参数的验算与判断
+基于提案#2 参数，对 AP2 自身指标逐项核对：
+1. TX Power 调整：提议从 10 dBm 降至 8 dBm，降幅为 2 dB，严格符合“功率调整量必须为整数 dB”的硬性约束。STA RSSI 与安全阈值：本机关联 STA 当前 RSSI 为 -45.7 dBm。降功率 2 dB 后预估 STA RSSI 约为 -47.7 dBm，远高于协议强制反对红线（-75 dBm），直播业务 SLA 可完全维持，覆盖余量充足。
+3. OBSS_PD 与协议耦合：统一设为 -72 dBm，落在 SR 合法窗口 [-82, -62] 内。耦合约束校验：`tx_power_dbm ≤ 23 - (obss_pd_dbm + 82) → 8 ≤ 13`，完全合规。收紧 CCA 门限有助于抑制远端无效载波感知。并发组与干扰隔离：提案将 AP2 编入 `concurrent_group` 与 AP1 并发（相对 RSSI -81 dBm，干扰极弱），同时将 AP3 放入 `non_concurrent_aps`。此设计精准规避了上一轮 AP2-AP3 的直接碰撞风险，符合修复全局 QoS 退化的核心目标。
+
+结论：该方案在确保我方链路安全与 SLA 达标的前提下，针对性解决了全并发导致的性能退化问题，参数合规且权衡合理。无更优替代方案，予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 从 10 降至 8 dBm（降幅 2 dB 整数合规），降功率后预估 STA RSSI 约 -47.7 dBm，远高于 -75 dBm 安全红线，SLA 不受影响；OBSS_PD 设为 -72 dBm 处于合法窗口且满足耦合约束 `8 ≤ 13`。部分并发分组将 AP2 与弱干扰的 AP1 配对，同时隔离强干扰的 AP3，有效规避了上一轮全并发引发的 AP2-AP3 碰撞及 QoS 退化问题。方案合法且兼顾全局恢复，故同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案与拒绝情况梳理
+提案#1（Co-SR 全并发）：三台 AP 统一降至 7 dBm 并同入并发组。Validator 验收未通过（`degraded`），核心原因为 AP2 与 AP3 信号耦合较强（-72 dBm），在同一时刻发射引发空间复用碰撞，拖累全局 QoS。
+提案#2（Co-SR 部分并发）：AP1 调整为部分并发策略，利用 AP1 与 AP2 相对距离较远（-81 dBm）的特性建立安全并发对，并将强干扰源 AP3 隔离至 `non_concurrent_aps`。TX Power 设为 AP1/AP2=8 dBm，AP3=6 dBm，OBSS_PD 统一 -72 dBm。
+
+【第二步】针对 AP3 参数的验算与判断
+基于提案#2，逐项核对本机（AP3）指标：TX Power 调整：提议从 10 dBm 降至 6 dBm，降幅 4 dB，严格符合“功率调整量必须为整数 dB”的硬性约束。
+2. STA RSSI 与安全阈值：本机关联 STA 当前 RSSI 为 -45.7 dBm。降功率 4 dB 后预估 RSSI 约为 -49.7 dBm，远高于协议强制反对红线（-75 dBm），覆盖余量充足，best_effort 业务 SLA 完全维持。
+OBSS_PD 与协议耦合：统一设为 -72 dBm，落在 SR 合法窗口 [-82, -62] 内。耦合约束校验：`tx_power_dbm ≤ 23 - (obss_pd_dbm + 82) → 6 ≤ 13`，完全合规。
+4. 并发分组与干扰隔离：AP3 被划入 `non_concurrent_aps`，有效规避了上一轮与 AP2 的直接碰撞风险，符合修复全局 QoS 退化的核心目标。
+
+结论：该方案参数对我方完全合规，STA 链路安全，且针对性解决了全并发导致的性能退化问题。无更优替代方案，予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 从 10 降至 6 dBm（降幅 4 dB 整数合规），降功率后预估 STA RSSI 约 -49.7 dBm，远高于 -75 dBm 安全红线，SLA 不受影响；OBSS_PD 设为 -72 dBm 处于合法窗口且满足耦合约束 `6 ≤ 13`。部分并发分组将 AP3 隔离为非并发节点，精准规避了上一轮全并发引发的 AP2-AP3 碰撞及 QoS 退化问题。方案合法且兼顾全局恢复，故同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 8, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 8, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2"], "non_concurrent_aps": ["ap3"]}}
+协商结束
+
+[1m[96mAP1[0m:
+### 现状分析与策略选择
+前两版 Co-SR 提案（全并发同功率、部分并发降功率）均触发 Validator 的 `degraded` 判定，核心原因在于强耦合链路（AP2-AP3，相对 RSSI -72 dBm）在同一时隙发射引发空间复用碰撞，拖累了全局 QoS。同时，AP1 的 STA 链路质量极佳（RSSI -45.7 dBm），但业务丢包高达 98.89%，表明瓶颈并非物理覆盖不足，而是邻区干扰导致的信道访问失败。Co-EDCA 路径受限于 IEEE 802.11 优先级单调性约束（High ≤ Medium ≤ Low），难以在不破坏规则的前提下显著提升低优先级 AP1 的竞争成功率。因此，本轮继续采用 Co-SR 路径，但调整为“保主抗扰”策略：优先保障 AP1 的发射功率以维持基础连通性，隔离最强干扰源 AP3，并通过收紧 OBSS_PD 门限优化 CCA 判定逻辑。
+
+### 参数方案与依据
+TX Power：
+AP1 降至 9 dBm（降幅 1 dB）。保留较高功率确保 bulk_download 业务的上下行链路余量，避免进一步压缩覆盖。
+ AP2 降至 8 dBm（降幅 2 dB）。适度压低以减轻对 AP1 的潜在干扰，同时维持自身直播业务稳定性。
+  - AP3 降至 7 dBm（降幅 3 dB）。显著削弱对 AP1 的强干扰底噪，配合非并发分组彻底切断碰撞路径。
+- OBSS_PD：统一设为 -74 dBm。较上一轮收紧 2 dB，使 AP1/AP2 在检测到中远端信号时能更准确判断信道占用状态，减少因隐藏终端导致的无效退避，提升 AP1 获取信道的概率。
+并发分组：`concurrent_group: ["ap1", "ap2"]`，`non_concurrent_aps: ["ap3"]`。利用 AP1 与 AP2 相对距离较远（-81 dBm）的特性建立安全并发对；将强干扰源 AP3 强制隔离至非并发节点，从物理层杜绝 AP2-AP3 及 AP1-AP3 的直接碰撞。
+
+预期效果与权衡
+- 预期改善：隔离 AP3 并收紧 OBSS_PD 可直接消除上一轮的空间复用碰撞，预计 AP1 的重传率将断崖式下降，吞吐能力快速恢复至 SLA 阈值以上。AP2/AP3 的适度降功率仍在 STA 安全余量内（预估 RSSI > -49 dBm），不影响各自 SLA。
+权衡说明：AP1 仅微调 1 dB 降幅，兼顾了网络协作公平性与自身业务紧急度；OBSS_PD 下调可能略微增加近端 AP 的退避次数，但能有效过滤远端无效载波感知，整体净收益为正。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 9,
+    "obss_pd_dbm": -74
+  },
+  "AP2": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -74
+  },
+  "AP3": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -74
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2"],
+    "non_concurrent_aps": ["ap3"]
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】提案与拒绝情况梳理
+提案#1（全并发同功率）：三节点统一降至 7 dBm、OBSS_PD -72 dBm。Validator 判定 `degraded`，核心原因为 AP2 与 AP3 强耦合（-72 dBm）在同一时隙发射引发空间复用碰撞。
+提案#2（部分并发降功率）：AP1/AP2=8 dBm，AP3=6 dBm，OBSS_PD -72 dBm。再次触发 `degraded`，推测因 OBSS_PD 门限未充分收紧，或 AP3 过度降功率导致局部信道利用率失衡，未能有效改善整体 SINR。
+- 提案#3（当前）：调整为“保主抗扰”策略。AP1=9 dBm，AP2=8 dBm，AP3=7 dBm，OBSS_PD 统一收紧至 -74 dBm。并发组维持 `["ap1","ap2"]`，隔离 AP3。参数组合较前两轮有实质性调整，非简单重复。
+
+【第二步】针对 AP2 参数的验算与判断
+基于提案#3，逐项核对本机指标：
+1. TX Power 调整：提议从 10 dBm 降至 8 dBm，降幅 2 dB，严格符合整数调整约束。
+2. STA RSSI 与安全阈值：本机关联 STA 当前 RSSI 为 -45.7 dBm。降功率 2 dB 后预估 STA RSSI 约为 -47.7 dBm，远高于协议强制反对红线（-75 dBm），直播业务 SLA 完全不受影响。
+3. OBSS_PD 与协议耦合：统一设为 -74 dBm，落在 SR 合法窗口 [-82, -62] 内。耦合约束校验：`tx_power_dbm ≤ 23 - (obss_pd_dbm + 82) → 8 ≤ 23 - 8 = 15`，完全合规。较上一轮收紧 2 dB 可有效过滤远端无效载波感知，配合部分并发进一步降低隐藏终端冲突概率。
+4. 并发分组与干扰隔离：AP2 与 AP1 配对（相对 RSSI -81 dBm，干扰极弱），AP3 独立操作。该设计精准规避了前两版因 AP2-AP3 强耦合引发的碰撞问题，逻辑上具备修复全局 QoS 退化的可行性。
+
+结论：该方案参数对我方完全合规，链路余量充足，且针对性修正了历史提案的碰撞缺陷。在当前协商阶段无更优替代方案，予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 从 10 降至 8 dBm（降幅 2 dB 整数合规），降功率后预估 STA RSSI 约 -47.7 dBm，远高于 -75 dBm 安全红线，SLA 不受影响；OBSS_PD 设为 -74 dBm 处于合法窗口且满足耦合约束 `8 ≤ 15`。部分并发分组将 AP2 与弱干扰的 AP1 配对，同时隔离强干扰的 AP3，直接规避了前两版全并发/部分并发引发的 AP2-AP3 碰撞及 QoS 退化问题。方案合法且兼顾全局恢复，故同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案与拒绝情况梳理
+- 提案#1（全并发同功率）：三节点统一降至 7 dBm、OBSS_PD -72 dBm。Validator 判定 degraded，核心原因为 AP2 与 AP3 强耦合（-72 dBm）在同一时隙发射引发空间复用碰撞。
+提案#2（部分并发降功率）：AP1/AP2=8 dBm，AP3=6 dBm，OBSS_PD -72 dBm。再次触发 `degraded`，推测因 AP3 过度降功率导致局部信道利用率失衡，未能有效改善整体 SINR。提案#3（当前）：调整为“保主抗扰”策略。AP1=9 dBm，AP2=8 dBm，AP3=7 dBm，OBSS_PD 统一收紧至 -74 dBm。并发组维持 `["ap1","ap2"]`，隔离 AP3。参数组合较前两轮有实质性调整，非简单重复。
+
+【第二步】针对 AP3 参数的验算与判断
+基于提案#3，逐项核对本机（AP3）指标：TX Power 调整：提议从 10 dBm 降至 7 dBm，降幅 3 dB，严格符合“功率调整量必须为整数 dB”的硬性约束。STA RSSI 与安全阈值：本机关联 STA 当前 RSSI 为 -45.7 dBm。降功率 3 dB 后预估 STA RSSI 约为 -48.7 dBm，远高于协议强制反对红线（-75 dBm），覆盖余量充足，best_effort 业务 SLA 完全维持。
+OBSS_PD 与协议耦合：统一设为 -74 dBm，落在 SR 合法窗口 [-82, -62] 内。耦合约束校验：`tx_power_dbm ≤ 23 - (obss_pd_dbm + 82) → 7 ≤ 238 = 15`，完全合规。较上一轮收紧 2 dB 可有效过滤远端无效载波感知。
+4. 并发分组与干扰隔离：AP3 被划入 `non_concurrent_aps`，有效规避了前两版因 AP2-AP3 强耦合引发的直接碰撞风险，符合修复全局 QoS 退化的核心目标。
+
+结论：该方案参数对我方完全合规，STA 链路安全，且针对性修正了历史提案的碰撞缺陷。在当前协商阶段无更优替代方案，予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 从 10 降至 7 dBm（降幅 3 dB 整数合规），降功率后预估 STA RSSI 约 -48.7 dBm，远高于 -75 dBm 安全红线，SLA 不受影响；OBSS_PD 设为 -74 dBm 处于合法窗口且满足耦合约束 `7 ≤ 15`。部分并发分组将 AP3 隔离为非并发节点，精准规避了前两版全并发/部分并发引发的 AP2-AP3 碰撞及 QoS 退化问题。方案合法且兼顾全局恢复，故同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 9, "obss_pd_dbm": -74}, "ap2": {"tx_power_dbm": 8, "obss_pd_dbm": -74}, "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -74}, "_sr": {"concurrent_group": ["ap1", "ap2"], "non_concurrent_aps": ["ap3"]}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=18 用时 217s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_sr）：QoS 效果验收未通过：verdict=degraded, score=-0.0845, confidence=0.4224
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.084477 confidence=0.4224

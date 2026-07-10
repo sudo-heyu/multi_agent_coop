@@ -148,7 +148,16 @@ def save_long_term_memory(agent_id: str, episodes: list[dict[str, Any]]) -> None
     for item in conclusive:
         evaluation = item.get("evaluation") or {}
         verdict = evaluation.get("final_verdict")
-        heading = "本地失败警告" if verdict == "degraded" else "本地参考案例"
+        score = evaluation.get("final_score")
+        is_warning = (
+            verdict == "degraded"
+            or (
+                verdict == "neutral"
+                and evaluation.get("approved") is False
+                and (not isinstance(score, (int, float)) or score < 0.03)
+            )
+        )
+        heading = "本地失败警告" if is_warning else "本地参考案例"
         lines.extend([
             f"## {heading} {item.get('run_id')}", "",
             f"- 场景/策略：{item.get('scene')} / {item.get('strategy')}",
@@ -224,10 +233,22 @@ def sync_long_term_memories(
             "evaluated_written": min(len(conclusive), 20),
             "warnings_written": sum(
                 1 for item in conclusive
-                if (item.get("evaluation") or {}).get("final_verdict") == "degraded"
+                if _workspace_warning_evaluation(item.get("evaluation") or {})
             ),
         }
     return result
+
+
+def _workspace_warning_evaluation(evaluation: dict[str, Any]) -> bool:
+    verdict = evaluation.get("final_verdict")
+    if verdict == "degraded":
+        return True
+    score = evaluation.get("final_score")
+    return (
+        verdict == "neutral"
+        and evaluation.get("approved") is False
+        and (not isinstance(score, (int, float)) or score < 0.03)
+    )
 
 
 def read_prompt_memory(agent_id: str) -> str:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -19,8 +20,10 @@ from src.memory.workspace import workspace
 
 try:
     import direct_tools
+    import tool_policy
 except ImportError:  # pragma: no cover - package import fallback
     from . import direct_tools  # type: ignore
+    from . import tool_policy  # type: ignore
 
 
 def _orchestration_module():
@@ -38,6 +41,11 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _memory_enabled() -> bool:
+    value = os.environ.get("MULTIAP_MEMORY_MODE", "on").strip().lower()
+    return value not in {"0", "false", "no", "off", "none", "disabled"}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -133,6 +141,8 @@ class PPIOStreamRuntime:
         )
         self.temperature = _env_float("MULTIAP_STREAM_TEMPERATURE", 0.1)
         self.max_tokens = _env_int("MULTIAP_STREAM_MAX_TOKENS", 1600)
+        self.request_retries = max(1, _env_int("MULTIAP_STREAM_REQUEST_RETRIES", 4))
+        self.retry_delay = max(0.0, _env_float("MULTIAP_STREAM_RETRY_DELAY", 3.0))
 
     @property
     def model_label(self) -> str:
@@ -170,12 +180,23 @@ class PPIOStreamRuntime:
     def _system_prompt(self, ap_id: str) -> str:
         workspace_text = _read_workspace_system(ap_id)
         tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+        visible_tool_profile = tool_policy.agent_visible_profile(tool_profile)
+        evidence_basis = (
+            "已给状态、对话记录、历史记忆和自身推理"
+            if _memory_enabled()
+            else "已给状态、当前对话记录和自身推理"
+        )
+        fallback_basis = (
+            "最新状态、历史记忆和可用验算工具"
+            if _memory_enabled()
+            else "最新状态、当前对话记录和可用验算工具"
+        )
         if not direct_tools.openai_tools():
             tool_protocol = (
                 "你运行在 Multi-AP stream runtime 中。当前工具能力档位为 "
-                f"{tool_profile}，本回合没有任何可调用工具。"
-                "不要声称调用过工具或引用工具返回；只能基于已给状态、对话记录、历史记忆"
-                "和自身推理完成当前阶段。只完成当前用户指令指定的阶段，不替其他 AP 发言。"
+                f"{visible_tool_profile}，本回合没有任何可调用工具。"
+                f"不要声称调用过工具或引用工具返回；只能基于{evidence_basis}"
+                "完成当前阶段。只完成当前用户指令指定的阶段，不替其他 AP 发言。"
                 "最终面向用户的回复使用中文自然语言；需要 JSON 时必须输出可解析 JSON 代码块。"
             )
         else:
@@ -183,8 +204,8 @@ class PPIOStreamRuntime:
                 "你运行在 Multi-AP stream runtime 中。你拥有与 OpenClaw MCP 路径同名的工具；"
                 "需要实时状态、STA 反馈或参数验算时，请使用原生 tool_calls 调用工具，"
                 "不要伪造工具返回。收到工具结果后再继续回答。"
-                f"当前工具能力档位为 {tool_profile}；若某工具 schema 不存在或返回不可用，"
-                "请改用最新状态、历史记忆和可用验算工具完成当前阶段。"
+                f"当前工具能力档位为 {visible_tool_profile}；若某工具 schema 不存在或返回不可用，"
+                f"请改用{fallback_basis}完成当前阶段。"
                 "只完成当前用户指令指定的阶段，不替其他 AP 发言。"
                 "最终面向用户的回复使用中文自然语言；需要 JSON 时必须输出可解析 JSON 代码块。"
             )
@@ -265,6 +286,26 @@ class PPIOStreamRuntime:
         raise RuntimeError(f"stream runtime exceeded max tool rounds ({self.max_tool_rounds})")
 
     def _stream_once(self, messages: list[dict[str, Any]], on_text_delta) -> tuple[str, list[dict[str, Any]]]:
+        last_error: Exception | None = None
+        for attempt in range(1, self.request_retries + 1):
+            try:
+                return self._stream_once_attempt(messages, on_text_delta)
+            except requests.RequestException as exc:
+                last_error = exc
+            except RuntimeError as exc:
+                last_error = exc
+                if "PPIO stream API HTTP 5" not in str(exc) and "HTTP 429" not in str(exc):
+                    raise
+            if attempt < self.request_retries:
+                time.sleep(self.retry_delay * attempt)
+        assert last_error is not None
+        raise last_error
+
+    def _stream_once_attempt(
+        self,
+        messages: list[dict[str, Any]],
+        on_text_delta,
+    ) -> tuple[str, list[dict[str, Any]]]:
         payload = self._request_payload(messages)
         headers = {
             "Authorization": f"Bearer {self.api_key}",

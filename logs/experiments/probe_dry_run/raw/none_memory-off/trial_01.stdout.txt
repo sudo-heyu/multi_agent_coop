@@ -1,0 +1,2 @@
+[dry-run]
+/Users/heyu/Developer/ap/multi_agent_coop/.venv/bin/python run.py --mode ns3 --scene sr --server http://127.0.0.1:5001 --tool-profile none --memory off --acceptance qos --no-dashboard --no-academic-plot --eval-windows off --max-steps 15 --state-wait 20.0 --observation-wait 10.0 --ap-config config/ap_endpoints.json --stream-timeout 300.0

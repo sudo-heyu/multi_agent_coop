@@ -1,0 +1,187 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=30eb9e63 event_db=logs/experiments/probe_4profiles_1rep_reset2/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_190141_30eb9e63.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+BE（尽力而为）类别：CWmin=31、CWmax=63、AIFSN=7
+VI（视频）类别：CWmin=7、CWmax=15、AIFSN=2
+
+感知指标
+本机扫描到的邻居 AP RSSI：ap2 = -80.99 dBm，ap3 = -71.96 dBm
+己方关联 STA RSSI：-45.71 dBm
+噪声底噪（Noise Floor）：当前状态未上报该数值
+信道利用率与 TX Retries Ratio：当前状态未包含这两项指标
+
+业务质量
+业务类型：bulk_download（大文件下载），流量优先级：low
+用户侧吞吐：约 1.02 Mbps
+时延：约 6.26 ms，抖动：约 4.94 ms
+丢包率：0%
+
+STA 反馈
+当前关联 1 个 STA（sta_ap1_user），SLA 状态为 satisfied，无违规项；反馈为"STA SLA satisfied"。
+
+状态简述
+本节点 STA 信号良好（-45.71 dBm），业务 SLA 完全满足且零丢包。邻居方面，ap3 的 RSSI 为 -71.96 dBm，相对 ap2（-80.99 dBm）更强一些，但整体干扰水平不算高。由于当前状态未提供信道利用率和重传率数据，暂无法判断信道是否偏忙。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测状态：
+
+MAC 与 EDCA 参数：
+TX Power：10 dBm
+CWmin / CWmax / AIFSN：7 / 15 / 2（BE 和 VI 队列参数一致）
+
+感知指标：
+己方 STA RSSI：-45.7 dBm（信号很强）
+邻居 AP RSSI（本机扫描）：ap1 = -81.0 dBm，ap3 = -72.0 dBm
+Noise Floor：当前状态未上报该值，无法提供
+
+信道指标：
+信道利用率（Data rate-to-bandwidth ratio）：当前状态未包含此字段
+TX Retries Ratio：当前状态未包含此字段
+
+业务质量：
+业务类型：直播（live_stream），优先级 high
+用户侧吞吐：4.1 Mbps
+时延：7.3 ms
+抖动：3.8 ms
+丢包率：0%
+
+STA SLA 反馈：
+关联 STA 数量：1
+SLA 状态：satisfied（全部满足）
+违反计数：0，警告计数：0
+关键 SLA 约束对比：吞吐量 4.1 Mbps > 最低要求 3.0 Mbps，时延 7.3 ms < 上限 120 ms，抖动 3.8 ms < 上限 50 ms，RSSI -45.7 dBm > 下限 -74 dBm，SINR 48.3 dB > 下限 16 dB
+
+状态简述：
+本节点运行直播业务，优先级高，当前 STA 连接质量良好，所有 SLA 指标均满足。邻居信号方面，ap1 距离较远（-81 dBm），ap3 相对较近（-72 dBm），整体干扰环境尚可。由于当前状态未提供信道利用率和重传率数据，暂无法评估信道拥塞程度。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+BE（尽力而为）类别：CWmin=15、CWmax=31、AIFSN=3
+VI（视频）类别：CWmin=7、CWmax=15、AIFSN=2
+
+感知指标
+本机扫描到的邻居 AP RSSI：ap1 = -71.96 dBm，ap2 = -71.96 dBm
+己方关联 STA RSSI：-45.71 dBm
+噪声底噪（Noise Floor）：当前状态未上报该数值
+信道利用率与 TX Retries Ratio：当前状态未包含这两项指标
+
+业务质量
+业务类型：普通业务（best_effort），流量优先级：medium
+用户侧吞吐：约 1.52 Mbps
+时延：约 6.69 ms，抖动：约 6.04 ms
+丢包率：0%
+
+STA 反馈
+当前关联 1 个 STA（sta_ap3_user），SLA 状态为 satisfied，无违规项；反馈为"STA SLA satisfied"。
+
+状态简述
+本节点 STA 信号良好（-45.71 dBm），业务 SLA 完全满足且零丢包。邻居方面，ap1 和 ap2 的 RSSI 均为 -71.96 dBm，干扰水平中等。由于当前状态未提供信道利用率和重传率数据，暂无法判断信道是否偏忙。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(10.5ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.11Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.53Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90manalyze_sr_interference[0m [90m(1.9ms)[0m  CoSR=[90m未触发[0m strong=0 moderate=4
+[90m无强干扰链路[0m  干扰源:ap3(2分)  受害:ap3(2分)
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(6.3ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+现状分析与策略选择
+
+1. 干扰评估（Co-SR 路径）
+调用 `analyze_sr_interference` 结果显示：
+- `co_sr_triggered = false`，无强干扰链路（Strong Links）。
+仅存在 4 条中等干扰（Moderate Links）链路，主要源于 ap3 对 ap1/ap2 以及 ap1/ap2 对 ap3 的影响。结论：当前干扰水平在可控范围内，强行降低 TX Power（Co-SR）不仅收益有限，还可能削弱 STA 信号覆盖。因此不采用 Co-SR。
+
+2. QoS 与 EDCA 评估（Co-EDCA 路径）优先级分布：ap2 (high, 直播) > ap3 (medium, 普通业务) > ap1 (low, 大文件下载)。当前 EDCA 参数现状：
+ap2 (high): CWmin=7, CWmax=15, AIFSN=2
+ap3 (medium): CWmin=15, CWmax=31, AIFSN=3
+ ap1 (low): CWmin=31, CWmax=63, AIFSN=7
+单调性校验：上述参数严格满足 `high.CWmin ≤ medium.CWmin ≤ low.CWmin 及 high.AIFSN ≤ medium.AIFSN ≤ low.AIFSN` 的 IEEE 802.11 优先级排序规则。
+SLA 状态：全网 3 个 STA 的 SLA 均为 `satisfied`，零丢包，各项指标正常。
+结论：当前 EDCA 参数配置已经实现了与业务优先级完美匹配的差异化竞争机制。无需进行额外的参数扰动。
+
+### 提案内容
+
+基于以上分析，本节点（AP1）发起 Co-EDCA 维持提案。建议全网保持当前 EDCA 参数不变，以固化现有的高优先级业务低延迟优势，同时维持低优先级业务的公平退避空间。
+
+```json
+{
+  "ap1": {
+    "strategy": "维持EDCA参数",
+    "CWmin": 31,
+    "CWmax": 63,
+    "AIFSN": 7
+  },
+  "ap2": {
+    "strategy": "维持EDCA参数",
+    "CWmin": 7,
+    "CWmax": 15,
+    "AIFSN": 2
+  },
+  "ap3": {
+    "strategy": "维持EDCA参数",
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  }
+}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(23.0ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.01Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.07Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(28.3ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+我已验算 AP1 的提案 #1。针对我自己（AP2）的参数为：CWmin=7、CWmax=15、AIFSN=2。
+
+验算结论：
+合规性：参数完全符合 IEEE 802.11 标准范围，且 `validate_edca_proposal` 校验全部通过（valid=true）。
+- 优先级匹配：我当前的业务优先级为 `high`（直播），提案中的参数严格遵循了 `high < medium < low` 的单调递减规则（CWmin: 7 ≤ 15 ≤ 31；AIFSN: 2 ≤ 3 ≤ 7），确保了高优先级业务的低延迟优势。SLA 影响：当前我的 STA 各项指标（吞吐 4.07 Mbps > 3.0 Mbps，时延 8.16 ms < 120 ms）均处于健康状态，维持现有参数不会引发任何 SLA 违规。
+
+综上，该提案合理且必要，我表示同意。
+
+```json
+{"agreed": true, "reason": "提案中针对 AP2 的参数 (CWmin=7, CWmax=15, AIFSN=2) 符合 high 优先级配置，验算工具 validate_edca_proposal 返回 valid=true 且 priority_ordering.ok=true。当前 STA SLA 满足，无违规风险，建议采纳。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(9.4ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.04Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.07Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.54Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(4.0ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+我已验算 AP1 的提案 #1。针对我自己（AP3）的参数为：CWmin=15、CWmax=31、AIFSN=3。
+
+验算结论：
+合规性：参数完全符合 IEEE 802.11 标准范围，且 `validate_edca_proposal` 校验全部通过（valid=true）。
+- 优先级匹配：我当前的业务优先级为 `medium`（普通业务），提案中的参数严格遵循了 `high < medium < low` 的单调递减规则（CWmin: 7 ≤ 15 ≤ 31；AIFSN: 2 ≤ 3 ≤ 7），确保了高优先级业务的低延迟优势，同时我的中等优先级也获得了合理的竞争机会。
+- SLA 影响：当前我的 STA 各项指标（吞吐 1.54 Mbps > 0.5 Mbps，时延 5.27 ms < 300 ms）均处于健康状态，维持现有参数不会引发任何 SLA 违规。
+
+综上，该提案合理且必要，我表示同意。
+
+```json
+{"agreed": true, "reason": "提案中针对 AP3 的参数 (CWmin=15, CWmax=31, AIFSN=3) 符合 medium 优先级配置，验算工具 validate_edca_proposal 返回 valid=true 且 priority_ordering.ok=true。当前 STA SLA 满足，无违规风险，建议采纳。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"strategy": "维持EDCA参数", "CWmin": 31, "CWmax": 63, "AIFSN": 7}, "ap2": {"strategy": "维持EDCA参数", "CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"strategy": "维持EDCA参数", "CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mqos_apply_failed[0m turns=7 用时 90s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'strategy': '维持EDCA参数', 'CWmin': 31, 'CWmax': 63, 'AIFSN': 7}, 'ap2': {'strategy': '维持EDCA参数', 'CWmin': 7, 'CWmax': 15, 'AIFSN': 2}, 'ap3': {'strategy': '维持EDCA参数', 'CWmin': 15, 'CWmax': 31, 'AIFSN': 3}}
+[1m[34m[Executor][0m {'ap1': {'ok': False, 'url': 'http://localhost:5003', 'payload': {'session_id': '30eb9e63', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'strategy': '维持EDCA参数', 'CWmin': 5, 'CWmax': 6, 'AIFSN': 7}}, 'response': "HTTPConnectionPool(host='localhost', port=5003): Read timed out. (read timeout=8)"}, 'ap2': {'ok': False, 'url': 'http://localhost:5003', 'payload': {'session_id': '30eb9e63', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'strategy': '维持EDCA参数', 'CWmin': 3, 'CWmax': 4, 'AIFSN': 2}}, 'response': "HTTPConnectionPool(host='localhost', port=5003): Read timed out. (read timeout=8)"}, 'ap3': {'ok': False, 'url': 'http://localhost:5003', 'payload': {'session_id': '30eb9e63', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'strategy': '维持EDCA参数', 'CWmin': 4, 'CWmax': 5, 'AIFSN': 3}}, 'response': "HTTPConnectionPool(host='localhost', port=5003): Read timed out. (read timeout=8)"}}
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：executor 下发未全部成功，无法进行 QoS 效果验收

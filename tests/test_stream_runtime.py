@@ -8,14 +8,44 @@ from openclaw.mcp import orchestration as orch
 from openclaw.mcp.stream_runtime import PPIOStreamRuntime
 
 
+def noop_state() -> dict:
+    state = copy.deepcopy(MOCK_SCENES["edca"])
+    for ap_id, ap_state in state.items():
+        ap_state["traffic_priority"] = "medium"
+        ap_state["neighbor_rssi_dbm"] = {
+            ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
+        }
+        ap_state["cwmin"] = 3
+        ap_state["cwmax"] = 4
+        ap_state["aifsn"] = 2
+        ap_state.pop("be_cwmin", None)
+        ap_state.pop("be_cwmax", None)
+        ap_state.pop("be_aifsn", None)
+        ap_state.pop("vi_cwmin", None)
+        ap_state.pop("vi_cwmax", None)
+        ap_state.pop("vi_aifsn", None)
+        ap_state["throughput_mbps_user"] = 8.0
+        ap_state["latency_ms"] = 20.0
+        ap_state["packet_loss_pct"] = 0.0
+        ap_state["sta_feedback_summary"] = {
+            "status": "satisfied",
+            "sta_count": 1,
+            "violated_count": 0,
+            "warning_count": 0,
+        }
+        ap_state["sla_violations"] = []
+        ap_state["stas"] = [{
+            "sta_id": f"sta_{ap_id}_user",
+            "sla_status": "satisfied",
+            "violations": [],
+            "warnings": [],
+        }]
+    return state
+
+
 class StreamRuntimeTests(unittest.TestCase):
     def test_structured_relay_accepts_injected_agent_driver(self):
-        state = copy.deepcopy(MOCK_SCENES["edca"])
-        for ap_state in state.values():
-            ap_state["traffic_priority"] = "medium"
-            ap_state["neighbor_rssi_dbm"] = {
-                ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
-            }
+        state = noop_state()
         calls = []
 
         def fake_driver(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
@@ -101,6 +131,23 @@ class StreamRuntimeTests(unittest.TestCase):
         self.assertEqual(captured[0][0], "validate_edca_proposal")
         self.assertEqual(captured[0][1]["proposed_edca"]["ap1"]["CWmin"], 7)
 
+    def test_system_prompt_hides_faulty_profile_and_memory_off(self):
+        runtime = PPIOStreamRuntime(
+            model="test-model",
+            base_url="http://localhost:9999/openai/v1",
+            api_key="test-key",
+        )
+        with patch.dict("os.environ", {
+            "MULTIAP_TOOL_PROFILE": "faulty",
+            "MULTIAP_MEMORY_MODE": "off",
+        }), patch("openclaw.mcp.stream_runtime._read_workspace_system", return_value=""):
+            prompt = runtime._system_prompt("ap1")
+
+        self.assertIn("工具能力档位为 full", prompt)
+        self.assertNotIn("faulty", prompt)
+        self.assertNotIn("历史记忆", prompt)
+        self.assertIn("当前对话记录", prompt)
+
 
 class _FakeResponse:
     status_code = 200
@@ -115,4 +162,3 @@ class _FakeResponse:
 
 if __name__ == "__main__":
     unittest.main()
-

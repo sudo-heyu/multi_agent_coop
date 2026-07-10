@@ -1,0 +1,167 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=6febb4e4 event_db=logs/experiments/probe_full_off_highload_vi_val1/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_025332_6febb4e4.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态：
+
+MAC/EDCA 参数：发射功率 10 dBm；CWmin=31、CWmax=63、AIFSN=7（BE 与 VI 队列一致）。
+
+感知指标：本机扫描到邻居 AP2 的 RSSI 为 -81 dBm，邻居 AP3 的 RSSI 为 -72 dBm；己方关联 STA（sta_ap1_user）RSSI 为 -45.7 dBm。当前状态上报中未包含信道利用率、TX Retries Ratio 及 Noise Floor 数据。
+
+业务质量：user 侧吞吐约 0.16 Mbps，时延约 492 ms，抖动约 2.2 ms，丢包率高达 98%。
+
+STA QoE/SLA 反馈：本节点唯一关联 STA 的 SLA 处于 violated 状态，三项指标均违规——吞吐量低于 0.5 Mbps 下限、时延远超 300 ms 上限、丢包率远超 5% 上限。
+
+简述：本节点 STA 业务严重劣化，高丢包和高时延表明存在严重的信道竞争或干扰问题；邻居 AP3 信号较强（-72 dBm），可能对并发造成压力，需进一步分析干扰关系并协商优化。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测状态：
+
+MAC 与信道参数：当前 TX Power 为 10 dBm；EDCA 参数 CWmin=7、CWmax=15、AIFSN=2（BE 和 VI 队列均为此配置）。
+
+感知指标：本机扫描到的邻居 RSSI 为——ap1: -80.99 dBm，ap3: -71.96 dBm；己方关联 STA (sta_ap2_user) 的 RSSI 为 -45.71 dBm，信号质量良好。
+
+业务质量：当前 user 吞吐约 8.23 Mbps，时延 7.27 ms，抖动 1.97 ms，丢包率 0%。业务类型为 best_effort（普通业务），traffic_priority 为 medium。
+
+STA 反馈：本机关联 1 个 STA，SLA 状态为 satisfied，无违反项。该 STA 的 SLA 约束为 max_latency≤300ms、max_packet_loss≤5%、min_throughput≥0.5Mbps，实际各项指标均远优于阈值。
+
+状态简述：本节点当前信道竞争参数较为宽松（CWmin/CWmax 较小），STA 连接质量稳定，吞吐与时延表现良好，无 SLA 违规。邻居信号方面，ap1 距离较远（-81 dBm），ap3 相对较强（-72 dBm），但整体干扰水平可控。
+
+[1m[93mAP3[0m:
+我是 AP3，以下是我的实测状态：
+
+MAC/EDCA 参数：发射功率 10 dBm；CWmin=15、CWmax=31、AIFSN=3（BE 与 VI 队列一致）。
+
+感知指标：本机扫描到邻居 AP1 的 RSSI 为 -72.0 dBm，邻居 AP2 的 RSSI 也为 -72.0 dBm；己方关联 STA（sta_ap3_user）RSSI 为 -45.7 dBm。当前状态上报中未包含信道利用率、TX Retries Ratio 及 Noise Floor 数据。
+
+业务质量：user 侧吞吐约 6.15 Mbps，时延约 474.7 ms，抖动约 2.1 ms，丢包率约 27.5%。
+
+STA QoE/SLA 反馈：本节点唯一关联 STA 的 SLA 处于 violated 状态，两项指标违规——时延远超 300 ms 上限，丢包率远超 5% 上限；吞吐量 6.15 Mbps 满足最低要求。
+
+简述：本节点 STA 业务存在明显劣化，高时延和高丢包表明信道竞争或干扰问题较为严重；邻居 AP1 和 AP2 信号均较强（约 -72 dBm），可能对并发造成压力，需进一步分析干扰关系并协商优化。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.3ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=7.95Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=5.76Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90manalyze_sr_interference[0m [90m(2.0ms)[0m  CoSR=[90m未触发[0m strong=0 moderate=4
+[90m无强干扰链路[0m  干扰源:ap3(2分)  受害:ap3(2分)
+[90m[工具][0m [1m[90mcompute_sr_feasible_ranges[0m [90m(2.4ms)[0m
+[96map1:[0m 10→[1,10]dBm  上界:[90mcurrent_power,tx_power_max[0m
+[92map2:[0m 10→[1,10]dBm  上界:[90mcurrent_power,tx_power_max[0m
+[93map3:[0m 10→[1,10]dBm  上界:[90mcurrent_power,tx_power_max[0m
+[90m[工具][0m [1m[90mevaluate_sr_candidate[0m {"proposed_powers": "{\"ap1\": 6, \"ap2\": 10, \"ap3\": 6}"} [90m(2.6ms)[0m  [1m[92m全部OK[0m
+[90m并发组:[0m ap1,ap2,ap3  [90m非并发:[0m —
+[90m代价:[0m 总降功=8dB 最大单AP=4dB STA余量=25.29dB minSINR=20.78dB
+提案阶段 — AP1 发起 Co-SR 参数调整提案
+
+### 现状分析
+AP1：STA 丢包率 97.9%、吞吐 0 Mbps，SLA 严重违规；与 AP3 存在 moderate 干扰链路（RSSI ≈ -72 dBm）。
+- AP3：STA 时延 479 ms 超限，丢包率 4.5%，SLA 违规；同样与 AP1/AP2 存在 moderate 干扰。
+AP2：STA 各项指标正常，吞吐 7.95 Mbps，无 SLA 违规。
+干扰关系：`analyze_sr_interference` 返回 `co_sr_triggered=false`，但 ap1↔ap3 为 moderate 干扰（-72 dBm），ap1/ap3 的高丢包/高时延与此相关。
+
+策略选择：Co-SR
+虽然 `co_sr_triggered=false`，但 ap1 和 ap3 的 STA 业务质量严重劣化，且两者之间存在 moderate 干扰链路。降低 ap1 和 ap3 的发射功率可直接减少相互间的 OBSS 干扰，从而改善 SINR 和信道竞争效率。AP2 性能良好，保持当前功率即可。
+
+参数方案
+经 `evaluate_sr_candidate` 验证，以下方案满足全部 CCA / SINR / STA RSSI 约束：
+
+| AP | 当前功率 | 提议功率 | 降幅 | 依据 |
+|----|---------|---------|------|------|
+| AP1 | 10 dBm | 6 dBm | -4 dB | 降低对 ap3 的干扰，STA RSSI 余量仍 >25 dB |
+| AP2 | 10 dBm | 10 dBm | 0 dB | 性能良好，无需调整 |
+| AP3 | 10 dBm | 6 dBm | -4 dB | 降低对 ap1/ap2 的干扰，STA RSSI 余量仍 >25 dB |
+OBSS_PD：统一设为 -72 dBm（基于 `recommended_obss_pd_dbm=-71.96` 取整，落在协议窗口 [-82, -62] 内）。
+并发组：全组并发 `["ap1","ap2","ap3"]`，无 non-concurrent AP。
+代价：总降功率 8 dB，最大单 AP 降幅 4 dB；最小 STA RSSI 余量 25.29 dB，最小 SINR 20.78 dB，约束均充分满足。
+
+### 预期效果与权衡
+预期改善：ap1/ap3 间干扰降低，SINR 提升，丢包率和时延应显著下降，SLA 违规有望消除。
+权衡：ap1/ap3 功率各降 4 dB，覆盖范围略有缩小，但当前 STA RSSI 余量充足（25 dB），不影响连接质量。
+
+```json
+{"AP1": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "AP2": {"tx_power_dbm": 10, "obss_pd_dbm": -72}, "AP3": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.6ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0.16Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.24Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=5.7Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mevaluate_sr_candidate[0m {"proposed_powers": "{\"ap1\": 6, \"ap2\": 10, \"ap3\": 6}", "concurrent_group":... [90m(1.6ms)[0m  [1m[92m全部OK[0m
+[90m并发组:[0m ap1,ap2,ap3  [90m非并发:[0m —
+[90m代价:[0m 总降功=8dB 最大单AP=4dB STA余量=25.29dB minSINR=20.78dB
+投票 — AP2 对提案 #1 表态
+
+验算结果
+调用 `evaluate_sr_candidate` 验证提案参数 `{"ap1":6, "ap2":10, "ap3":6}`，并发组 `["ap1","ap2","ap3"]`：
+
+| 指标 | 结果 |
+|------|------|
+| valid | ✅ true，无错误 |
+| AP2 TX Power | 10 dBm（不变） |
+| AP2 STA RSSI | -45.71 dBm（余量充足） |
+| AP2 SINR | 29.68 dB（满足约束） |
+| CCA | ok |
+| 功率调整量 | 均为整数 dB |
+
+提案中 AP2 的 `obss_pd_dbm=-72` 与工具建议值 `-75.96` 略有差异，但均在协议窗口 [-82, -62] 内，且 AP2 功率未调整，不影响本节点性能。
+
+判断
+- AP2 当前业务正常（吞吐 8.2 Mbps、时延 13 ms、丢包 0%），提案不要求 AP2 降功率，对本节点无负面影响。AP1 和 AP3 各降 4 dB 可有效缓解 ap1↔ap3 间的 moderate 干扰，有望消除两者的 SLA 违规。
+总降功率 8 dB，代价可控；STA RSSI 余量 >25 dB，覆盖不受影响。
+
+综上，该方案合理，我表示同意。
+
+```json
+{"agreed": true, "reason": "提案经 evaluate_sr_candidate 验证为 valid，AP2 功率保持 10 dBm 不变，STA RSSI 余量充足（-45.71 dBm），SINR 29.68 dB 满足约束。AP1/AP3 各降 4 dB 可缓解相互间干扰，改善其 SLA 违规，整体代价可控，无负面影响。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(3.6ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0.32Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.1Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=5.44Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mevaluate_sr_candidate[0m {"proposed_powers": "{\"ap1\": 6, \"ap2\": 10, \"ap3\": 6}", "concurrent_group":... [90m(2.3ms)[0m  [1m[92m全部OK[0m
+[90m并发组:[0m ap1,ap2,ap3  [90m非并发:[0m —
+[90m代价:[0m 总降功=8dB 最大单AP=4dB STA余量=25.29dB minSINR=20.78dB
+投票 — AP3 对提案 #1 表态
+
+验算结果
+调用 `evaluate_sr_candidate` 验证提案参数 `{"ap1":6, "ap2":10, "ap3":6}`，并发组 `["ap1","ap2","ap3"]`：
+
+| 指标 | 结果 |
+|------|------|
+| valid | ✅ true，无错误 |
+| AP3 TX Power | 6 dBm（从 10 dBm 降 4 dB） |
+| AP3 STA RSSI | -49.71 dBm（余量 25.29 dB，充足） |
+| AP3 SINR | 20.78 dB（满足约束） |
+| CCA | ok |
+| 功率调整量 | 整数 dB ✅ |
+
+判断
+当前 AP3 STA 时延 484 ms、丢包率 30.95%，SLA 严重违规。邻居 AP1/AP2 的强信号（-72 dBm）导致信道竞争加剧。提案要求我将 TX Power 从 10 dBm 降至 6 dBm，降幅 4 dB 为整数，符合硬性约束。STA RSSI 降至约 -49.71 dBm，余量仍达 25.29 dB，不影响连接质量。
+AP1 同步降至 6 dBm，可有效缓解 ap1↔ap3 间的 moderate 干扰；AP2 保持 10 dBm 不变，不受影响。
+- AP2 已同意该方案，整体代价可控（总降 8 dB），预期可显著改善我的时延和丢包指标。
+
+综上，该方案合理且对我有利，我表示同意。
+
+```json
+{"agreed": true, "reason": "提案经 evaluate_sr_candidate 验证为 valid。AP3 TX Power 从 10 dBm 降至 6 dBm（整数降幅 4 dB），STA RSSI 余量 25.29 dB 充足，SINR 20.78 dB 满足约束，CCA/功率均合规。AP1 同步降功率可缓解 ap1↔ap3 间干扰，有望消除我的高时延（484ms）和高丢包（30.95%）问题。AP2 已同意，方案合理，无负面影响。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 10, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=8 用时 94s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_sr）：QoS 效果验收未通过：verdict=neutral, score=-0.0288, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=-0.028757 confidence=0.75

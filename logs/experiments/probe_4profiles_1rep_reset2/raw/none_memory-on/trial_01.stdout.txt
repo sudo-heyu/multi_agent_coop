@@ -1,0 +1,247 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=9579fdc5 event_db=logs/experiments/probe_4profiles_1rep_reset2/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_185159_9579fdc5.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下为我的实时状态广播：
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；EDCA 退避参数 CWmin/CWmax/AIFSN 设定为 31/63/7。
+信道与干扰感知：本机扫描到的邻居 AP RSSI 为：ap2 约 -81.0 dBm，ap3 约 -72.0 dBm。ap3 信号相对较强，存在一定同频共存压力；ap2 信号较弱，干扰可忽略。信道利用率与 TX Retries Ratio 当前无异常波动，噪声底噪处于常规水平。
+业务质量与 STA 状态：关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm，链路质量优良。当前承载大文件下载（bulk_download）业务，流量优先级为 low。实测吞吐量为 1.04 Mbps，端到端延迟 6.59 ms，抖动 5.33 ms，丢包率 0%。
+SLA 反馈：该 STA 的 SLA 约束（延迟≤500 ms、丢包≤10%、吞吐≥1.0 Mbps）全部满足，无违规项，QoE 稳定。
+
+状态简述：本机链路质量优异，业务 SLA 完全达标，整体运行平稳。仅 ap3 的邻居信号强度接近 -72 dBm，需留意后续是否引发同频竞争加剧；目前暂无紧急降功率或调整 EDCA 的必要性。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实时状态广播：
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；EDCA 退避参数 CWmin/CWmax/AIFSN 设定为 7/15/2。
+信道与干扰感知：本机扫描到的邻居 AP RSSI 为：ap1 约 -81.0 dBm，ap3 约 -72.0 dBm。ap3 信号相对较强，存在一定同频共存压力；ap1 信号较弱，干扰可忽略。
+业务质量与 STA 状态：关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm，链路质量优良。当前承载直播（live_stream）业务，流量优先级为 high。实测吞吐量为 4.02 Mbps，端到端延迟 7.61 ms，抖动 3.76 ms，丢包率 0%。
+SLA 反馈：该 STA 的 SLA 约束（延迟≤120 ms、丢包≤2%、吞吐≥3.0 Mbps）全部满足，无违规项，QoE 稳定。
+
+状态简述：本机链路质量优异，业务 SLA 完全达标，整体运行平稳。仅 ap3 的邻居信号强度接近 -72 dBm，需留意后续是否引发同频竞争加剧；目前暂无紧急降功率或调整 EDCA 的必要性。
+
+[1m[93mAP3[0m:
+我是 AP3。以下为我的实时状态广播：
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；承载 best_effort 业务的 EDCA 退避参数 CWmin/CWmax/AIFSN 设定为 15/31/3。
+信道与干扰感知：本机扫描到的邻居 AP RSSI 为：ap1 约 -72.0 dBm，ap2 约 -72.0 dBm。两邻站信号强度相近且接近 -72 dBm，存在一定同频共存压力。信道利用率与 TX Retries Ratio 当前处于常规范围，噪声底噪稳定。
+业务质量与 STA 状态：关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm，链路质量优良。当前承载普通业务（best_effort），流量优先级为 medium。实测吞吐量为 1.51 Mbps，端到端延迟 5.79 ms，抖动 5.08 ms，丢包率 0%。
+SLA 反馈：该 STA 的 SLA 约束（延迟≤300 ms、丢包≤5%、吞吐≥0.5 Mbps）全部满足，无违规项，QoE 稳定。
+
+状态简述：本机链路质量优异，业务 SLA 完全达标，整体运行平稳。ap1 与 ap2 的邻居信号均接近 -72 dBm，需留意后续是否引发同频竞争加剧；目前暂无紧急降功率或调整 EDCA 的必要性。
+
+[1m[96mAP1[0m:
+### 现状分析
+当前三台 AP 的 STA 链路质量均优异（STA RSSI ≈ -45.7 dBm），SLA 全部满足且无违规项，SINR 高达 48.3 dB，说明实际同频干扰尚未对业务造成实质性影响。信道利用率与重传率处于常规水平，无需紧急干预。
+
+拓扑感知方面，ap3 与 ap1、ap2 的邻居 RSSI 均为约 -72 dBm，属于中等偏强干扰距离；而 ap1 与 ap2 之间相距较远（RSSI ≈ -81 dBm）。优先级分布为 ap2(high)、ap3(medium)、ap1(low)，当前 EDCA 参数（CWmin/CWmax/AIFSN 分别为 7/15/2、15/31/3、31/63/7）已严格遵循高优低退避的单调性，未出现竞争失衡。因此，Co-EDCA 暂无调整必要。
+
+### 策略选择
+选择 Co-SR（空间复用降功率）。虽然当前 SINR 充足，但 ap3 处于 ap1/ap2 的中间覆盖区，长期以 10 dBm 全功率发射会压缩并发窗口的安全余量。通过适度降低 ap3 的发射功率，可在不影响其自身 STA 链路的前提下，提升 ap1 与 ap2 之间的潜在并发效率，符合整体网络性能优先原则。
+
+参数方案ap1 / ap2：保持 TX Power 10 dBm。两者间距较大（-81 dBm），可安全进入同一并发组。
+ap3：TX Power 下调 2 dB 至 8 dBm。降幅取最小必要值，STA RSSI 仍远高于安全阈值，不会触发 SLA 风险。配套 OBSS_PD 门限统一设为 -75 dBm，满足耦合约束 `tx ≤ 23 - (obss_pd + 82)`（10 ≤ 16，8 ≤ 16）。
+并发分组：`["ap1", "ap2"]` 作为并发组，`["ap3"]` 为非并发节点，避免 ap3 在 ap1/ap2 并发时产生叠加干扰。
+
+### 预期效果与权衡
+收益：降低 ap3 对 ap1/ap2 链路的潜在同频压制，释放空间复用增益；ap1/ap2 并发概率提升，整体频谱效率改善。
+权衡：ap3 覆盖半径微缩约 1~2 dB，但其关联 STA 接收强度充裕，QoE 不受影响；ap1/ap2 功率不变，自身业务零损失。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 10,
+    "obss_pd_dbm": -75
+  },
+  "AP2": {
+    "tx_power_dbm": 10,
+    "obss_pd_dbm": -75
+  },
+  "AP3": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -75
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2"],
+    "non_concurrent_aps": ["ap3"]
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】提案梳理
+当前协商仅进行至第一轮，尚未出现历史拒绝或反提案。系统传入的即为 AP1 发起的提案#1（Co-SR 空间复用降功率）。
+
+【第二步】验算与判断（针对 AP2）
+TX Power 与 STA 链路：提案要求 AP2 保持 `tx_power_dbm: 10` 不变。结合广播状态，本机关联 STA RSSI 为 -45.7 dBm，远高于协议硬性安全阈值（-75 dBm），高优直播业务 SLA 稳定。维持原功率对我方链路零损耗。
+干扰与 CCA 余量：本机扫描到 ap3 邻居 RSSI 为 -72 dBm，处于中等偏强干扰距离。提案将 ap3 功率下调 2 dB 至 8 dBm，可有效降低 ap3 对 ap2 的潜在同频压制，提升 ap2 的 CCA 判定余量与 SINR 安全窗。
+- 并发分组合理性：ap1 与 ap2 互扰极弱（RSSI ≈ -81 dBm），将其划入 `concurrent_group` 符合空间复用条件；ap3 作为非并发节点降功率隔离，策略收敛且无过度牺牲。
+- 合规性检查：功率调整量为整数 dB；OBSS_PD 统一设为 -75 dBm，满足耦合约束 `tx ≤ 23(obss_pd + 82)`（10 ≤ 16，8 ≤ 16）。未触发任何强制反对条件。
+
+综合评估，该提案在保障我方高优业务 SLA 的前提下，通过精准降载 ap3 释放了 ap1/ap2 的并发窗口，整体网络频谱效率预期提升，参数方案对我方安全且可接受。
+
+```json
+{"agreed": true, "reason": "提案保持 AP2 发射功率 10 dBm 不变，STA RSSI (-45.7 dBm) 远高于 -75 dBm 安全底线，高优直播 SLA 不受影响。ap3 降功率至 8 dBm 有效缓解其对我方的潜在同频压制（邻居 RSSI -72 dBm），同时 ap1/ap2 互扰极弱（-81 dBm），并发分组合理。方案满足整数降幅与 OBSS_PD 耦合约束，对我方零损耗且改善共存环境，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案梳理
+当前为第一轮协商，AP1发起Co-SR提案#1，AP2已表态同意。本回合由AP3对同一提案进行投票验算。
+
+【第二步】验算与判断（针对AP3）功率与协议合规：提案要求AP3 TX Power从10 dBm降至8 dBm，降幅2 dB为整数，符合硬性约束。配套OBSS_PD统一设为-75 dBm，满足标准耦合约束 `tx ≤ 23 - (obss_pd + 82)`（即 `8 ≤ 23 - (-75 + 82) = 16`）。
+- 链路质量与SLA：本机关联STA RSSI当前为-45.7 dBm。TX Power下调2 dB后，预估STA接收强度约-47.7 dBm，仍远高于-75 dBm的强制安全底线。当前best_effort业务吞吐1.51 Mbps、延迟5.79 ms、丢包0%，SLA各项指标均有充足余量，降载不会引发QoE劣化或违约。干扰与并发策略：本机扫描到ap1/ap2邻居RSSI均为-72 dBm，处于中等偏强干扰距离。提案将AP3划入`non_concurrent_aps`并适度降载，既能避免AP3在ap1/ap2潜在并发时产生叠加干扰，也能降低AP3自身在密集共存环境下的信道竞争压力，策略收敛合理。
+
+综合评估，该提案对我方链路零风险，参数完全合规，且有利于缓解整体同频竞争，予以同意。
+
+```json
+{"agreed": true, "reason": "提案要求AP3 TX Power由10 dBm降至8 dBm（降幅2 dB为整数），配套OBSS_PD -75 dBm满足耦合约束。本机STA RSSI当前-45.7 dBm，降载后预估仍约-47.7 dBm，远高于-75 dBm安全阈值，best_effort业务SLA余量充足不受影响。AP3被划入非并发节点降载隔离，有助于缓解ap1/ap2间的同频竞争压力，策略收敛且对我方零损耗，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 10, "obss_pd_dbm": -75}, "ap2": {"tx_power_dbm": 10, "obss_pd_dbm": -75}, "ap3": {"tx_power_dbm": 8, "obss_pd_dbm": -75}, "_sr": {"concurrent_group": ["ap1", "ap2"], "non_concurrent_aps": ["ap3"]}}
+协商结束
+
+[1m[96mAP1[0m:
+现状分析
+上一轮 Co-SR 提案（ap3 降功率至 8 dBm）经 Validator 验收后判定 `verdict=degraded`，说明降功率策略未能带来预期的并发增益，反而可能轻微压缩了 ap3 的覆盖余量或业务稳定性。结合实时状态，三台 AP 间的实际 SINR 高达 48.3 dB，信道利用率与重传率均处于低位，同频干扰并非当前性能瓶颈。相反，各 AP 承载的业务优先级差异显著（ap2: high / ap3: medium / ap1: low），且当前 EDCA 参数梯度相对平缓，在高优直播业务与低优下载业务共享信道时，存在进一步通过竞争机制差异化提升整体效率的空间。
+
+策略选择
+选择 Co-EDCA。鉴于空间复用降功率已被验证为次优解，且实际干扰水平较低，应转向 MAC 层竞争优化。通过拉大高、中、低优先级 AP 的退避窗口与 AIFS 时间，可使高优业务（ap2 直播）更快抢占信道以降低时延与抖动，同时确保低优业务（ap1 下载）在空闲信道下仍能稳定传输，避免“饿死”现象。此路径零功率损耗，完全规避了 Co-SR 引发的 QoS 降级风险。
+
+参数方案
+依据 IEEE 802.11 标准离散值与优先级单调性约束，调整如下：
+ap2 (high)：`CWmin=3, CWmax=7, AIFSN=1`。极致压缩高优业务竞争窗口，保障直播流实时性。ap3 (medium)：`CWmin=7, CWmax=15, AIFSN=2`。参数居中，平衡普通业务的接入机会。
+ap1 (low)：`CWmin=15, CWmax=31, AIFSN=3`。适度延长低优业务退避时间，减少其对高优信道的占用概率。
+梯度校验：`CWmin(3≤7≤15) 与 AIFSN(1≤2≤3)` 严格满足单调递增，符合协议规范。
+
+### 预期效果与权衡
+收益：高优直播业务信道竞争成功率提升，端到端延迟与抖动进一步收敛；中低优业务在现有低拥塞环境下仍可获得充足传输机会，整体 QoE 分布更均衡。权衡：ap1 退避时间略有增加，但因其业务容忍度高且当前信道空闲率高，实际吞吐不受实质影响；ap2/ap3 覆盖与功率保持不变，无链路质量风险。
+
+```json
+{
+  "AP1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  },
+  "AP2": {
+    "CWmin": 3,
+    "CWmax": 7,
+    "AIFSN": 1
+  },
+  "AP3": {
+    "CWmin": 7,
+    "CWmax": 15,
+    "AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】提案梳理
+- 提案 #1 (Co-SR)：由 ap1 发起，建议将 ap3 功率降至 8 dBm，ap1/ap2 保持 10 dBm 并发。拒绝原因：Validator 验收未通过，判定 QoS 效果降级 (`verdict=degraded`)，说明降功率未能带来预期的并发增益，反而可能轻微压缩了 ap3 的覆盖余量。
+- 提案 #2 (Co-EDCA)：由 ap1 发起，依据各 AP 业务优先级差异（ap2: high / ap3: medium / ap1: low），拉大 EDCA 竞争参数梯度。
+
+【第二步】验算与判断（针对 AP2）
+参数合规性：提案中 ap2 (high) 的 CWmin/CWmax/AIFSN 设为 3/7/1；ap3 (medium) 设为 7/15/2；ap1 (low) 设为 15/31/3。严格遵循了 `high ≤ medium ≤ low` 的单调递增约束，符合 IEEE 802.11 标准离散值规范。
+对自身业务的影响：本机承载 live_stream 业务，优先级为 high。提案将退避窗口从当前的 7/15 进一步压缩至 3/7，AIFSN 从 2 降至 1。这将显著缩短高优业务的信道竞争等待时间，有利于提升直播流的实时性与抗干扰能力，完全契合高优业务的优化诉求。
+SLA 与链路安全：本机 STA RSSI 为 -45.7 dBm，链路质量极佳；当前延迟 7.61 ms、丢包 0%，SLA 余量非常充裕。MAC 层参数调整不涉及物理层功率削减，不会对链路稳定性产生任何负面影响。
+
+综合评估，该 Co-EDCA 提案逻辑严密、参数合规，且能针对性地优化我方高优直播业务的信道接入效率，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#2采用Co-EDCA策略，针对本机(high优先级)设定的CWmin/CWmax/AIFSN(3/7/1)相比当前参数(7/15/2)进一步压缩了竞争窗口，有利于直播业务抢占信道、降低时延。参数梯度严格遵循high≤medium≤low的单调性约束，符合协议规范。本机STA链路质量优异(-45.7dBm)且SLA余量充足，MAC层优化零风险且预期收益明确，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案梳理
+上一轮 Co-SR 提案（ap3 降功率至 8 dBm）经 Validator 验收判定为 `verdict=degraded`，说明降功率策略未能带来预期的并发增益，反而可能轻微压缩了覆盖余量。当前 AP1 发起的提案#2 已转向 Co-EDCA 策略，依据三台 AP 的实际业务优先级差异（ap2: high / ap3: medium / ap1: low）拉大 MAC 层竞争参数梯度。AP2 已对该提案表示同意。
+
+【第二步】验算与判断（针对 AP3）
+参数合规性与优先级匹配：本机 traffic_priority 为 medium。提案设定 AP3 的 CWmin/CWmax/AIFSN 为 7/15/2，相比当前参数（15/31/3）适度压缩了退避窗口与 AIFS 时间，严格遵循 `high(3/1) ≤ medium(7/2) ≤ low(15/3)` 的单调递增约束，符合 IEEE 802.11 离散值规范。
+业务与 SLA 影响：本机承载 best_effort 业务，当前 SLA 约束（延迟≤300 ms、丢包≤5%、吞吐≥0.5 Mbps）远未触及红线。本次调整仅涉及 MAC 层竞争机制，不改变发射功率，本机 STA RSSI 保持 -45.7 dBm，链路稳定性完全不受影响。缩短退避时间有助于提升 medium 优先级业务的信道接入效率，契合优化诉求。
+整体权衡：该方案有效规避了 Co-SR 引发的 QoS 降级风险，通过差异化竞争机制优化多优先级共存环境，逻辑严密且对我方零损耗。
+
+综合评估，提案#2 参数合规、优先级排序正确，且能针对性改善本机业务的接入机会，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#2采用Co-EDCA策略，针对本机(medium优先级)设定的CWmin/CWmax/AIFSN(7/15/2)相比当前参数(15/31/3)适度压缩了竞争窗口，严格遵循high≤medium≤low的单调性约束。本机STA链路质量优异(-45.7dBm)且best_effort业务SLA余量充足，MAC层优化零风险且预期收益明确。鉴于上一轮Co-SR提案已被验证降级，转向EDCA差异化优化是合理选择，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap2": {"CWmin": 3, "CWmax": 7, "AIFSN": 1}, "ap3": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}}
+协商结束
+
+[1m[96mAP1[0m:
+现状分析
+前两轮提案（Co-SR 降功率与激进 Co-EDCA 梯度拉大）经 Validator 验收分别判定为 `degraded` 和 neutral。结合实时状态，三台 AP 关联 STA 的 SINR 高达 48.3 dB，信道利用率与重传率均为零，端到端延迟与丢包率远低于 SLA 阈值。这表明当前网络处于典型的轻载、低干扰、高余量状态。在此条件下，物理层降功率会破坏覆盖平衡导致 QoS 轻微劣化；MAC 层过度压缩退避窗口则因信道空闲度过高而无法转化为实际吞吐/时延收益，反而可能增加控制开销或引发公平性争议。
+
+策略选择
+选择 维持现状（Minimal Adjustment）。基于“证据不足时提出最小改动方案”的原则，当前各 AP 的 EDCA 参数已自然形成 `high(7/15/2) < medium(15/31/3) < low(31/63/7)` 的单调梯度，且发射功率统一为 10 dBm 保障了最优覆盖。在轻载场景下，任何非零的调整量都会打破现有的稳定均衡，且无实测数据支持进一步优化的必要性。
+
+### 参数方案
+ap1 / ap2 / ap3：TX Power 保持 10 dBm 不变。EDCA 参数：严格保持广播时的初始设定值，不做任何梯度拉伸或压缩。ap2 (high): CWmin=7, CWmax=15, AIFSN=2ap3 (medium): CWmin=15, CWmax=31, AIFSN=3
+  - ap1 (low): CWmin=31, CWmax=63, AIFSN=7
+此方案确保高优业务已获得相对更快的接入机会，同时避免在低拥塞环境下引入不必要的 MAC 层竞争扰动。
+
+### 预期效果与权衡
+收益：规避了 Co-SR 带来的覆盖收缩风险与 Co-EDCA 激进调整导致的资源错配，维持当前已验证的稳定运行状态。
+- 权衡：放弃了对理论极限性能的压榨，但在当前轻载 SLA 充裕的场景下，稳定性优先于边际收益。
+
+```json
+{
+  "AP1": {
+    "CWmin": 31,
+    "CWmax": 63,
+    "AIFSN": 7
+  },
+  "AP2": {
+    "CWmin": 7,
+    "CWmax": 15,
+    "AIFSN": 2
+  },
+  "AP3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  }
+}
+```
+
+[1m[92mAP2[0m:
+同意。针对本机（AP2）的参数验算如下：
+
+1. 参数合规与优先级匹配：提案设定本机 CWmin/CWmax/AIFSN 为 7/15/2，与广播初始状态完全一致。严格遵循 `high(7/2) ≤ medium(15/3) ≤ low(31/7)` 的单调递增约束，符合 IEEE 802.11 离散值规范。
+业务与链路安全：当前网络为典型轻载低干扰环境（SINR 48.3 dB，重传率≈0）。前两轮激进降功率与压缩退避窗口均被 Validator 判定为无效或降级。本方案维持现有稳定梯度，避免在空闲信道中引入不必要的 MAC 竞争扰动，同时保障高优直播业务的接入效率。本机 STA RSSI（-45.7 dBm）与 SLA 指标均不受任何负面影响。
+决策结论：在多次尝试优化均无实测增益后，回归已验证的初始稳态参数是最小化网络震荡、保障整体 QoE 的最优解。方案对我方零损耗且逻辑收敛，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#3将本机EDCA参数恢复至初始值（CWmin/CWmax/AIFSN=7/15/2），严格满足high≤medium≤low的单调排序约束。鉴于前两轮Co-SR与激进Co-EDCA均因轻载环境无实际收益而被Validator否决，维持当前已验证的稳定梯度可避免MAC层冗余开销，同时保障高优直播业务的信道接入效率。本机STA链路质量优异且SLA余量充足，方案零风险且符合网络整体稳态诉求，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案梳理提案 #1 (Co-SR)：AP1 提议将 ap3 功率降至 8 dBm。Validator 验收判定 `verdict=degraded`，说明在轻载高 SINR 场景下，物理层降功率破坏了覆盖平衡，未带来并发增益。
+- 提案 #2 (Co-EDCA)：AP1 提议激进拉大 EDCA 梯度（ap3 设为 7/15/2）。Validator 验收判定 `verdict=neutral`，表明信道空闲度过高时，过度压缩退避窗口无法转化为实际吞吐/时延收益，反而可能引入控制开销。提案 #3 (维持现状)：AP1 提议放弃非零调整，将三台 AP 的 EDCA 参数恢复至广播初始值（ap3: CWmin=15, CWmax=31, AIFSN=3），以规避前两轮优化带来的网络震荡风险。
+
+【第二步】验算与判断（针对 AP3）
+参数合规性与优先级匹配：提案要求本机 EDCA 参数保持 `CWmin=15, CWmax=31, AIFSN=3`，与初始广播状态完全一致。该组参数严格遵循 `high(7/2) ≤ medium(15/3) ≤ low(31/7)` 的单调递增约束，符合 IEEE 802.11 标准离散值规范。
+业务与链路安全：本机承载 best_effort 业务，优先级为 medium。当前 STA RSSI 为 -45.7 dBm，SLA 约束（延迟≤300 ms、丢包≤5%）远未触及红线。MAC 层参数维持原状不涉及功率削减或竞争机制突变，对本机链路稳定性与 QoE 无任何负面影响。
+- 整体权衡：鉴于前两轮激进调参均被 Validator 证实无效或降级，且当前网络处于典型的轻载、低干扰、高余量状态，回归已验证的初始稳态参数是避免冗余 MAC 竞争扰动、保障整体 QoE 收敛的最优解。方案对我方零损耗且逻辑自洽。
+
+综合评估，提案 #3 参数合规、优先级排序正确，且在多次试错后选择了最小改动路径，有效规避了优化反噬风险，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#3将本机EDCA参数恢复至初始值（CWmin/CWmax/AIFSN=15/31/3），严格满足medium优先级定位及high≤medium≤low的单调排序约束。鉴于前两轮Co-SR降功率与激进Co-EDCA均因轻载环境无实际收益而被Validator否决，维持当前已验证的稳定梯度可避免MAC层冗余开销，同时保障best_effort业务的接入效率。本机STA链路质量优异且SLA余量充足，方案零风险且符合网络整体稳态诉求，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 31, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=18 用时 196s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.1101, confidence=0.5505
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.110102 confidence=0.5505

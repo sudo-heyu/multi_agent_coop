@@ -1,0 +1,62 @@
+urllib3.exceptions.SSLError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/adapters.py", line 696, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py", line 842, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/urllib3/util/retry.py", line 543, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='api.ppio.com', port=443): Max retries exceeded with url: /openai/v1/chat/completions (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 383, in <module>
+    main()
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 310, in main
+    result = orch.structured_relay(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2374, in structured_relay
+    return _structured_relay_impl(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2492, in _structured_relay_impl
+    reply, streamed = futures[ap].result()
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1698, in _run_agent_turn
+    reply = driver(
+            ^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 175, in speak
+    return self._chat_loop(ap, messages, on_text_delta)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 249, in _chat_loop
+    text, tool_calls = self._stream_once(messages, on_text_delta)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 295, in _stream_once
+    resp = sess.post(url, json=payload, headers=headers, stream=True, timeout=self.timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/sessions.py", line 712, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/sessions.py", line 651, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/sessions.py", line 784, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/adapters.py", line 727, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='api.ppio.com', port=443): Max retries exceeded with url: /openai/v1/chat/completions (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1016)')))

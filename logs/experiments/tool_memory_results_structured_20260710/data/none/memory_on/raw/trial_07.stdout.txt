@@ -1,0 +1,81 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=174ed4c2 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_050406_174ed4c2.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。当前实测参数播报如下：
+MAC 参数：发射功率（TX Power）为 10 dBm；EDCA 参数中 CWmin/CWmax/AIFSN 均统一配置为 31/63/7（BE 与 VI 队列保持一致）。
+信道指标：当前信道利用率与 TX Retries Ratio 均为 0，表明介质处于空闲状态，无实质性的竞争或重传压力。
+感知指标：本机扫描到的邻居 AP 信号强度为 ap2 ≈ -81 dBm、ap3 ≈ -72 dBm，干扰源距离较远；己方关联 STA（sta_ap1_user）RSSI 为 -45.7 dBm，链路信号充足；噪声底噪处于正常基线水平。
+业务质量：用户侧吞吐（user）与 iperf 吞吐均为 0 Mbps，延迟 0 ms，抖动 0 ms，丢包率 0%。
+
+状态简述：当前物理层与 MAC 层信道环境良好且无拥塞，但业务层呈现零吞吐异常。关联 STA 承载 best_effort 业务（medium 优先级），SLA 状态已标记为 violated，核心问题在于实际吞吐量未达到 ≥0.5 Mbps 的下限要求。整体而言，当前信道未偏忙、邻居干扰偏弱，业务质量不稳定主要源于流量未有效通过或调度策略未生效，暂不触发射频或 EDCA 的激进调整。
+
+[1m[92mAP2[0m:
+我是 AP2。当前实测参数播报如下：
+MAC 参数：发射功率（TX Power）为 10 dBm；EDCA 参数中 CWmin/CWmax/AIFSN 均统一配置为 7/15/2（BE 与 VI 队列保持一致）。
+信道指标：当前数据源未提供信道利用率与 TX Retries Ratio 的具体数值。
+感知指标：本机扫描到的邻居 AP 信号强度为 ap1 ≈ -81 dBm、ap3 ≈ -72 dBm，干扰源距离较远；己方关联 STA（sta_ap2_user）RSSI 为 -45.7 dBm，链路信号充足；噪声底噪数据暂未提供。
+业务质量：用户侧吞吐（user）约为 8.13 Mbps，延迟约 7.08 ms，抖动约 1.96 ms，丢包率 0%。
+
+状态简述：当前物理层链路信号良好，邻居干扰偏弱；业务层用户侧吞吐稳定且 SLA 状态为 satisfied，整体运行正常。
+
+[1m[93mAP3[0m:
+我是 AP3。当前实测参数播报如下：
+MAC 参数：发射功率（TX Power）为 10 dBm；EDCA 参数中 CWmin/CWmax/AIFSN 均统一配置为 15/31/3（BE 与 VI 队列保持一致）。
+信道指标：当前数据快照中未直接提供信道利用率与 TX Retries Ratio 的具体数值。
+感知指标：本机扫描到的邻居 AP 信号强度为 ap1 ≈ -72 dBm、ap2 ≈ -72 dBm，干扰源距离较远；己方关联 STA（sta_ap3_user）RSSI 为 -45.7 dBm，链路信号充足；噪声底噪处于正常基线水平。
+业务质量：用户侧吞吐（user）约为 5.44 Mbps，延迟约 479.6 ms，抖动约 2.1 ms，丢包率 0%。
+
+状态简述：当前物理层链路信号良好，邻居干扰偏弱；业务层用户侧吞吐稳定且无丢包，但 SLA 状态已标记为 violated，核心问题在于实际延迟（~479.6 ms）显著超出 300 ms 的容忍上限。整体而言，当前信道环境宽松，高延迟可能源于调度策略或队列积压，暂不触发射频或 EDCA 的激进调整。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.527921
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.527921；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.527921；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 55s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=-0.0091, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=-0.009147 confidence=0.75

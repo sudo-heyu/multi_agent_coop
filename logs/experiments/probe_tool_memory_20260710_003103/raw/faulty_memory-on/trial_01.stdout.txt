@@ -1,0 +1,4 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=12 tool_profile=faulty memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[错误] state server 未在线：http://127.0.0.1:5001
+请先启动常驻服务：bash openclaw/serve.sh start

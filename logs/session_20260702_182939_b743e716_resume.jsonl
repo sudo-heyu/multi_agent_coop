@@ -1,0 +1,30 @@
+{"ts": "2026-07-02T18:29:39.826+00:00", "session_id": "b743e716", "event": "session_resumed", "event_id": "efdc4fcbc15e413ea0776b9f729e88e5", "sequence": 18, "boundary": "broadcast_complete", "projection_version": 1}
+{"ts": "2026-07-02T18:29:39.830+00:00", "session_id": "b743e716", "event": "episodic_memory_recalled", "event_id": "d38dbbab1f764104b75e4476f41869c6", "sequence": 19, "matches": []}
+{"ts": "2026-07-02T18:29:39.831+00:00", "session_id": "b743e716", "event": "semantic_rules_recalled", "event_id": "cce5d7eb5344455cb3e7794bcdb9b270", "sequence": 20, "matches": []}
+{"ts": "2026-07-02T18:29:39.832+00:00", "session_id": "b743e716", "event": "phase_start", "event_id": "01696ff706c84d858934b3968ba2d157", "sequence": 21, "phase": 2, "label": "协商触发，等待 AP1 自主选路"}
+{"ts": "2026-07-02T18:29:39.833+00:00", "session_id": "b743e716", "event": "phase_start", "event_id": "6eef57e7f98a4eb5b3a94c43983bd846", "sequence": 22, "phase": 3, "label": "AP1 发起提案（自主选路）"}
+{"ts": "2026-07-02T18:29:39.834+00:00", "session_id": "b743e716", "event": "agent_speak_start", "event_id": "830601ce7003462583eaa24c2fcc7ff0", "sequence": 23, "agent": "ap1", "phase": 3, "role": "proposer"}
+{"ts": "2026-07-02T18:30:59.171+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "8b9a66d8eded4be78e775a3f49a3cf48", "sequence": 24, "agent": "ap1", "text": "当前状态确认：AP1 优先级 high，AP2/AP3 均为 low，但三者 EDCA 参数完全相同（CWmin=7, CWmax=15, AIFSN=2），未体现优先级差异。邻居 RSSI 在 -85~-88 dBm 范围，无强干扰证据。走 Co-EDCA 路径。\n\n"}
+{"ts": "2026-07-02T18:31:00.592+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "16fa8fa4f23e4794bb43fba0fcbaa8b2", "sequence": 25, "agent": "ap1", "text": "当前"}
+{"ts": "2026-07-02T18:31:00.594+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "3341d9da82d64cb99ccb8c4b5d5a9eed", "sequence": 26, "agent": "ap1", "text": "状态确认：AP"}
+{"ts": "2026-07-02T18:31:00.595+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "0c497e7ac32940dfbce5935705ce71c8", "sequence": 27, "agent": "ap1", "text": "1 优先级 high"}
+{"ts": "2026-07-02T18:31:00.595+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "94edf9b82feb4bbebda946438cc729c4", "sequence": 28, "agent": "ap1", "text": "，AP"}
+{"ts": "2026-07-02T18:31:00.596+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "5a7c9ad89c4d4745a97fe4ba54d54d32", "sequence": 29, "agent": "ap1", "text": "2/AP3 "}
+{"ts": "2026-07-02T18:31:00.597+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "ef545923527a40189289f3eef8c31ad6", "sequence": 30, "agent": "ap1", "text": "均为"}
+{"ts": "2026-07-02T18:31:00.598+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "b4941c556f3f49d5bc6cb4185720b263", "sequence": 31, "agent": "ap1", "text": " low，但三者"}
+{"ts": "2026-07-02T18:31:00.599+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "73f7fe25763544958bbe5b016bb8fe55", "sequence": 32, "agent": "ap1", "text": " EDCA 参数"}
+{"ts": "2026-07-02T18:31:00.600+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "976e2c73020849bf9a315acf6cbf7aa0", "sequence": 33, "agent": "ap1", "text": "完全相同（CW"}
+{"ts": "2026-07-02T18:31:00.601+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "edc723e3382b4e859a61dd372056a1ba", "sequence": 34, "agent": "ap1", "text": " CWmax=1"}
+{"ts": "2026-07-02T18:31:00.601+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "1d47f917f2114470b090dc4f5a313da3", "sequence": 35, "agent": "ap1", "text": "min=7,"}
+{"ts": "2026-07-02T18:31:00.602+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "dfa58e192d8a41bb96701d4cb32c9e99", "sequence": 36, "agent": "ap1", "text": "5, AIF"}
+{"ts": "2026-07-02T18:31:00.603+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "14accf9f20f94e1d94973fbba0d2c594", "sequence": 37, "agent": "ap1", "text": "SN=2），"}
+{"ts": "2026-07-02T18:31:00.603+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "cf115ab4b4964b41bf37541a608e06ae", "sequence": 38, "agent": "ap1", "text": "未体现优先级差异"}
+{"ts": "2026-07-02T18:31:00.604+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "8486786ddb864249903cccd6007bbd6d", "sequence": 39, "agent": "ap1", "text": "。邻居"}
+{"ts": "2026-07-02T18:31:00.605+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "7072bc661cd64430b109f05a44868a99", "sequence": 40, "agent": "ap1", "text": " RSSI 在"}
+{"ts": "2026-07-02T18:31:00.605+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "0ea8e04224cc4c9eb1c2f95d3d4a3653", "sequence": 41, "agent": "ap1", "text": " -85~-"}
+{"ts": "2026-07-02T18:31:00.606+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "42de1e1d1e52499ea1a3c5225481e67e", "sequence": 42, "agent": "ap1", "text": "88 dBm"}
+{"ts": "2026-07-02T18:31:00.607+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "9f289e66128d44e6b3700460f31775f6", "sequence": 43, "agent": "ap1", "text": " 范围，无"}
+{"ts": "2026-07-02T18:31:00.608+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "f4ca3f524d06426795a5d026a11c71fa", "sequence": 44, "agent": "ap1", "text": "强干扰证据。"}
+{"ts": "2026-07-02T18:31:00.609+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "a79d3c5029de4af48633ceb6902fb9a3", "sequence": 45, "agent": "ap1", "text": "走"}
+{"ts": "2026-07-02T18:31:00.610+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "8682c62028c54be0b8cc7b6ed01f630f", "sequence": 46, "agent": "ap1", "text": " Co-EDCA"}
+{"ts": "2026-07-02T18:31:00.610+00:00", "session_id": "b743e716", "event": "agent_speak_chunk", "event_id": "9854ff7700e4403aa8d4b8552479ca75", "sequence": 47, "agent": "ap1", "text": " 路径。\n\n"}

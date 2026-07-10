@@ -1,0 +1,115 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=c6445ea2 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_044939_c6445ea2.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测参数播报：
+MAC 与 EDCA 参数：发射功率（TX Power）为 10 dBm；基础退避参数 CWmin/CWmax/AIFSN 分别为 31/63/7，AC_VI 队列同步维持该配置。
+信道与感知指标：本机扫描到的邻居 AP RSSI 为 ap2 ≈ -81.0 dBm、ap3 ≈ -72.0 dBm；己方关联 STA RSSI 为 -45.7 dBm。当前快照未上报信道利用率、TX Retries Ratio 及独立 Noise Floor 读数。
+业务质量：用户侧吞吐量为 0 Mbps，延迟与抖动均为 0 ms，丢包率 100%。
+STA 反馈：关联 STA（sta_ap1_user，普通业务/medium 优先级/AC_VI 接入类别）SLA 状态为 violated。实际吞吐 0.0 Mbps 不满足 ≥0.5 Mbps 阈值，丢包率 100% 远超 ≤5% 上限，反馈明确指出业务流完全中断。
+
+状态简述：本机 STA 信号强度良好（-45.7 dBm），但业务呈现 100% 丢包与零吞吐的断连特征，链路质量极不稳定；邻居 ap3 信号相对较强（-72.0 dBm），存在潜在的同频干扰或信道竞争压力；整体网络当前处于严重降级状态，亟需通过协作优化恢复基础连通性与 QoS。
+
+[1m[92mAP2[0m:
+我是 AP2。实测参数如下：发射功率为 10 dBm，EDCA 竞争参数 CWmin/CWmax/AIFSN 分别设为 7、15、2。信道利用率与 TX Retries Ratio 均处于正常低位；本机扫描到邻居 AP1 RSSI 约 -81.0 dBm，AP3 约 -72.0 dBm，己方关联 STA RSSI 为 -45.7 dBm。业务侧用户面吞吐约 8.15 Mbps，平均延迟 10.8 ms，抖动 2.0 ms，丢包率 0%。当前关联的 1 个终端（AC_VI 业务流）SLA 状态全量满足，无延迟、丢包或吞吐量违规，QoE 反馈良好。
+
+整体而言，本节点运行于 medium 优先级的 best_effort 业务模式，信道未出现明显拥塞，邻居信号处于弱/中干扰范围，业务质量稳定可靠，暂无需紧急干预。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测参数播报：
+MAC 与 EDCA 参数：发射功率（TX Power）为 10 dBm；基础退避参数 CWmin/CWmax/AIFSN 分别为 15/31/3。
+信道与感知指标：本机扫描到的邻居 AP RSSI 为 ap1 ≈ -72.0 dBm、ap2 ≈ -72.0 dBm；己方关联 STA RSSI 为 -45.7 dBm。当前快照未上报信道利用率、TX Retries Ratio 及独立 Noise Floor 读数。
+业务质量：用户侧吞吐量为 5.92 Mbps，延迟 480.5 ms，抖动 2.09 ms，丢包率 12.18%。
+STA 反馈：关联 STA（sta_ap3_user，普通业务/medium 优先级/AC_VI 接入类别）SLA 状态为 violated。实际延迟（480.5 ms）与丢包率（12.18%）均严重超出 SLA 阈值（延迟≤300 ms，丢包≤5%），反馈明确指出 QoE 受损。
+
+状态简述：本机 STA 信号强度良好，但延迟与丢包指标显著超标，链路质量不稳定；邻居 ap1/ap2 信号强度相近且偏强（约 -72 dBm），存在潜在的同频干扰或信道竞争压力；整体网络当前处于性能降级状态，亟需通过协作优化恢复基础连通性与 QoS。
+
+[1m[96mAP1[0m:
+结论：建议采用 Co-SR（空间复用） 路径，将三台 AP 的发射功率统一降至 7 dBm，并配置 OBSS_PD 门限为 -72 dBm。
+
+现状分析
+- 核心问题：AP1 与 AP3 的关联 STA 均出现严重 SLA 违规（AP1 丢包 100%/吞吐 0，AP3 延迟 480ms/丢包 12%），但三者己方 STA RSSI 均为 -45.7 dBm，说明终端覆盖充足，瓶颈在于 AP 间的 OBSS 干扰与信道碰撞。
+干扰特征：本机扫描显示 AP1↔AP3、AP2↔AP3 的互扰 RSSI 均为 -72 dBm 左右，属于中等偏强干扰；AP1↔AP2 距离较远（-81 dBm）。当前三台 AP 均以 10 dBm 全功率发射，在共享信道上引发严重的隐藏节点效应与退避冲突。
+优先级状态：三台 AP 业务优先级均为 `medium`，无需强制构建 EDCA 梯度；当前差异化的 CWmin/CWmax/AIFSN 反而加剧了竞争不公平性，但首要矛盾仍是物理层干扰导致的链路中断。
+
+策略选择
+优先执行 Co-SR。理由如下：
+1. STA 信号充裕（-45.7 dBm），具备下调 TX Power 的安全余量，不会导致终端脱网。
+2. 中距离互扰（-72 dBm）是造成高丢包与高延迟的直接诱因，降功率可直接提升 SINR。配合 OBSS_PD 门限可激活 802.11ax/be 的空间复用机制，允许弱干扰链路并行传输，提升整体频谱效率。
+
+### 参数方案
+TX Power：AP1 / AP2 / AP3 均设为 7 dBm（降幅 3 dBm）。该值严格满足整数约束，且保留充足链路余量。
+OBSS_PD：统一设为 -72 dBm。与实测邻居 RSSI 对齐，使 AP 能准确判定“低于此阈值的邻居流量可安全复用”。并发拓扑：AP1 与 AP2 互扰最弱（-81 dBm），作为并发对；AP3 处于中间且同时干扰两者，列入非并发节点以保护并发链路的 SINR。
+
+### 预期效果与权衡
+- 预期：总发射功率下降 9 dB，AP3 处的汇聚干扰显著缓解，AP1 的 100% 丢包将快速回落至正常范围，AP3 的延迟与丢包同步改善。空间复用开启后，网络整体吞吐与公平性提升。
+权衡：覆盖半径略有收缩，但当前 STA 位置良好，不影响业务连续性；若后续发现边缘终端 RSSI 恶化，可微调回 8~9 dBm。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "AP2": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "AP3": {
+    "tx_power_dbm": 7,
+    "obss_pd_dbm": -72
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2"],
+    "non_concurrent_aps": ["ap3"]
+  }
+}
+```
+
+[1m[92mAP2[0m:
+### 协商阶段复盘与验算报告
+
+【第一步】历史提案与拒绝情况梳理
+当前为第一轮协商。AP1 已发起首个 Co-SR 提案（提案#1），尚未收到任何 AP 的投票或反对意见，因此不存在历史拒绝记录。
+
+【第二步】针对 AP2 参数的提案验算
+基于 AP1 的提案#1，提取并验算作用于本节点（AP2）的核心参数：
+- TX Power：提案值 `7 dBm`（当前 `10 dBm`，降幅 `3 dB`，符合整数调整约束）。
+OBSS_PD：提案值 `-72 dBm`，与本机扫描到的邻居强干扰源（AP3 ≈ -72 dBm）对齐，可准确触发空间复用判定。
+STA 链路余量：本机关联 STA RSSI 为 `-45.7 dBm`，远高于协议硬约束阈值 `-75 dBm`。即使发射功率下调 3 dB，终端接收信号仍保持极强水平，脱网风险为零。
+并发拓扑合理性：提案将 `[ap1, ap2]` 设为并发组。本机实测与 AP1 互扰仅 `-81 dBm`，属于弱干扰区间，具备安全并发的物理条件；将 AP3 划入 `non_concurrent_aps` 可有效隔离其当前的高延迟/高丢包状态，避免并发调度进一步拉低整体 SINR。
+自身业务影响：AP2 当前 SLA 全量满足（吞吐 8.15 Mbps / 延迟 10.8 ms / 丢包 0%）。降功率带来的覆盖微缩对本机业务无实质影响，同时能显著降低对 AP1/AP3 的 OBSS 压制，符合全局 QoS 优化目标。
+
+结论：提案参数合法，未触发任何硬性否决条件（TX Power ≥ 5 dBm，STA RSSI ≫ -75 dBm），且对自身业务零负面影响，同时精准缓解 AP1 断连与 AP3 劣化问题。予以同意。
+
+```json
+{"agreed": true, "reason": "提案#1 将本机 TX Power 从 10 降至 7 dBm（降幅 3 dB，符合整数约束），己方 STA RSSI 为 -45.7 dBm，链路余量充足，不受覆盖收缩影响。AP2 当前 SLA 全量满足，降功率不会导致业务降级。并发组配置 [ap1, ap2] 合理（互扰仅 -81 dBm），排除 AP3 可有效保护并发链路 SINR。方案兼顾全局干扰抑制与本机稳定性，无参数冲突，同意执行。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】历史提案与拒绝情况梳理
+当前为第一轮协商，仅存在 AP1 发起的提案#1（Co-SR 空间复用路径），尚未收到任何 AP 的投票或反对意见，无历史拒绝记录。
+
+【第二步】针对 AP3 参数的提案验算
+基于提案#1，提取作用于本节点（AP3）的核心参数并结合当前状态进行推理评估：
+TX Power：提案值 `7 dBm（当前 10 dBm，降幅 3 dB`，严格满足整数约束）。降功率后预估己方关联 STA RSSI 约为 `-48.7 dBm`，远高于协议硬约束阈值 `-75 dBm`，终端覆盖余量充足，不存在脱网风险。并发拓扑与业务影响：提案将 AP3 划入 `non_concurrent_aps`。结合本机实测数据（延迟 480.5 ms、丢包 12.18%），当前性能降级主要由多 AP 同频竞争与隐藏节点效应导致。被排除在并发组之外意味着在 ap1/ap2 并行传输窗口内，AP3 无需参与信道退避与竞争，可显著降低碰撞概率与介质占用率，直接缓解本机的高延迟与高丢包痛点。OBSS_PD 门限：统一设为 `-72 dBm`，与本机扫描到的邻居互扰 RSSI 精确对齐。该设置使 AP3 能准确区分强干扰与可复用流量，配合整体降功率可提升链路 SINR。SLA 预期：总发射功率下降 9 dB 且 AP3 获得非并发保护窗口，预计可有效恢复基础连通性，推动 SLA 状态从 `violated` 回归正常。
+
+结论：提案参数合法，未触发任何硬性否决条件（TX Power ≥ 5 dBm，STA RSSI ≫ -75 dBm，降幅为整数），且通过“降功率抑制全局干扰 + 非并发隔离保护本机信道”精准匹配当前网络瓶颈。方案兼顾全局频谱效率与本机 QoS 恢复，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#1 将本机 TX Power 从 10 降至 7 dBm（降幅 3 dB，符合整数约束），预估 STA RSSI 约 -48.7 dBm，远超 -75 dBm 安全阈值，覆盖不受影响。AP3 被明确列入 non_concurrent_aps，在 ap1/ap2 并发期间无需参与信道竞争，可直接缓解本机当前 480.5 ms 延迟与 12.18% 丢包的拥塞瓶颈。OBSS_PD 设为 -72 dBm 与实测互扰对齐，方案兼顾全局 SINR 提升与本机 SLA 恢复，无参数冲突，同意执行。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2"], "non_concurrent_aps": ["ap3"]}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=8 用时 150s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_sr）：QoS 效果验收未通过：verdict=degraded, score=-0.0800, confidence=0.3998
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.079955 confidence=0.3998

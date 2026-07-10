@@ -1,0 +1,300 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=099a7637 event_db=logs/experiments/probe_script_retry2_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_164759_099a7637.jsonl
+
+[1m[96mAP1[0m:
+AP1 广播：
+
+本机 AP1，当前运行大文件下载业务（bulk_download），流量优先级为 low。发射功率 10 dBm，EDCA 参数 BE 队列 CWmin/CWmax/AIFSN 为 15/63/7，VI 队列为 7/15/2。
+
+信道侧：本机 STA RSSI 为 -45.7 dBm，信号质量良好；邻居 AP 扫描结果——ap2 为 -81.0 dBm，ap3 为 -72.0 dBm。ap3 的信号相对较强，需注意潜在干扰。
+
+业务质量：用户吞吐约 1.02 Mbps，延迟 5.6 ms，抖动 5.9 ms，丢包率 0%。关联 STA（sta_ap1_user）的 SLA 完全满足，无违规或警告，QoE 反馈正常。
+
+整体来看，本机业务运行稳定，STA 连接质量良好；ap3 作为较近的邻居，RSSI 接近 -72 dBm，在后续协商中可能需要关注空间复用可行性。
+
+[1m[92mAP2[0m:
+我是AP2。我的业务类型为直播（live_stream），流量优先级为high。发射功率（TX Power）为10 dBm。EDCA参数方面，CWmin为7，CWmax为15，AIFSN为2；BE和VI类别的参数与主参数一致。
+
+业务质量方面，用户侧吞吐量为4.08 Mbps，延迟为8.42 ms，抖动为3.94 ms，丢包率为0%。己方STA的RSSI为-45.71 dBm，SINR为48.29 dB。
+
+邻居AP信号强度方面，本机扫描到ap1的RSSI为-80.99 dBm，ap3的RSSI为-71.96 dBm。当前未获取到信道利用率和TX Retries Ratio数据，噪声底噪也未在状态中提供。
+
+关联STA的SLA反馈显示，当前有1个关联STA，SLA状态为satisfied，无违反项。
+
+整体来看，我的信道状况良好，STA连接稳定，业务质量完全满足SLA要求。邻居AP中ap3的信号相对较强（-71.96 dBm），可能存在一定干扰风险，但当前状态下网络运行正常。
+
+[1m[93mAP3[0m:
+AP3 广播：
+
+本机 AP3，当前运行普通业务（best_effort），流量优先级为 medium。发射功率 10 dBm，EDCA 参数 BE 队列 CWmin/CWmax/AIFSN 为 15/31/3，VI 队列为 7/15/2。
+
+信道侧：本机 STA RSSI 为 -45.7 dBm，信号质量良好；邻居 AP 扫描结果——ap1 为 -72.0 dBm，ap2 为 -72.0 dBm。两个邻居的信号强度相当，且均接近 -72 dBm，属于中等偏强的干扰水平，在后续协商中可能需要关注空间复用可行性。
+
+业务质量：用户吞吐约 1.53 Mbps，延迟 5.5 ms，抖动 4.6 ms，丢包率 0%。关联 STA（sta_ap3_user）的 SLA 完全满足，无违规或警告，QoE 反馈正常。
+
+整体来看，本机业务运行稳定，STA 连接质量良好；但 ap1 和 ap2 作为较近的邻居，RSSI 均接近 -72 dBm，在后续协商中可能需要关注空间复用可行性。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.0ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.07Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.53Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(4.3ms)[0m  [1m[92m全部合规[0m  [90map1=15/63/7  ap2=3/7/1  ap3=7/15/2[0m
+AP1 提案：
+
+## 现状分析
+
+三台 AP 的流量优先级存在明确差异：
+- ap2：live_stream，优先级 high
+- ap3：best_effort，优先级 mediumap1：bulk_download，优先级 low
+
+当前各 AP 的 EDCA 参数未能充分体现这一优先级梯度。ap1 和 ap3 的 BE 队列 CWmin/CWmax/AIFSN 均为 15/63/7 和 15/31/3，而 ap2 虽已有一定差异化（7/15/2），但整体梯度不够充分，尤其 ap1（low）与 ap3（medium）之间缺乏合理的区分。
+
+邻居 RSSI 方面，ap1↔ap2 约 -81 dBm、ap1↔ap3 约 -72 dBm、ap2↔ap3 约 -72 dBm，未达到强干扰阈值，`co_sr_triggered` 未触发，因此本轮不采用 Co-SR 路径。
+
+## 策略选择：Co-EDCA
+
+依据 `traffic_priority` 差异，对 BE 队列执行 Co-EDCA 参数调整，确保：
+high（ap2）：最小 CWmin/CWmax/AIFSN，优先获取信道medium（ap3）：中等参数
+low（ap1）：最大参数，主动降低竞争强度
+
+已通过 `validate_edca_proposal` 自检，优先级单调性校验全部通过（high ≤ medium ≤ low）。
+
+参数方案
+
+| AP | 优先级 | CWmin | CWmax | AIFSN | 依据 |
+|----|--------|-------|-------|-------|------|
+| ap2 | high | 3 | 7 | 1 | 最小退避+最短AIFS，保障直播低时延 |
+| ap3 | medium | 7 | 15 | 2 | 介于 high 与 low 之间 |
+| ap1 | low | 15 | 63 | 7 | 维持较大退避窗口，为高优先级让路 |
+
+## 预期效果与权衡
+改善：ap2（直播）将获得显著更低的竞争延迟；ap1（大文件下载）因本身对时延不敏感，增大 CWmin/AIFSN 对其用户体验影响极小。权衡：ap1 的信道访问频率会降低，但 bulk_download 业务容忍度高，且当前吞吐 1.02 Mbps 已满足 SLA 最低要求（1.0 Mbps）。
+风险：无 SLA 违规风险——所有 STA 当前状态均为 satisfied。
+
+```json
+{"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 3, "CWmax": 7, "AIFSN": 1}, "ap3": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.4ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.18Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(1.7ms)[0m  [1m[92m全部合规[0m  [90map1=15/63/7  ap2=3/7/1  ap3=7/15/2[0m
+【第一步】梳理此前提案及拒绝原因
+目前对话中仅存在一个提案（提案#1），由 AP1 发起，尚未被拒绝。
+
+【第二步】验算与表态
+
+验算过程：
+我已调用 `get_latest_ap_states` 获取最新状态，并使用 `validate_edca_proposal` 对 AP1 的 Co-EDCA 提案进行了自检。
+*   优先级校验：提案严格遵循了 `high ≤ medium ≤ low` 的单调性原则（ap2: CWmin=3, ap3: CWmin=7, ap1: CWmin=15），工具返回 `all_ok: true`。
+   参数合规性：所有 AP 的 CWmin/CWmax/AIFSN 均在标准允许范围内，且 CWmax > CWmin。
+
+针对本机 (AP2) 的参数分析：
+ 提案参数：CWmin=3, CWmax=7, AIFSN=1。
+ 当前参数：CWmin=7, CWmax=15, AIFSN=2。
+   影响评估：作为运行 `live_stream` 业务的高优先级节点，提案将我 BE 队列的退避窗口减半（CWmin 从 7 降至 3）并缩短了 AIFS。这将显著提升我在共享信道中的竞争成功率，进一步降低直播业务的接入时延。鉴于当前 STA 连接质量极佳（RSSI -45.7 dBm）且 SLA 完全满足，该调整是安全且必要的。
+
+结论：
+提案逻辑严密，参数设置合理，能有效提升我的业务体验，我表示同意。
+
+```json
+{"agreed": true, "reason": "Co-EDCA 提案已通过优先级单调性校验（high≤medium≤low）。针对本机的参数调整为 CWmin=3, CWmax=7, AIFSN=1，相比当前值显著降低了信道竞争门槛，有利于保障 live_stream 业务的低时延特性。验算显示 valid=true 且无 SLA 违规风险，故同意。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.3ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.04Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(1.8ms)[0m  [1m[92m全部合规[0m  [90map1=15/63/7  ap2=3/7/1  ap3=7/15/2[0m
+AP3 投票：
+
+验算过程
+
+已调用 `get_latest_ap_states` 获取最新状态，并使用 `validate_edca_proposal` 对 AP1 的 Co-EDCA 提案进行了自检。
+
+   优先级校验：提案严格遵循了 `high ≤ medium ≤ low` 的单调性原则（ap2: CWmin=3, ap3: CWmin=7, ap1: CWmin=15），工具返回 `all_ok: true`。
+ 参数合规性：所有 AP 的 CWmin/CWmax/AIFSN 均在标准允许范围内，且 CWmax > CWmin。
+   安全验证：`safety_validation.approved = true`，无全局错误。
+
+针对本机 (AP3) 的参数分析
+ 提案参数：CWmin=7, CWmax=15, AIFSN=2
+*   当前参数：CWmin=15, CWmax=31, AIFSN=3
+   影响评估：作为运行 `best_effort` 业务的中等优先级节点，提案将我 BE 队列的退避窗口减半（CWmin 从 15 降至 7），AIFS 也从 3 缩短到 2。这意味着我将获得比当前更多的信道访问机会，有利于提升普通业务的吞吐和降低时延。
+
+鉴于：
+1.  优先级梯度合理（high < medium < low） 所有参数合规 本机 STA SLA 完全满足，无违规风险
+调整对本机有利（获得更多信道资源）
+
+我表示同意。
+
+```json
+{"agreed": true, "reason": "Co-EDCA 提案已通过优先级单调性校验（high≤medium≤low）。针对本机的参数调整为 CWmin=7, CWmax=15, AIFSN=2，相比当前值（15/31/3）显著降低了信道竞争门槛，有利于提升 best_effort 业务的性能。验算显示 valid=true 且无 SLA 违规风险，故同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 3, "CWmax": 7, "AIFSN": 1}, "ap3": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}}
+协商结束
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.2ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.07Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.53Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(1.8ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+AP1 提案（修订版）：
+
+现状分析
+
+上一轮 Co-EDCA 提案经 Validator 验算后返回 `verdict=neutral, score=-0.0084`，表明参数调整对整体 QoS 的改善不够显著。回顾原因：
+- 上一方案中 ap2 的 CWmin=3 过于激进，而 ap1 维持 CWmin=15 未主动让出更多信道资源；在低负载场景下，这种梯度未能转化为可测量的性能提升。
+- 当前全网 STA SLA 均满足，无丢包、时延或吞吐违规，说明信道竞争压力不大，但优先级差异确实存在（ap2=high, ap3=medium, ap1=low），仍需通过 EDCA 差异化体现 QoS 策略。
+
+邻居 RSSI 方面（ap1↔ap2 ≈ -81 dBm, ap1↔ap3 ≈ -72 dBm, ap2↔ap3 ≈ -72 dBm），未达到强干扰阈值，Co-SR 非本轮最优路径。
+
+## 策略选择：Co-EDCA（保守差异化）
+
+本轮调整核心思路：让低优先级节点（ap1）主动增大退避窗口，为高/中优先级节点腾出更多信道访问机会，而非过度压缩高优先级节点的参数。
+
+| AP | 优先级 | 当前 BE CWmin/CWmax/AIFSN | 提案 BE CWmin/CWmax/AIFSN | 变化说明 |
+|----|--------|---------------------------|---------------------------|----------|
+| ap2 | high | 7 / 15 / 2 | 7 / 15 / 2 | 保持不变，已具备良好竞争力 |
+| ap3 | medium | 15 / 31 / 3 | 15 / 31 / 3 | 保持不变，参数合理 |
+| ap1 | low | 15 / 63 / 7 | 31 / 63 / 7 | CWmin 从 15 增至 31，主动降低竞争强度 |
+
+预期效果与权衡
+
+- 改善：ap1 的 CWmin 翻倍（15→31），在共享信道竞争中退避时间显著延长，ap2（直播）和 ap3（普通业务）获得更稳定的信道访问机会。由于 ap2 的 live_stream 对时延敏感，此调整有助于进一步巩固其低时延特性。
+权衡：ap1 的大文件下载业务吞吐可能略有下降，但当前吞吐 1.02 Mbps 已满足 SLA 最低要求（1.0 Mbps），且 bulk_download 对时延不敏感，可容忍更高的竞争延迟。风险：无 SLA 违规风险——所有 STA 当前状态均为 satisfied，且新参数仍在 IEEE 802.11 标准允许范围内。
+
+已通过 `validate_edca_proposal` 自检，优先级单调性校验全部通过（high.CWmin=7 ≤ medium.CWmin=15 ≤ low.CWmin=31）。
+
+```json
+{"ap1": {"CWmin": 31, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.6ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.1Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(2.3ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+【第一步】梳理此前提案及拒绝原因
+目前对话中存在两个提案，均由 AP1 发起： 提案 #1：Co-EDCA 激进方案（ap2: 3/7/1, ap1: 15/63/7）。
+       结果：虽获 AP2/AP3 同意，但被 Validator 判定为 `verdict=neutral, score=-0.0084`。
+       拒绝原因：QoS 效果验收未通过。ap2 参数过于激进，而 ap1 让步不足，导致整体性能提升不明显。
+提案 #2（当前）：Co-EDCA 保守差异化方案（ap2: 7/15/2, ap1: 31/63/7）。
+       现状：等待 AP2 和 AP3 投票。
+
+【第二步】验算与表态
+
+验算过程：
+我已调用 `get_latest_ap_states` 获取最新状态，并使用 `validate_edca_proposal` 对 AP1 的 Co-EDCA 提案进行了自检。
+ 优先级校验：提案严格遵循了 `high ≤ medium ≤ low` 的单调性原则（ap2: CWmin=7, ap3: CWmin=15, ap1: CWmin=31），工具返回 `all_ok: true`。
+   参数合规性：所有 AP 的 CWmin/CWmax/AIFSN 均在标准允许范围内，且 CWmax > CWmin。
+ 安全验证：`safety_validation.approved = true`，无全局错误。
+
+针对本机 (AP2) 的参数分析：
+   提案参数：CWmin=7, CWmax=15, AIFSN=2。
+ 当前参数：CWmin=7, CWmax=15, AIFSN=2。
+*   影响评估：
+   本轮提案中，针对我的参数与当前值完全一致。我不需要像上一轮那样将 CWmin 从 7 进一步压缩到 3，从而避免了过度激进带来的潜在副作用。
+    *   与此同时，低优先级节点 ap1 的 CWmin 从 15 大幅增加至 31。这种“高优先级保持、低优先级大幅退让”的策略，相比上一轮方案更能有效拉开竞争差距，有望解决 Validator 指出的 QoS 改善不显著的问题。
+    *   鉴于本机运行 `live_stream` 业务（high priority），维持现有参数并享受 ap1 退让带来的信道红利是最佳选择。
+
+结论：
+提案逻辑合理，参数设置安全，且修正了上一轮提案中 ap1 让步不足的问题。我表示同意。
+
+```json
+{"agreed": true, "reason": "Co-EDCA 提案已通过优先级单调性校验（high≤medium≤low）。针对本机的参数调整为 CWmin=7, CWmax=15, AIFSN=2，与当前值保持一致，无需额外牺牲。相比上一轮提案，本轮方案通过大幅增加低优先级节点（ap1）的竞争门槛（CWmin 增至 31），更有效地体现了优先级差异，有望解决 Validator 指出的 QoS 改善不显著问题。验算显示 valid=true 且无 SLA 违规风险，故同意。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.6ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.06Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(1.3ms)[0m  [1m[92m全部合规[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+【第一步】梳理此前提案及拒绝原因
+目前对话中存在两个提案，均由 AP1 发起：
+1.  提案 #1：Co-EDCA 激进方案（ap2: 3/7/1, ap1: 15/63/7）。
+       结果：虽获 AP2/AP3 同意，但被 Validator 判定为 `verdict=neutral, score=-0.0084`。
+    *   拒绝原因：QoS 效果验收未通过。ap2 参数过于激进，而 ap1 让步不足，导致整体性能提升不明显。
+2.  提案 #2（当前）：Co-EDCA 保守差异化方案（ap2: 7/15/2, ap1: 31/63/7）。
+       现状：等待 AP2 和 AP3 投票。
+
+【第二步】验算与表态
+
+验算过程：
+我已调用 `get_latest_ap_states` 获取最新状态，并使用 `validate_edca_proposal` 对 AP1 的 Co-EDCA 提案进行了自检。
+   优先级校验：提案严格遵循了 `high ≤ medium ≤ low` 的单调性原则（ap2: CWmin=7, ap3: CWmin=15, ap1: CWmin=31），工具返回 `all_ok: true`。
+   参数合规性：所有 AP 的 CWmin/CWmax/AIFSN 均在标准允许范围内，且 CWmax > CWmin。
+ 安全验证：`safety_validation.approved = true`，无全局错误。
+
+针对本机 (AP3) 的参数分析：
+   提案参数：CWmin=15, CWmax=31, AIFSN=3。
+*   当前参数：CWmin=15, CWmax=31, AIFSN=3。
+   影响评估： 本轮提案中，针对我的参数与当前值完全一致。我不需要像上一轮提案那样进一步压缩参数。
+   与此同时，低优先级节点 ap1 的 CWmin 从 15 大幅增加至 31。这种“高优先级保持、低优先级大幅退让”的策略，相比上一轮方案更能有效拉开竞争差距，有望解决 Validator 指出的 QoS 改善不显著的问题。 鉴于本机运行 `best_effort` 业务（medium priority），维持现有参数并享受 ap1 退让带来的信道红利是最佳选择。
+
+结论：
+提案逻辑合理，参数设置安全，且修正了上一轮提案中 ap1 让步不足的问题。我表示同意。
+
+```json
+{"agreed": true, "reason": "Co-EDCA 提案已通过优先级单调性校验（high≤medium≤low）。针对本机的参数调整为 CWmin=15, CWmax=31, AIFSN=3，与当前值保持一致，无需额外牺牲。相比上一轮提案，本轮方案通过大幅增加低优先级节点（ap1）的竞争门槛（CWmin 增至 31），更有效地体现了优先级差异，有望解决 Validator 指出的 QoS 改善不显著问题。验算显示 valid=true 且无 SLA 违规风险，故同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 31, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(5.0ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.09Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.51Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(3.4ms)[0m  [1m[92m全部合规[0m  [90map1=47/63/7  ap2=7/15/2  ap3=15/31/3[0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(4.4ms)[0m  [1m[92m全部合规[0m  [90map1=47/63/7  ap2=7/15/2  ap3=15/31/3[0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(5.0ms)[0m  [1m[92m全部合规[0m  [90map1=63/127/7  ap2=7/15/2  ap3=15/31/3[0m
+AP1 提案（修订版 #3）：
+
+## 现状分析
+
+前两版 Co-EDCA 提案均因 QoS 改善不显著（Validator verdict=neutral）被拒绝。核心问题在于：
+1.  ap1 退让不足：尽管 ap1 的 CWmin 已从 15 增至 31，但在共享信道竞争中，其退避窗口仍不够大，未能充分为 ap2（high）和 ap3（medium）腾出信道资源。
+优先级梯度需进一步强化：ap2 作为直播业务（high priority），需要更稳定的信道访问机会；ap3 作为普通业务（medium priority），也应受益于 ap1 的退让。
+
+邻居 RSSI 方面（ap1↔ap2 ≈ -81 dBm, ap1↔ap3 ≈ -72 dBm），干扰水平未触发 Co-SR 条件，因此继续采用 Co-EDCA 路径。
+
+策略选择：Co-EDCA（极限退让）
+
+本轮调整核心思路：将 ap1（low priority）的退避窗口推至极限，最大化其为高/中优先级节点让出的信道资源。
+ ap1：CWmin 从 31 增至 63（接近标准上限），CWmax 从 63 增至 127，AIFSN 保持 7。这将使 ap1 在每次信道竞争时等待更长时间，显著降低其发送频率。
+-   ap2：维持 CWmin=7, CWmax=15, AIFSN=2。该参数已在上一轮证明合规且能有效保障 high priority 业务，无需进一步激进调整。
+-   ap3：维持 CWmin=15, CWmax=31, AIFSN=3。保持中等竞争强度。
+
+已通过 `validate_edca_proposal` 自检，优先级单调性校验全部通过（high.CWmin=7 ≤ medium.CWmin=15 ≤ low.CWmin=63），且所有参数均在 IEEE 802.11 标准允许范围内。
+
+预期效果与权衡改善：ap1 的 CWmin 翻倍（31→63），退避时间大幅增加，ap2 和 ap3 将获得显著更多的信道访问机会。预计 ap2 的直播业务时延将进一步降低，ap3 的吞吐也将有所提升，从而解决 Validator 指出的 QoS 改善不显著问题。
+ 权衡：ap1 的大文件下载业务吞吐可能会进一步下降，但 bulk_download 业务对时延不敏感，且当前 SLA 满足（吞吐 1.02 Mbps > 1.0 Mbps 阈值），可容忍更高的竞争延迟。
+风险：无 SLA 违规风险——所有 STA 当前状态均为 satisfied，且新参数合规。
+
+```json
+{"ap1": {"CWmin": 63, "CWmax": 127, "AIFSN": 7}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+```
+[1m[35mValidator[0m [1m[91m提案预检未通过[0m proposal#3 AP1 co_edca — 验证失败（策略=co_edca，1 项错误）：AP1: Co-EDCA 自伤（BE）——预测信道抢占份额从 0.206 降到 0.091（相对最强邻居劣势比 0.153846），且无邻居处于 SLA 违规可解释此牺牲
+  [1m[91m[FAIL][0m AP1: Co-EDCA 自伤（BE）——预测信道抢占份额从 0.206 降到 0.091（相对最强邻居劣势比 0.153846），且无邻居处于 SLA 违规可解释此牺牲
+[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=15 用时 330s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=0.0222, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=0.022197 confidence=0.75

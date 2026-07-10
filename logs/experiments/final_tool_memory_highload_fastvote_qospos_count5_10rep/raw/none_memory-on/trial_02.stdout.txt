@@ -1,0 +1,82 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=3577da66 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_045902_3577da66.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是本机最新实测状态汇报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；信道竞争参数设置为 CWmin=31、CWmax=63、AIFSN=7（BE 与 VI 队列保持一致）。
+感知指标：己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm。通过本机扫描，测得邻居 AP2 的 RSSI 为 -80.99 dBm，邻居 AP3 的 RSSI 为 -71.96 dBm。
+业务质量：用户侧吞吐量约为 0.32 Mbps，端到端延迟高达 491.86 ms，抖动为 2.15 ms，丢包率飙升至 98.04%。
+
+状态简述：当前信道环境极为恶劣，极高的重传与丢包表明存在严重的信道竞争或同频干扰。关联 STA 的 SLA 全面违规（吞吐低于 0.5 Mbps、延迟超过 300 ms、丢包远超 5% 阈值），业务已处于不可用状态，亟需通过多 AP 协作调整参数以缓解拥塞并恢复基础服务质量。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机最新实测状态汇报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；信道竞争参数设置为 CWmin=7、CWmax=15、AIFSN=2（BE 与 VI 队列保持一致）。
+感知指标：己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm。通过本机扫描，测得邻居 AP1 的 RSSI 为 -80.99 dBm，邻居 AP3 的 RSSI 为 -71.96 dBm。
+业务质量：用户侧吞吐量约为 8.45 Mbps，端到端延迟为 12.62 ms，抖动为 2.01 ms，丢包率为 0%。
+
+状态简述：当前本机业务运行平稳，关联 STA 的 SLA 各项指标均处于满意状态（吞吐充足、延迟极低、零丢包）。邻居 AP1 信号较弱，但 AP3 信号相对较强（-71.96 dBm），后续需留意其可能产生的同频干扰影响。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是本机最新实测状态汇报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；信道竞争参数设置为 CWmin=15、CWmax=31、AIFSN=3（BE 与 VI 队列保持一致）。
+感知指标：己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm。通过本机扫描，测得邻居 AP1 的 RSSI 为 -71.96 dBm，邻居 AP2 的 RSSI 为 -71.96 dBm。
+业务质量：用户侧吞吐量约为 5.62 Mbps，端到端延迟为 170.92 ms，抖动为 2.73 ms，丢包率为 6.30%。
+
+状态简述：当前本机业务运行基本平稳，但关联 STA 的 SLA 出现轻微违规（丢包率 6.30% 略超 5% 阈值）。邻居 AP 信号强度处于中等水平，需留意潜在的干扰累积效应。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.412055
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.412055；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.412055；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=8 用时 50s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap2': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap3': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '3577da66', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '3577da66', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '3577da66', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_edca，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.333961 confidence=0.75

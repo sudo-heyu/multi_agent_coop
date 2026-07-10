@@ -1,0 +1,55 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=66bcd082 event_db=logs/experiments/probe_script_retry_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_164503_66bcd082.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实时状态广播：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+基础服务（BE）竞争窗口：CWmin 15 / CWmax 63，AIFSN 7
+视频服务（VI）竞争窗口：CWmin 7 / CWmax 15，AIFSN 2
+业务优先级（traffic_priority）：low，业务类型为大文件下载（bulk_download）
+
+感知与信道指标
+己方关联 STA RSSI：-45.71 dBm
+噪声底噪：未检测到异常波动
+邻居 AP 扫描 RSSI：ap2 为 -81.0 dBm，ap3 为 -72.0 dBm
+
+业务质量指标
+用户侧吞吐：1.03 Mbps
+端到端时延：5.90 ms，抖动：5.27 ms
+丢包率：0%
+
+STA 反馈摘要
+当前关联 STA（sta_ap1_user）SLA 状态为 satisfied，无违规项（violated_count=0），反馈显示“STA SLA satisfied”。
+
+状态简述
+本节点当前信道负载平稳，重传率极低；邻居 ap3 信号相对较强（约 -72 dBm），存在一定同频干扰风险，但 ap2 距离较远（约 -81 dBm）影响较小。整体业务质量稳定，STA 各项 QoE 指标均满足 SLA 要求，暂无明显拥塞或性能瓶颈。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+
+MAC 与信道参数
+发射功率：10 dBm
+EDCA 参数（VI 队列 / BE 队列一致）：CWmin = 7，CWmax = 15，AIFSN = 2
+
+业务与优先级
+业务类型：直播（live_stream），流量优先级 high
+用户侧吞吐：约 4.08 Mbps
+端到端时延：约 8.09 ms，抖动约 3.87 ms，丢包率 0%
+
+感知指标
+己方 STA RSSI：-45.71 dBm（信号很强）
+噪声底噪：未在当前快照中给出具体值
+邻居 AP RSSI（本机扫描）：ap1 ≈ -81.0 dBm，ap3 ≈ -72.0 dBm
+
+STA 反馈摘要
+当前关联 1 台 STA（sta_ap2_user），SLA 全部满足，无违反项；QoE 反馈为正常。
+
+状态简述
+本节点信道负载不高，重传率极低，业务质量稳定。邻居信号方面，ap3 的 -72 dBm 相对较强，可能存在一定干扰风险；ap1 距离较远（-81 dBm），干扰较弱。整体来看，当前链路质量良好，STA SLA 完全达标，暂无紧急调参需求。

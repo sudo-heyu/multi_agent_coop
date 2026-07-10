@@ -1,0 +1,58 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=be795d27 event_db=logs/experiments/probe_script_escalated_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_163708_be795d27.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态广播：
+
+MAC 与信道参数：当前业务类型为“大文件下载”（bulk_download），流量优先级标记为 low。发射功率（TX Power）为 10 dBm，基础 EDCA 竞争参数设置为 CWmin=15、CWmax=63、AIFSN=7。
+
+感知与干扰指标：本机扫描到的邻居 AP 信号强度分别为：AP2 约 -81.0 dBm，AP3 约 -72.0 dBm。己方关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm，链路质量良好。
+
+业务质量指标：用户侧实时吞吐量约为 1.02 Mbps，平均端到端时延约 6.37 ms，抖动约 5.29 ms，当前丢包率为 0%。
+
+STA 反馈摘要：当前关联的 1 个终端 SLA 状态为“满足”（satisfied），违规数与告警数均为 0，终端反馈正常。
+
+状态简述：本节点信道负载平稳，邻居干扰处于中等偏弱水平（AP3 相对较近但仍在安全阈值内），业务传输稳定且各项指标均严格满足 SLA 约定。当前运行状态健康，暂无紧急调参需求。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态：
+
+MAC 与信道参数：当前发射功率（TX Power）为 10 dBm；EDCA 竞争窗口 CWmin/CWmax 分别为 7/15，AIFSN 为 2。
+
+感知指标：本机扫描到的邻居信号强度方面，ap1 的 RSSI 约为 -81.0 dBm，ap3 的 RSSI 约为 -72.0 dBm。己方关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm，信号质量良好。
+
+业务质量：当前承载的业务类型为“直播”（live_stream），优先级为 high。实测用户侧吞吐量为 4.01 Mbps，平均时延约 7.55 ms，抖动约 3.82 ms，丢包率为 0%。
+
+STA 反馈概况：目前关联的 1 个 STA 的 SLA 状态为“满足（satisfied）”，无违反项或警告。
+
+状态简述：本节点当前运行平稳，链路质量优良，各项 QoS 指标均符合 SLA 要求；邻居信号强度处于中等水平，未出现极端强干扰情况。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测数据汇报：
+
+MAC 与 EDCA 参数：
+当前发射功率（TX Power）为 10 dBm。在信道竞争机制上，我的 EDCA 参数设置为 CWmin=15、CWmax=31、AIFSN=3（针对 AC_BE 队列）。
+
+感知与信道指标：
+通过本机扫描，我检测到的邻居 AP 信号强度如下：
+邻居 ap1 的 RSSI 为 -71.96 dBm
+邻居 ap2 的 RSSI 为 -71.96 dBm
+这两个邻居的信号处于中等偏强的干扰距离范围内。同时，我己方关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm，链路质量非常稳固。
+
+业务质量与 STA 反馈：
+我当前承载的业务类型为“普通业务”（best_effort），流量优先级标记为 medium。实测数据显示，用户侧吞吐量达到 1.53 Mbps，平均时延约为 5.63 ms，抖动约 4.79 ms，丢包率为 0%。
+目前我关联了 1 台 STA，其 SLA 状态完全满足（satisfied），未检测到任何 SLA 违约或性能警告。
+
+状态简述：
+本节点当前业务运行平稳，各项 QoS 指标均表现优异，STA 连接稳定。但由于扫描到的两个邻居 AP 信号均在 -72 dBm 左右，存在一定程度的同频干扰风险，后续可结合整体网络状况评估是否具备空间复用（Co-SR）的优化空间。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(2.4ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.01Mbps EDCA=15/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.01Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m

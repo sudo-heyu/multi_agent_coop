@@ -1,0 +1,84 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=3515cba5 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_050308_3515cba5.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。当前实测参数如下：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；BE 与 VI 接入类别的退避参数保持一致，CWmin 设为 31，CWmax 设为 63，AIFSN 设为 7。
+感知指标：己方关联 STA 的 RSSI 为 -45.71 dBm；本机扫描到的邻居 AP2 信号强度为 -80.99 dBm，AP3 为 -71.96 dBm。（注：当前快照未提供 Noise Floor、信道利用率及 TX Retries Ratio 读数，可能受链路异常影响。）
+业务质量：用户侧吞吐量（throughput）为 0 Mbps，延迟与抖动均为 0 ms，丢包率高达 50.70%。
+
+关联 STA 反馈：sta_ap1_user 处于 SLA 违规状态，主要问题为吞吐量完全停滞（0 Mbps 远低于 0.5 Mbps 下限），且 50.70% 的丢包率大幅突破 5% 的安全阈值。
+
+状态简述：当前信道竞争环境严峻，退避窗口已拉大至 31/63。邻居 AP3 的信号强度（-71.96 dBm）相对较强，结合极高的丢包率与零吞吐表现，表明当前存在显著的同频干扰或资源争抢，业务质量极不稳定，亟需通过协作机制调整参数以恢复链路可用性。
+
+[1m[92mAP2[0m:
+我是 AP2。当前实测参数如下：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；BE 与 VI 接入类别的退避参数保持一致，CWmin 设为 7，CWmax 设为 15，AIFSN 设为 2。
+感知指标：己方关联 STA 的 RSSI 为 -45.71 dBm；本机扫描到的邻居 AP1 信号强度为 -80.99 dBm，AP3 为 -71.96 dBm。（注：当前快照未提供 Noise Floor、信道利用率及 TX Retries Ratio 读数。）
+业务质量：用户侧吞吐量为 8.32 Mbps，延迟为 7.74 ms，抖动为 1.94 ms，丢包率为 0%。
+
+关联 STA 反馈：sta_ap2_user 处于 SLA 满足状态，吞吐量、延迟与丢包均远低于阈值上限，无违规或警告记录。
+
+状态简述：当前链路质量稳定，STA 连接良好且业务正常流转。邻居 AP3 的信号强度（-71.96 dBm）相对较强，可能对同频信道造成一定潜在干扰，但整体业务表现健康，暂无紧急调整需求。
+
+[1m[93mAP3[0m:
+我是 AP3。当前实测参数如下：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；BE 与 VI 接入类别的退避参数保持一致，CWmin 设为 15，CWmax 设为 31，AIFSN 设为 3。
+感知指标：己方关联 STA 的 RSSI 为 -45.71 dBm；本机扫描到的邻居 AP1 信号强度为 -71.96 dBm，AP2 为 -71.96 dBm。（注：当前快照未提供 Noise Floor、信道利用率及 TX Retries Ratio 读数。）
+业务质量：用户侧吞吐量为 5.64 Mbps，延迟为 121.35 ms，抖动为 2.62 ms，丢包率为 13.03%。
+
+关联 STA 反馈：sta_ap3_user 处于 SLA 违规状态，核心问题是丢包率（13.03%）大幅突破 5% 的安全阈值。
+
+状态简述：当前本地链路信号强度良好（STA RSSI -45.71 dBm），但丢包率显著偏高导致业务违约。邻居 AP1 与 AP2 的接收信号强度均为 -71.96 dBm，属于较强干扰水平，可能加剧了同频竞争与帧重传压力。整体信道环境偏忙，需通过协作机制调整参数以抑制干扰、恢复链路稳定性。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.527921
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.527921；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.527921；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 47s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.0591, confidence=0.2957
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.059148 confidence=0.2957

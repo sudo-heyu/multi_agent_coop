@@ -329,6 +329,8 @@ def main():
     ap.add_argument("--max-steps", type=int, default=24)
     ap.add_argument("--state-wait", type=float, default=None,
                     help="等待三台 AP 新鲜状态的最长秒数（默认 90）")
+    ap.add_argument("--max-validation-retries", type=int, default=3,
+                    help="Validator/QoS 验收失败后的重新提案次数上限")
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
@@ -363,6 +365,12 @@ def main():
     ap.add_argument("--goal", default="",
                     help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
                          "（目标经 memory_admin.py goal create 创建）")
+    ap.add_argument(
+        "--memory",
+        choices=["on", "off"],
+        default=os.environ.get("MULTIAP_MEMORY_MODE", "on"),
+        help="是否启用长期记忆召回/注入：on=启用；off=只保留本轮对话，不注入历史记忆",
+    )
     ap.add_argument("--acceptance", choices=["validator", "qos"],
                     default=os.environ.get("MULTIAP_ACCEPTANCE", "validator"),
                     help="验收模式：validator=参数合法即成功；qos=下发后观测 QoS 必须 improved")
@@ -372,7 +380,7 @@ def main():
         default=os.environ.get("MULTIAP_TOOL_PROFILE", "full"),
         help=(
             "AP 可见工具能力档位：none/no_tools=完全无工具；basic=基础状态/反馈/验算；"
-            "rich/full=完整工具；diagnostic=隐藏答案型 SR 工具；"
+            "rich/full=完整工具；faulty=完整工具界面但返回错误结果；diagnostic=隐藏答案型 SR 工具；"
             "validator_only=只保留状态/反馈/候选验算；state_only=只保留状态和 STA 反馈；"
             "memory_challenge=粗粒度状态+弱验算，突出记忆作用"
         ),
@@ -385,6 +393,7 @@ def main():
     os.environ["MULTIAP_CONTEXT_BUDGET_CHARS"] = str(args.context_budget_chars)
     os.environ["MULTIAP_CONTEXT_RECENT_TURNS"] = str(args.context_recent_turns)
     os.environ["MULTIAP_TOOL_PROFILE"] = args.tool_profile
+    os.environ["MULTIAP_MEMORY_MODE"] = args.memory
 
     goal = None
     if args.goal:
@@ -447,7 +456,7 @@ def main():
     print(
         f"[run_openclaw] scene={args.scene} server={args.server} "
         f"max_steps={args.max_steps} tool_profile={args.tool_profile} "
-        f"acceptance={args.acceptance}",
+        f"memory={args.memory} acceptance={args.acceptance}",
         flush=True,
     )
 
@@ -529,6 +538,7 @@ def main():
             mode=args.mode,
             resume=bool(resume_checkpoint),
         )
+        print(f"[Run] session_id={logger.session_id} event_db={os.environ.get('MULTIAP_EVENT_DB', str(DEFAULT_EVENT_DB))}")
         initial_ap_state = None
         if resume_checkpoint:
             logger.session_resume({
@@ -574,6 +584,7 @@ def main():
                       f"（预算 {goal['budget_attempts']} 次）")
         try:
             result = orch.structured_relay(
+                max_validation_retries=args.max_validation_retries,
                 max_turns=args.max_steps,
                 on_event=None,
                 on_event_start=_print_event_stream_start,

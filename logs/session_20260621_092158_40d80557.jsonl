@@ -1,0 +1,264 @@
+{"ts": "2026-06-21T09:21:58.691+00:00", "session_id": "40d80557", "event": "session_start", "model": "openclaw-direct", "scene": "sr", "ap_state": {"ap1": {"service_name": "generic_data", "business_type": "后台下载", "tx_power_dbm": 20.0, "cwmin": 3, "cwmax": 4, "aifsn": 2, "traffic_priority": "medium", "Data_rate_to_bandwidth_ratio": 0.45, "tx_retries_ratio": 0.08, "neighbor_rssi_dbm": {"ap2": -74.7, "ap3": -88.0}, "sta_rssi_dbm": -45.0, "noise_floor_dbm": -92.0, "throughput_mbps_iperf": 22.1, "latency_ms": 210.0, "packet_loss_pct": 0.5, "throughput_mbps_user": 13.3, "ac_iperf": "BK", "ac_user": "BE"}, "ap2": {"service_name": "generic_data", "business_type": "直播", "tx_power_dbm": 14.0, "cwmin": 3, "cwmax": 4, "aifsn": 2, "traffic_priority": "medium", "Data_rate_to_bandwidth_ratio": 0.5, "tx_retries_ratio": 0.1, "neighbor_rssi_dbm": {"ap1": -68.6, "ap3": -81.4}, "sta_rssi_dbm": -48.0, "noise_floor_dbm": -91.0, "throughput_mbps_iperf": 20.3, "latency_ms": 195.0, "packet_loss_pct": 0.3, "throughput_mbps_user": 12.2, "ac_iperf": "BK", "ac_user": "BE"}, "ap3": {"service_name": "generic_data", "business_type": "后台下载", "tx_power_dbm": 8.0, "cwmin": 3, "cwmax": 4, "aifsn": 2, "traffic_priority": "medium", "Data_rate_to_bandwidth_ratio": 0.38, "tx_retries_ratio": 0.06, "neighbor_rssi_dbm": {"ap1": -76.0, "ap2": -76.0}, "sta_rssi_dbm": -50.0, "noise_floor_dbm": -90.0, "throughput_mbps_iperf": 28.5, "latency_ms": 120.0, "packet_loss_pct": 0.1, "throughput_mbps_user": 17.1, "ac_iperf": "BK", "ac_user": "BE"}}}
+{"ts": "2026-06-21T09:21:58.694+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 1, "label": "广播自身状态"}
+{"ts": "2026-06-21T09:22:14.589+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap1", "phase": 1, "role": "broadcast"}
+{"ts": "2026-06-21T09:22:14.596+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "我是 AP1。\n\n当前本机发射功率为 20 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务优先级为 medium。关联 STA 的 RSSI 为 -45 dBm，信号良好。本机扫描到的邻居 AP RSSI：ap2 为 -74.7 dBm，ap3 为 -88.0 dBm。当前用户吞吐为 13.22 Mbps，信道利用率正常，重传率未上报但业务质量稳定，无明显拥塞或丢包迹象。邻居 ap2 信号中等偏强，ap3 信号较弱，干扰风险可控。"}
+{"ts": "2026-06-21T09:22:14.596+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap1", "phase": 1, "role": "broadcast", "instruction": "请广播你（AP1）的当前状态。\n发言开头先明确说出你是哪个 AP，然后用自然语言完整说明你的实测参数，最后用一两句话简述你当前状态，例如信道是否偏忙、邻居信号是否偏强、业务质量是否稳定。\n\n你的实测数据如下，请覆盖所有字段，但不要只复制 JSON，也不要使用固定模板：\n{\n  \"service_name\": \"generic_data\",\n  \"business_type\": \"后台下载\",\n  \"traffic_priority\": \"medium\",\n  \"tx_power_dbm\": 20.0,\n  \"cwmin\": 7,\n  \"cwmax\": 15,\n  \"aifsn\": 2,\n  \"sta_rssi_dbm\": -45.0,\n  \"throughput_mbps_user\": 13.22,\n  \"neighbor_rssi_dbm\": {\n    \"ap2\": -74.7,\n    \"ap3\": -88.0\n  }\n}\n\n只播报你自己的数据和你本机扫描到的邻居 RSSI，不要引用或分析其他 AP 自己上报的业务指标。", "response": "我是 AP1。\n\n当前本机发射功率为 20 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务优先级为 medium。关联 STA 的 RSSI 为 -45 dBm，信号良好。本机扫描到的邻居 AP RSSI：ap2 为 -74.7 dBm，ap3 为 -88.0 dBm。当前用户吞吐为 13.22 Mbps，信道利用率正常，重传率未上报但业务质量稳定，无明显拥塞或丢包迹象。邻居 ap2 信号中等偏强，ap3 信号较弱，干扰风险可控。", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:22:14.614+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap2", "phase": 1, "role": "broadcast"}
+{"ts": "2026-06-21T09:22:14.633+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "我是 AP2。\n\n当前本机发射功率为 14 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务优先级为 medium。关联 STA 的 RSSI 为 -48 dBm，上行用户吞吐为 11.85 Mbps，业务类型为直播，整体质量稳定。本机扫描到的邻居 AP RSSI：ap1 为 -68.6 dBm，ap3 为 -81.4 dBm，干扰强度处于中等偏低水平，信道利用率正常，无明显重传或拥塞迹象。"}
+{"ts": "2026-06-21T09:22:14.633+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap2", "phase": 1, "role": "broadcast", "instruction": "请广播你（AP2）的当前状态。\n发言开头先明确说出你是哪个 AP，然后用自然语言完整说明你的实测参数，最后用一两句话简述你当前状态，例如信道是否偏忙、邻居信号是否偏强、业务质量是否稳定。\n\n你的实测数据如下，请覆盖所有字段，但不要只复制 JSON，也不要使用固定模板：\n{\n  \"service_name\": \"generic_data\",\n  \"business_type\": \"直播\",\n  \"traffic_priority\": \"medium\",\n  \"tx_power_dbm\": 14.0,\n  \"cwmin\": 7,\n  \"cwmax\": 15,\n  \"aifsn\": 2,\n  \"sta_rssi_dbm\": -48.0,\n  \"throughput_mbps_user\": 11.85,\n  \"neighbor_rssi_dbm\": {\n    \"ap1\": -68.6,\n    \"ap3\": -81.4\n  }\n}\n\n只播报你自己的数据和你本机扫描到的邻居 RSSI，不要引用或分析其他 AP 自己上报的业务指标。", "response": "我是 AP2。\n\n当前本机发射功率为 14 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务优先级为 medium。关联 STA 的 RSSI 为 -48 dBm，上行用户吞吐为 11.85 Mbps，业务类型为直播，整体质量稳定。本机扫描到的邻居 AP RSSI：ap1 为 -68.6 dBm，ap3 为 -81.4 dBm，干扰强度处于中等偏低水平，信道利用率正常，无明显重传或拥塞迹象。", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:22:14.641+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap3", "phase": 1, "role": "broadcast"}
+{"ts": "2026-06-21T09:22:14.647+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "我是 AP3。\n\n当前本机发射功率为 8.0 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务类型为后台下载，优先级为 medium。本机关联 STA 的 RSSI 为 -50.0 dBm，信道利用率适中，重传率正常，用户吞吐为 17.3 Mbps，延迟与丢包均在可接受范围内。本机扫描到的邻居 AP RSSI：ap1 为 -76.0 dBm，ap2 为 -76.0 dBm，干扰强度属于中等偏低水平，未出现强干扰。当前信道状态稳定，无明显拥塞或性能劣化迹象。"}
+{"ts": "2026-06-21T09:22:14.647+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap3", "phase": 1, "role": "broadcast", "instruction": "请广播你（AP3）的当前状态。\n发言开头先明确说出你是哪个 AP，然后用自然语言完整说明你的实测参数，最后用一两句话简述你当前状态，例如信道是否偏忙、邻居信号是否偏强、业务质量是否稳定。\n\n你的实测数据如下，请覆盖所有字段，但不要只复制 JSON，也不要使用固定模板：\n{\n  \"service_name\": \"generic_data\",\n  \"business_type\": \"后台下载\",\n  \"traffic_priority\": \"medium\",\n  \"tx_power_dbm\": 8.0,\n  \"cwmin\": 7,\n  \"cwmax\": 15,\n  \"aifsn\": 2,\n  \"sta_rssi_dbm\": -50.0,\n  \"throughput_mbps_user\": 17.3,\n  \"neighbor_rssi_dbm\": {\n    \"ap1\": -76.0,\n    \"ap2\": -76.0\n  }\n}\n\n只播报你自己的数据和你本机扫描到的邻居 RSSI，不要引用或分析其他 AP 自己上报的业务指标。", "response": "我是 AP3。\n\n当前本机发射功率为 8.0 dBm，EDCA 参数为 CWmin=7、CWmax=15、AIFSN=2，业务类型为后台下载，优先级为 medium。本机关联 STA 的 RSSI 为 -50.0 dBm，信道利用率适中，重传率正常，用户吞吐为 17.3 Mbps，延迟与丢包均在可接受范围内。本机扫描到的邻居 AP RSSI：ap1 为 -76.0 dBm，ap2 为 -76.0 dBm，干扰强度属于中等偏低水平，未出现强干扰。当前信道状态稳定，无明显拥塞或性能劣化迹象。", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:22:14.722+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 2, "label": "协商触发，等待 AP1 自主选路"}
+{"ts": "2026-06-21T09:22:14.758+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 3, "label": "AP1 发起提案（自主选路）"}
+{"ts": "2026-06-21T09:22:14.766+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap1", "phase": 3, "role": "proposer"}
+{"ts": "2026-06-21T09:22:39.331+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "当前"}
+{"ts": "2026-06-21T09:22:39.332+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "网络存在"}
+{"ts": "2026-06-21T09:22:39.333+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "明确"}
+{"ts": "2026-06-21T09:22:39.334+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "的跨"}
+{"ts": "2026-06-21T09:22:39.335+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "小区干扰（Co-SR triggered"}
+{"ts": "2026-06-21T09:22:39.336+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "），且所有 AP"}
+{"ts": "2026-06-21T09:22:39.338+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 业务优先级均为"}
+{"ts": "2026-06-21T09:22:39.339+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " medium，无差异化"}
+{"ts": "2026-06-21T09:22:39.340+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "竞争需求，因此不"}
+{"ts": "2026-06-21T09:22:39.341+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "适用 Co-EDCA"}
+{"ts": "2026-06-21T09:22:39.342+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "。经分析，最优"}
+{"ts": "2026-06-21T09:22:39.343+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "方案为全网统一"}
+{"ts": "2026-06-21T09:22:39.344+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "降低发射功率，采用"}
+{"ts": "2026-06-21T09:22:39.344+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "全并发组策略"}
+{"ts": "2026-06-21T09:22:39.345+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "。\n\n核心问题：ap"}
+{"ts": "2026-06-21T09:22:39.346+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "1 对 ap2 的强"}
+{"ts": "2026-06-21T09:22:39.347+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "干扰（-68.6"}
+{"ts": "2026-06-21T09:22:39.348+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " dBm）是"}
+{"ts": "2026-06-21T09:22:39.349+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " ap2 与"}
+{"ts": "2026-06-21T09:22:39.350+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "主要瓶颈，同时"}
+{"ts": "2026-06-21T09:22:39.351+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " ap3 间"}
+{"ts": "2026-06-21T09:22:39.351+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "存在中等干扰"}
+{"ts": "2026-06-21T09:22:39.352+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "。当前功率配置"}
+{"ts": "2026-06-21T09:22:39.354+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "（ap1:"}
+{"ts": "2026-06-21T09:22:39.355+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "20dBm"}
+{"ts": "2026-06-21T09:22:39.356+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": ", ap2:"}
+{"ts": "2026-06-21T09:22:39.357+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "14dBm"}
+{"ts": "2026-06-21T09:22:39.358+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": ", ap3:"}
+{"ts": "2026-06-21T09:22:39.358+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "8dBm）"}
+{"ts": "2026-06-21T09:22:39.359+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "导致 OBSS 干扰"}
+{"ts": "2026-06-21T09:22:39.360+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "超出安全阈值。"}
+{"ts": "2026-06-21T09:22:39.361+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "通过 `select_sr_concurrent_groups"}
+{"ts": "2026-06-21T09:22:39.362+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "` 评估，全网三"}
+{"ts": "2026-06-21T09:22:39.363+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "台 AP 可构成"}
+{"ts": "2026-06-21T09:22:39.363+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "一个有效并发组，无需"}
+{"ts": "2026-06-21T09:22:39.365+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "隔离任何节点。`"}
+{"ts": "2026-06-21T09:22:39.365+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "evaluate_sr_candidate`"}
+{"ts": "2026-06-21T09:22:39.366+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 验证表明"}
+{"ts": "2026-06-21T09:22:39.367+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "，将所有 AP"}
+{"ts": "2026-06-21T09:22:39.368+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "满足 CCA、"}
+{"ts": "2026-06-21T09:22:39.369+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 功率统一降至 1 dB"}
+{"ts": "2026-06-21T09:22:39.371+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "m 可完全"}
+{"ts": "2026-06-21T09:22:39.372+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "SINR 和"}
+{"ts": "2026-06-21T09:22:39.373+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " STA RSSI"}
+{"ts": "2026-06-21T09:22:39.374+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 约束，且所有调整"}
+{"ts": "2026-06-21T09:22:39.375+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "量均为整数"}
+{"ts": "2026-06-21T09:22:39.376+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " dB，合法有效"}
+{"ts": "2026-06-21T09:22:39.377+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "。\n\n预期效果：总功率"}
+{"ts": "2026-06-21T09:22:39.377+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "下降 39 dB"}
+{"ts": "2026-06-21T09:22:39.378+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "，最大单 AP 降幅"}
+{"ts": "2026-06-21T09:22:39.379+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 19 dB"}
+{"ts": "2026-06-21T09:22:39.380+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "，STA RSSI 余"}
+{"ts": "2026-06-21T09:22:39.381+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "量最小为 11 dB"}
+{"ts": "2026-06-21T09:22:39.381+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "，SINR 余"}
+{"ts": "2026-06-21T09:22:39.382+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "量充足，网络"}
+{"ts": "2026-06-21T09:22:39.383+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "整体干扰显著降低，吞"}
+{"ts": "2026-06-21T09:22:39.384+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "吐稳定性将提升。权"}
+{"ts": "2026-06-21T09:22:39.385+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "衡在于：ap"}
+{"ts": "2026-06-21T09:22:39.386+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "1 从 20 dB"}
+{"ts": "2026-06-21T09:22:39.387+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "m 降至"}
+{"ts": "2026-06-21T09:22:39.388+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 1 dBm"}
+{"ts": "2026-06-21T09:22:39.389+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 后，其覆盖范围将"}
+{"ts": "2026-06-21T09:22:39.390+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "收缩，但当前"}
+{"ts": "2026-06-21T09:22:39.391+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " STA RSSI 为"}
+{"ts": "2026-06-21T09:22:39.392+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " -45 dB"}
+{"ts": "2026-06-21T09:22:39.393+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "m，仍远高于 -"}
+{"ts": "2026-06-21T09:22:39.393+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "75 dBm"}
+{"ts": "2026-06-21T09:22:39.394+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 的最低可用阈值，业务"}
+{"ts": "2026-06-21T09:22:39.395+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "不受影响。\n\n提案"}
+{"ts": "2026-06-21T09:22:39.396+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "参数如下：\n\n```json\n{\""}
+{"ts": "2026-06-21T09:22:39.396+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "_power_dbm\":"}
+{"ts": "2026-06-21T09:22:39.397+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "ap1\": {\"tx"}
+{"ts": "2026-06-21T09:22:39.398+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " 1}, \""}
+{"ts": "2026-06-21T09:22:39.399+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "tx_power_dbm"}
+{"ts": "2026-06-21T09:22:39.400+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "ap2\": {\""}
+{"ts": "2026-06-21T09:22:39.401+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "\": 1},"}
+{"ts": "2026-06-21T09:22:39.402+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " \"ap3\":"}
+{"ts": "2026-06-21T09:22:39.403+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " {\"tx_power_db"}
+{"ts": "2026-06-21T09:22:39.404+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "m\": 1"}
+{"ts": "2026-06-21T09:22:39.405+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": " {\"concurrent_group"}
+{"ts": "2026-06-21T09:22:39.405+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "}, \"_sr\":"}
+{"ts": "2026-06-21T09:22:39.406+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "\": [\"ap1"}
+{"ts": "2026-06-21T09:22:39.407+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "\",\"ap2\",\"ap"}
+{"ts": "2026-06-21T09:22:39.408+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "3\"], \"non"}
+{"ts": "2026-06-21T09:22:39.409+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "_concurrent_aps"}
+{"ts": "2026-06-21T09:22:39.410+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "\": []}}\n```"}
+{"ts": "2026-06-21T09:22:39.410+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap1", "phase": 3, "role": "proposer", "instruction": "你（AP1）是本轮的提案方，请发起参数调整提案。\n\n【重要】请先完整阅读上方的对话记录。\n如果记录中有 VALIDATOR 发出的验证失败消息，你的新提案必须直接解决其中列出的具体问题。\n如果记录中已有历史提案和拒绝原因，你的提案必须明确回应各方此前提出的约束顾虑，而不是重复一个已被否决的方案。协商历史越长，越需要向各方约束的交集靠拢。\n\n【本轮快速路径提示】当前全网证据已显示：邻居 RSSI 触发 Co-SR，且未发现必须做 EDCA 差异化的证据。请优先走 Co-SR：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups → evaluate_sr_candidate。除非最新状态显示明确的 traffic_priority/QoS/EDCA 差异化需求，否则不要调用 validate_edca_proposal。\n\n所有 AP 的初始状态数据（供参考）：\n{\n  \"ap1\": {\n    \"service_name\": \"generic_data\",\n    \"business_type\": \"后台下载\",\n    \"traffic_priority\": \"medium\",\n    \"tx_power_dbm\": 20.0,\n    \"cwmin\": 7,\n    \"cwmax\": 15,\n    \"aifsn\": 2,\n    \"sta_rssi_dbm\": -45.0,\n    \"throughput_mbps_user\": 13.22,\n    \"neighbor_rssi_dbm\": {\n      \"ap2\": -74.7,\n      \"ap3\": -88.0\n    }\n  },\n  \"ap2\": {\n    \"service_name\": \"generic_data\",\n    \"business_type\": \"直播\",\n    \"traffic_priority\": \"medium\",\n    \"tx_power_dbm\": 14.0,\n    \"cwmin\": 7,\n    \"cwmax\": 15,\n    \"aifsn\": 2,\n    \"sta_rssi_dbm\": -48.0,\n    \"throughput_mbps_user\": 11.85,\n    \"neighbor_rssi_dbm\": {\n      \"ap1\": -68.6,\n      \"ap3\": -81.4\n    }\n  },\n  \"ap3\": {\n    \"service_name\": \"generic_data\",\n    \"business_type\": \"后台下载\",\n    \"traffic_priority\": \"medium\",\n    \"tx_power_dbm\": 8.0,\n    \"cwmin\": 7,\n    \"cwmax\": 15,\n    \"aifsn\": 2,\n    \"sta_rssi_dbm\": -50.0,\n    \"throughput_mbps_user\": 17.3,\n    \"neighbor_rssi_dbm\": {\n      \"ap1\": -76.0,\n      \"ap2\": -76.0\n    }\n  }\n}\n\n请先调用 get_latest_ap_states 获取最新状态，分析当前网络的核心问题。\n\n【路径选择规则（基于实时证据，不按 AP 编号或固定业务身份预设）】\n  · 若存在强干扰（邻居 RSSI 偏强，或 analyze_sr_interference 的 co_sr_triggered=true）→ 可选 Co-SR。\n  · 若 traffic_priority、QoS 或当前 EDCA 参数显示需要差异化竞争机会 → 可选 Co-EDCA。\n  · 若两类问题同时成立 → 可选联合调整；若证据不足 → 说明暂不调整或提出最小改动方案。\n  · 不要为了完成协商强行制造 SR 或 EDCA 问题。\n\n【Co-SR】降低各 AP 的 TX Power 减少 OBSS 干扰。第一步必须先判断可用并发组：get_latest_ap_states → analyze_sr_interference → select_sr_concurrent_groups；再用 evaluate_sr_candidate（传入 proposed_powers，部分并发再传 concurrent_group）自检。功率取最大必要降幅且为整数 dBm。提案 JSON 只含每个 AP 的 tx_power_dbm，并附 `\"_sr\": {\"concurrent_group\": [...], \"non_concurrent_aps\": [...]}`。\n\n【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；同优先级或未知优先级时不要强行制造梯度。用 validate_edca_proposal（传 proposed_edca）自检。\n【重要】若各 AP 优先级确实不同（如 high/medium/low）但当前 EDCA 参数相同（未差异化），这本身就是需要 Co-EDCA 的证据：应让高优先级获得更小的 CWmin/CWmax/AIFSN、低优先级更大，切勿以『统一参数已平凡满足单调性』为由判定无需调整——未体现优先级差异即未达成本场景目标。\n\n【联合调整】只有当强干扰与 EDCA 竞争问题同时有证据支持时使用，同时调用 Co-SR 和 Co-EDCA 的相关验算工具，提案 JSON 可同时包含两类字段。\n\n提案须简洁说明：选哪条路径及原因、每个 AP 的最终参数与依据、预期改善与权衡。\n提交前必须调用 evaluate_sr_candidate（Co-SR/联合）或 validate_edca_proposal（Co-EDCA/联合）自检；提案阶段自检必须把你打算提的参数显式作为工具参数传入。\n提案末尾必须用 ```json 代码块附参数摘要，顶层键必须是 ap1/ap2/ap3，每个 AP 的值必须是对象（参数写在对象内部，严禁裸数值）。", "response": "当前网络存在明确的跨小区干扰（Co-SR triggered），且所有 AP 业务优先级均为 medium，无差异化竞争需求，因此不适用 Co-EDCA。经分析，最优方案为全网统一降低发射功率，采用全并发组策略。\n\n核心问题：ap1 对 ap2 的强干扰（-68.6 dBm）是主要瓶颈，同时 ap2 与 ap3 间存在中等干扰。当前功率配置（ap1:20dBm, ap2:14dBm, ap3:8dBm）导致 OBSS 干扰超出安全阈值。通过 `select_sr_concurrent_groups` 评估，全网三台 AP 可构成一个有效并发组，无需隔离任何节点。`evaluate_sr_candidate` 验证表明，将所有 AP 功率统一降至 1 dBm 可完全满足 CCA、SINR 和 STA RSSI 约束，且所有调整量均为整数 dB，合法有效。\n\n预期效果：总功率下降 39 dB，最大单 AP 降幅 19 dB，STA RSSI 余量最小为 11 dB，SINR 余量充足，网络整体干扰显著降低，吞吐稳定性将提升。权衡在于：ap1 从 20 dBm 降至 1 dBm 后，其覆盖范围将收缩，但当前 STA RSSI 为 -45 dBm，仍远高于 -75 dBm 的最低可用阈值，业务不受影响。\n\n提案参数如下：\n\n```json\n{\"ap1\": {\"tx_power_dbm\": 1}, \"ap2\": {\"tx_power_dbm\": 1}, \"ap3\": {\"tx_power_dbm\": 1}, \"_sr\": {\"concurrent_group\": [\"ap1\",\"ap2\",\"ap3\"], \"non_concurrent_aps\": []}}\n```", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:22:39.470+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 4, "label": "AP2 投票（提案#1，提案方 AP1）"}
+{"ts": "2026-06-21T09:22:39.472+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap2", "phase": 4, "role": "voter"}
+{"ts": "2026-06-21T09:22:54.371+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "AP"}
+{"ts": "2026-06-21T09:22:54.372+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "2"}
+{"ts": "2026-06-21T09:22:54.374+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " 验算"}
+{"ts": "2026-06-21T09:22:54.375+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "完成"}
+{"ts": "2026-06-21T09:22:54.376+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "。\n\n当前提案中"}
+{"ts": "2026-06-21T09:22:54.378+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "为我（AP2）设定"}
+{"ts": "2026-06-21T09:22:54.379+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "的发射功率为 1"}
+{"ts": "2026-06-21T09:22:54.380+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " dBm，较"}
+{"ts": "2026-06-21T09:22:54.381+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "当前 14 dBm"}
+{"ts": "2026-06-21T09:22:54.382+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " 下降 13"}
+{"ts": "2026-06-21T09:22:54.383+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " dB，调整量为整数"}
+{"ts": "2026-06-21T09:22:54.384+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " dB，符合硬"}
+{"ts": "2026-06-21T09:22:54.385+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "性约束。经"}
+{"ts": "2026-06-21T09:22:54.385+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " `evaluate_sr_candidate"}
+{"ts": "2026-06-21T09:22:54.386+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "` 验证"}
+{"ts": "2026-06-21T09:22:54.387+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "，该方案对"}
+{"ts": "2026-06-21T09:22:54.389+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "我的节点完全合法："}
+{"ts": "2026-06-21T09:22:54.390+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "CCA、SINR 和"}
+{"ts": "2026-06-21T09:22:54.391+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " STA RSSI"}
+{"ts": "2026-06-21T09:22:54.393+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " 均达标，其中"}
+{"ts": "2026-06-21T09:22:54.394+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " STA RSSI 余"}
+{"ts": "2026-06-21T09:22:54.395+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "量为 -61 dBm"}
+{"ts": "2026-06-21T09:22:54.396+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "（高于 -7"}
+{"ts": "2026-06-21T09:22:54.397+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "5 dBm 的"}
+{"ts": "2026-06-21T09:22:54.398+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "安全阈值），S"}
+{"ts": "2026-06-21T09:22:54.399+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "INR 余"}
+{"ts": "2026-06-21T09:22:54.400+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "量充足（23"}
+{"ts": "2026-06-21T09:22:54.401+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": ".0 dB），"}
+{"ts": "2026-06-21T09:22:54.402+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "无任何错误。\n\n提案"}
+{"ts": "2026-06-21T09:22:54.403+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "中全网统一"}
+{"ts": "2026-06-21T09:22:54.404+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "降至 1 dBm"}
+{"ts": "2026-06-21T09:22:54.405+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " 的方案，虽大幅"}
+{"ts": "2026-06-21T09:22:54.406+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "降低覆盖范围，但所有"}
+{"ts": "2026-06-21T09:22:54.407+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " AP 当前关联 STA 的"}
+{"ts": "2026-06-21T09:22:54.408+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " RSSI 均远"}
+{"ts": "2026-06-21T09:22:54.409+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "高于 -75"}
+{"ts": "2026-06-21T09:22:54.410+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " dBm（我"}
+{"ts": "2026-06-21T09:22:54.411+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "方为 -4"}
+{"ts": "2026-06-21T09:22:54.412+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "8 dBm，"}
+{"ts": "2026-06-21T09:22:54.412+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "验算后预计"}
+{"ts": "2026-06-21T09:22:54.413+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "为 -61"}
+{"ts": "2026-06-21T09:22:54.414+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " dBm），业务"}
+{"ts": "2026-06-21T09:22:54.415+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "质量不受影响。且"}
+{"ts": "2026-06-21T09:22:54.416+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "该方案经工具"}
+{"ts": "2026-06-21T09:22:54.417+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "验证为最优全"}
+{"ts": "2026-06-21T09:22:54.418+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "并发组，无"}
+{"ts": "2026-06-21T09:22:54.419+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "必要隔离任何节点。\n\n我"}
+{"ts": "2026-06-21T09:22:54.420+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "同意该提案。"}
+{"ts": "2026-06-21T09:22:54.421+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "网络整体干扰显著"}
+{"ts": "2026-06-21T09:22:54.422+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "降低，吞吐稳定性将"}
+{"ts": "2026-06-21T09:22:54.423+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "提升，权衡合理。\n\n```"}
+{"ts": "2026-06-21T09:22:54.424+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "json\n{\"ag"}
+{"ts": "2026-06-21T09:22:54.425+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "reed\": true,"}
+{"ts": "2026-06-21T09:22:54.426+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " \"reason\": \""}
+{"ts": "2026-06-21T09:22:54.427+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "提案中为AP"}
+{"ts": "2026-06-21T09:22:54.428+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "2设定的tx"}
+{"ts": "2026-06-21T09:22:54.429+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "_power_dbm="}
+{"ts": "2026-06-21T09:22:54.429+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "1dBm经"}
+{"ts": "2026-06-21T09:22:54.430+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "验证合法，CCA"}
+{"ts": "2026-06-21T09:22:54.431+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "、SINR"}
+{"ts": "2026-06-21T09:22:54.432+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "、STA RSSI"}
+{"ts": "2026-06-21T09:22:54.433+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "均达标，STA"}
+{"ts": "2026-06-21T09:22:54.434+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " RSSI余量"}
+{"ts": "2026-06-21T09:22:54.435+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "充足（-61dBm"}
+{"ts": "2026-06-21T09:22:54.436+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": " > -75"}
+{"ts": "2026-06-21T09:22:54.437+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "dBm），无"}
+{"ts": "2026-06-21T09:22:54.438+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "任何错误。全"}
+{"ts": "2026-06-21T09:22:54.439+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "网统一降功率方案"}
+{"ts": "2026-06-21T09:22:54.439+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "有效降低跨小区干扰，且"}
+{"ts": "2026-06-21T09:22:54.440+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "未损害本节点业务质量，"}
+{"ts": "2026-06-21T09:22:54.441+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap2", "text": "同意。\"}\n```"}
+{"ts": "2026-06-21T09:22:54.442+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap2", "phase": 4, "role": "voter", "instruction": "【第一步】请完整阅读上方对话记录，梳理此前所有提案及每次拒绝的原因。\n\n【第二步】验算 AP1 的最新提案（提案#1）中针对你自己（AP2）的参数。\n\n最新提案参数：\n{\n  \"ap1\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap2\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap3\": {\n    \"tx_power_dbm\": 1\n  },\n  \"_sr\": {\n    \"concurrent_group\": [\n      \"ap1\",\n      \"ap2\",\n      \"ap3\"\n    ],\n    \"non_concurrent_aps\": []\n  }\n}\n\n请先调用 get_latest_ap_states，再调用验算工具。本架构下验算工具不会自动回填提案：你必须把上方提案中针对各 AP 的参数（Co-SR 传 proposed_powers，部分并发连同 concurrent_group；Co-EDCA 传 proposed_edca）显式填入工具参数。然后用自然语言给出判断。重点参考：关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量。\n\n三种表态：\n【同意】满足约束或可接受折中。末尾附 ```json\n{\"agreed\": true, \"reason\": \"...\"}\n```\n【弃权】未完全满足但找不到更好方案，或协商已重复。等同同意，无需反提案。末尾附 ```json\n{\"agreed\": \"abstain\", \"reason\": \"...\"}\n```\n【反对】你有具体替代方案。同一条回复中先附 ```json\n{\"agreed\": false, \"reason\": \"...\"}\n``` 再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 或联合，须先 get_latest_ap_states→analyze_sr_interference→select_sr_concurrent_groups 并写 _sr.concurrent_group。", "response": "AP2 验算完成。\n\n当前提案中为我（AP2）设定的发射功率为 1 dBm，较当前 14 dBm 下降 13 dB，调整量为整数 dB，符合硬性约束。经 `evaluate_sr_candidate` 验证，该方案对我的节点完全合法：CCA、SINR 和 STA RSSI 均达标，其中 STA RSSI 余量为 -61 dBm（高于 -75 dBm 的安全阈值），SINR 余量充足（23.0 dB），无任何错误。\n\n提案中全网统一降至 1 dBm 的方案，虽大幅降低覆盖范围，但所有 AP 当前关联 STA 的 RSSI 均远高于 -75 dBm（我方为 -48 dBm，验算后预计为 -61 dBm），业务质量不受影响。且该方案经工具验证为最优全并发组，无必要隔离任何节点。\n\n我同意该提案。网络整体干扰显著降低，吞吐稳定性将提升，权衡合理。\n\n```json\n{\"agreed\": true, \"reason\": \"提案中为AP2设定的tx_power_dbm=1dBm经验证合法，CCA、SINR、STA RSSI均达标，STA RSSI余量充足（-61dBm > -75dBm），无任何错误。全网统一降功率方案有效降低跨小区干扰，且未损害本节点业务质量，同意。\"}\n```", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:22:54.443+00:00", "session_id": "40d80557", "event": "vote", "voter": "ap2", "round": 1, "agreed": "agree", "response": "AP2 验算完成。\n\n当前提案中为我（AP2）设定的发射功率为 1 dBm，较当前 14 dBm 下降 13 dB，调整量为整数 dB，符合硬性约束。经 `evaluate_sr_candidate` 验证，该方案对我的节点完全合法：CCA、SINR 和 STA RSSI 均达标，其中 STA RSSI 余量为 -61 dBm（高于 -75 dBm 的安全阈值），SINR 余量充足（23.0 dB），无任何错误。\n\n提案中全网统一降至 1 dBm 的方案，虽大幅降低覆盖范围，但所有 AP 当前关联 STA 的 RSSI 均远高于 -75 dBm（我方为 -48 dBm，验算后预计为 -61 dBm），业务质量不受影响。且该方案经工具验证为最优全并发组，无必要隔离任何节点。\n\n我同意该提案。网络整体干扰显著降低，吞吐稳定性将提升，权衡合理。\n\n```json\n{\"agreed\": true, \"reason\": \"提案中为AP2设定的tx_power_dbm=1dBm经验证合法，CCA、SINR、STA RSSI均达标，STA RSSI余量充足（-61dBm > -75dBm），无任何错误。全网统一降功率方案有效降低跨小区干扰，且未损害本节点业务质量，同意。\"}\n```"}
+{"ts": "2026-06-21T09:22:54.444+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 4, "label": "AP3 投票（提案#1，提案方 AP1）"}
+{"ts": "2026-06-21T09:22:54.445+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap3", "phase": 4, "role": "voter"}
+{"ts": "2026-06-21T09:23:10.009+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "AP"}
+{"ts": "2026-06-21T09:23:10.011+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "3"}
+{"ts": "2026-06-21T09:23:10.012+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 验算完成。"}
+{"ts": "2026-06-21T09:23:10.013+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "\n\n当前提案中为"}
+{"ts": "2026-06-21T09:23:10.014+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "我（AP3"}
+{"ts": "2026-06-21T09:23:10.016+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "）设定的发射"}
+{"ts": "2026-06-21T09:23:10.017+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "功率为 1"}
+{"ts": "2026-06-21T09:23:10.018+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " dBm，较"}
+{"ts": "2026-06-21T09:23:10.019+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "当前 8 dBm 下"}
+{"ts": "2026-06-21T09:23:10.020+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "降 7 dB，调整"}
+{"ts": "2026-06-21T09:23:10.021+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "量为整数"}
+{"ts": "2026-06-21T09:23:10.022+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " dB，符合硬"}
+{"ts": "2026-06-21T09:23:10.023+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "性约束。经"}
+{"ts": "2026-06-21T09:23:10.023+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " `evaluate_sr_candidate"}
+{"ts": "2026-06-21T09:23:10.024+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "` 验证"}
+{"ts": "2026-06-21T09:23:10.025+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "，该方案对"}
+{"ts": "2026-06-21T09:23:10.026+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "我的节点完全合法"}
+{"ts": "2026-06-21T09:23:10.027+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "：CCA、SINR"}
+{"ts": "2026-06-21T09:23:10.029+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 和 STA RSSI"}
+{"ts": "2026-06-21T09:23:10.030+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 均达标"}
+{"ts": "2026-06-21T09:23:10.031+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "，其中 STA RSSI"}
+{"ts": "2026-06-21T09:23:10.032+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 余量为 -"}
+{"ts": "2026-06-21T09:23:10.033+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "57 dBm"}
+{"ts": "2026-06-21T09:23:10.034+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "（高于 -7"}
+{"ts": "2026-06-21T09:23:10.035+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "5 dBm 的"}
+{"ts": "2026-06-21T09:23:10.037+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "安全阈值），"}
+{"ts": "2026-06-21T09:23:10.038+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "SINR"}
+{"ts": "2026-06-21T09:23:10.039+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 余量充足（28"}
+{"ts": "2026-06-21T09:23:10.040+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": ".89 dB"}
+{"ts": "2026-06-21T09:23:10.041+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "），无任何错误。\n\n提案"}
+{"ts": "2026-06-21T09:23:10.042+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "中全网统一降至"}
+{"ts": "2026-06-21T09:23:10.043+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " 1 dBm 的"}
+{"ts": "2026-06-21T09:23:10.044+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "方案，虽大幅"}
+{"ts": "2026-06-21T09:23:10.044+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "降低覆盖范围，"}
+{"ts": "2026-06-21T09:23:10.045+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "但所有 AP 当"}
+{"ts": "2026-06-21T09:23:10.046+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "前关联 STA 的"}
+{"ts": "2026-06-21T09:23:10.047+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " RSSI 均远"}
+{"ts": "2026-06-21T09:23:10.048+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "高于 -75"}
+{"ts": "2026-06-21T09:23:10.049+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " dBm（我方为 -"}
+{"ts": "2026-06-21T09:23:10.050+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "50 dBm，验"}
+{"ts": "2026-06-21T09:23:10.051+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "算后预计为"}
+{"ts": "2026-06-21T09:23:10.052+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " -57 dB"}
+{"ts": "2026-06-21T09:23:10.053+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "m），业务质量不受影响。"}
+{"ts": "2026-06-21T09:23:10.054+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "且该方案经"}
+{"ts": "2026-06-21T09:23:10.055+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "工具验证为最优"}
+{"ts": "2026-06-21T09:23:10.056+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "全并发组，"}
+{"ts": "2026-06-21T09:23:10.057+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "无必要隔离任何"}
+{"ts": "2026-06-21T09:23:10.058+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "节点。\n\n我同意"}
+{"ts": "2026-06-21T09:23:10.059+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "该提案。网络"}
+{"ts": "2026-06-21T09:23:10.060+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "整体干扰显著降低"}
+{"ts": "2026-06-21T09:23:10.060+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "，吞吐稳定性"}
+{"ts": "2026-06-21T09:23:10.061+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "将提升，权"}
+{"ts": "2026-06-21T09:23:10.062+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "衡合理。\n\n```"}
+{"ts": "2026-06-21T09:23:10.063+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "json\n{\"ag"}
+{"ts": "2026-06-21T09:23:10.064+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "reed\": true,"}
+{"ts": "2026-06-21T09:23:10.065+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " \"reason\": \""}
+{"ts": "2026-06-21T09:23:10.066+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "提案中为AP"}
+{"ts": "2026-06-21T09:23:10.067+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "3设定的tx"}
+{"ts": "2026-06-21T09:23:10.068+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "_power_dbm="}
+{"ts": "2026-06-21T09:23:10.069+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "1dBm经"}
+{"ts": "2026-06-21T09:23:10.070+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "验证合法，CCA"}
+{"ts": "2026-06-21T09:23:10.071+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "、SINR"}
+{"ts": "2026-06-21T09:23:10.072+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "、STA RSSI"}
+{"ts": "2026-06-21T09:23:10.073+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "均达标，STA"}
+{"ts": "2026-06-21T09:23:10.074+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " RSSI余量"}
+{"ts": "2026-06-21T09:23:10.075+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "充足（-5"}
+{"ts": "2026-06-21T09:23:10.076+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "7dBm >"}
+{"ts": "2026-06-21T09:23:10.077+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": " -75dB"}
+{"ts": "2026-06-21T09:23:10.077+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "m），无任何"}
+{"ts": "2026-06-21T09:23:10.078+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "错误。全网统一降功率"}
+{"ts": "2026-06-21T09:23:10.079+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "方案有效降低跨"}
+{"ts": "2026-06-21T09:23:10.080+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "小区干扰，且"}
+{"ts": "2026-06-21T09:23:10.081+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "未损害本节点"}
+{"ts": "2026-06-21T09:23:10.082+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "。\"}\n```"}
+{"ts": "2026-06-21T09:23:10.083+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap3", "text": "业务质量，同意"}
+{"ts": "2026-06-21T09:23:10.084+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap3", "phase": 4, "role": "voter", "instruction": "【第一步】请完整阅读上方对话记录，梳理此前所有提案及每次拒绝的原因。\n\n【第二步】验算 AP1 的最新提案（提案#1）中针对你自己（AP3）的参数。\n\n最新提案参数：\n{\n  \"ap1\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap2\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap3\": {\n    \"tx_power_dbm\": 1\n  },\n  \"_sr\": {\n    \"concurrent_group\": [\n      \"ap1\",\n      \"ap2\",\n      \"ap3\"\n    ],\n    \"non_concurrent_aps\": []\n  }\n}\n\n请先调用 get_latest_ap_states，再调用验算工具。本架构下验算工具不会自动回填提案：你必须把上方提案中针对各 AP 的参数（Co-SR 传 proposed_powers，部分并发连同 concurrent_group；Co-EDCA 传 proposed_edca）显式填入工具参数。然后用自然语言给出判断。重点参考：关注你自己的 TX Power、evaluate_sr_candidate 返回的 valid/errors、STA RSSI/SINR/CCA 余量。\n\n三种表态：\n【同意】满足约束或可接受折中。末尾附 ```json\n{\"agreed\": true, \"reason\": \"...\"}\n```\n【弃权】未完全满足但找不到更好方案，或协商已重复。等同同意，无需反提案。末尾附 ```json\n{\"agreed\": \"abstain\", \"reason\": \"...\"}\n```\n【反对】你有具体替代方案。同一条回复中先附 ```json\n{\"agreed\": false, \"reason\": \"...\"}\n``` 再附完整反提案 JSON（顶层键 ap1/ap2/ap3）。反提案须兼顾各方约束；若选 Co-SR 或联合，须先 get_latest_ap_states→analyze_sr_interference→select_sr_concurrent_groups 并写 _sr.concurrent_group。", "response": "AP3 验算完成。\n\n当前提案中为我（AP3）设定的发射功率为 1 dBm，较当前 8 dBm 下降 7 dB，调整量为整数 dB，符合硬性约束。经 `evaluate_sr_candidate` 验证，该方案对我的节点完全合法：CCA、SINR 和 STA RSSI 均达标，其中 STA RSSI 余量为 -57 dBm（高于 -75 dBm 的安全阈值），SINR 余量充足（28.89 dB），无任何错误。\n\n提案中全网统一降至 1 dBm 的方案，虽大幅降低覆盖范围，但所有 AP 当前关联 STA 的 RSSI 均远高于 -75 dBm（我方为 -50 dBm，验算后预计为 -57 dBm），业务质量不受影响。且该方案经工具验证为最优全并发组，无必要隔离任何节点。\n\n我同意该提案。网络整体干扰显著降低，吞吐稳定性将提升，权衡合理。\n\n```json\n{\"agreed\": true, \"reason\": \"提案中为AP3设定的tx_power_dbm=1dBm经验证合法，CCA、SINR、STA RSSI均达标，STA RSSI余量充足（-57dBm > -75dBm），无任何错误。全网统一降功率方案有效降低跨小区干扰，且未损害本节点业务质量，同意。\"}\n```", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:23:10.085+00:00", "session_id": "40d80557", "event": "vote", "voter": "ap3", "round": 1, "agreed": "agree", "response": "AP3 验算完成。\n\n当前提案中为我（AP3）设定的发射功率为 1 dBm，较当前 8 dBm 下降 7 dB，调整量为整数 dB，符合硬性约束。经 `evaluate_sr_candidate` 验证，该方案对我的节点完全合法：CCA、SINR 和 STA RSSI 均达标，其中 STA RSSI 余量为 -57 dBm（高于 -75 dBm 的安全阈值），SINR 余量充足（28.89 dB），无任何错误。\n\n提案中全网统一降至 1 dBm 的方案，虽大幅降低覆盖范围，但所有 AP 当前关联 STA 的 RSSI 均远高于 -75 dBm（我方为 -50 dBm，验算后预计为 -57 dBm），业务质量不受影响。且该方案经工具验证为最优全并发组，无必要隔离任何节点。\n\n我同意该提案。网络整体干扰显著降低，吞吐稳定性将提升，权衡合理。\n\n```json\n{\"agreed\": true, \"reason\": \"提案中为AP3设定的tx_power_dbm=1dBm经验证合法，CCA、SINR、STA RSSI均达标，STA RSSI余量充足（-57dBm > -75dBm），无任何错误。全网统一降功率方案有效降低跨小区干扰，且未损害本节点业务质量，同意。\"}\n```"}
+{"ts": "2026-06-21T09:23:10.086+00:00", "session_id": "40d80557", "event": "round_result", "round": 1, "all_agreed": true, "agree_count": 2, "total_voters": 2}
+{"ts": "2026-06-21T09:23:10.087+00:00", "session_id": "40d80557", "event": "phase_start", "phase": 5, "label": "输出最终决策"}
+{"ts": "2026-06-21T09:23:10.087+00:00", "session_id": "40d80557", "event": "agent_speak_start", "agent": "ap1", "phase": 5, "role": "decision"}
+{"ts": "2026-06-21T09:23:10.089+00:00", "session_id": "40d80557", "event": "agent_speak_chunk", "agent": "ap1", "text": "{\"ap1\": {\"tx_power_dbm\": 1}, \"ap2\": {\"tx_power_dbm\": 1}, \"ap3\": {\"tx_power_dbm\": 1}, \"_sr\": {\"concurrent_group\": [\"ap1\", \"ap2\", \"ap3\"], \"non_concurrent_aps\": []}}\n协商结束"}
+{"ts": "2026-06-21T09:23:10.089+00:00", "session_id": "40d80557", "event": "agent_speak", "agent": "ap1", "phase": 5, "role": "decision", "instruction": "所有 AP 已同意提案。\n已通过的提案参数 JSON 如下，请最终决策必须与它保持一致：\n{\n  \"ap1\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap2\": {\n    \"tx_power_dbm\": 1\n  },\n  \"ap3\": {\n    \"tx_power_dbm\": 1\n  },\n  \"_sr\": {\n    \"concurrent_group\": [\n      \"ap1\",\n      \"ap2\",\n      \"ap3\"\n    ],\n    \"non_concurrent_aps\": []\n  }\n}\n\n请输出最终的 JSON 决策方案（严格合法、JSON 内不得有注释），顶层键必须是 ap1/ap2/ap3，然后在下一行写【协商结束】。", "response": "{\"ap1\": {\"tx_power_dbm\": 1}, \"ap2\": {\"tx_power_dbm\": 1}, \"ap3\": {\"tx_power_dbm\": 1}, \"_sr\": {\"concurrent_group\": [\"ap1\", \"ap2\", \"ap3\"], \"non_concurrent_aps\": []}}\n协商结束", "duration_ms": 0.0}
+{"ts": "2026-06-21T09:23:10.090+00:00", "session_id": "40d80557", "event": "final_decision", "decision": {"ap1": {"tx_power_dbm": 1}, "ap2": {"tx_power_dbm": 1}, "ap3": {"tx_power_dbm": 1}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}, "raw_response": "{\"ap1\": {\"tx_power_dbm\": 1}, \"ap2\": {\"tx_power_dbm\": 1}, \"ap3\": {\"tx_power_dbm\": 1}, \"_sr\": {\"concurrent_group\": [\"ap1\", \"ap2\", \"ap3\"], \"non_concurrent_aps\": []}}\n协商结束"}
+{"ts": "2026-06-21T09:23:10.094+00:00", "session_id": "40d80557", "event": "validation_result", "approved": true, "strategy": "co_sr", "parse_ok": true, "per_ap": {"ap1": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}, "ap2": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}, "ap3": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}}, "global_errors": [], "summary": "验证通过（策略=co_sr，所有 AP 参数合规）"}
+{"ts": "2026-06-21T09:23:10.095+00:00", "session_id": "40d80557", "event": "validation_result", "approved": true, "strategy": "co_sr", "parse_ok": true, "per_ap": {"ap1": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}, "ap2": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}, "ap3": {"proposed_params": {"tx_power_dbm": 1.0}, "observed_params": {}, "checks": [{"check": "Co-SR params", "ok": true, "errors": []}], "valid": true, "errors": []}}, "global_errors": [], "summary": "验证通过（策略=co_sr，所有 AP 参数合规）"}
+{"ts": "2026-06-21T09:23:10.096+00:00", "session_id": "40d80557", "event": "session_end", "outcome": "success", "total_rounds": 1, "duration_s": 71.4, "negotiation_duration_s": 71.4}

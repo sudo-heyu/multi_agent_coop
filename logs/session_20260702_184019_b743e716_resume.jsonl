@@ -1,0 +1,6 @@
+{"ts": "2026-07-02T18:40:19.714+00:00", "session_id": "b743e716", "event": "session_resumed", "event_id": "08a71bed345247bc96a8cd135ccac963", "sequence": 48, "boundary": "broadcast_complete", "projection_version": 1}
+{"ts": "2026-07-02T18:40:19.717+00:00", "session_id": "b743e716", "event": "episodic_memory_recalled", "event_id": "93688adbcefa4cbfb15a30ed4e42e6c4", "sequence": 49, "matches": []}
+{"ts": "2026-07-02T18:40:19.718+00:00", "session_id": "b743e716", "event": "semantic_rules_recalled", "event_id": "0816013ac9834c51ae7b6ea3206fa23d", "sequence": 50, "matches": []}
+{"ts": "2026-07-02T18:40:19.719+00:00", "session_id": "b743e716", "event": "phase_start", "event_id": "75bf4da68b3f479fb60ec55be3e67a7a", "sequence": 51, "phase": 2, "label": "协商触发，等待 AP1 自主选路"}
+{"ts": "2026-07-02T18:40:19.719+00:00", "session_id": "b743e716", "event": "phase_start", "event_id": "ccf5f24322fc4fa98cad36ce56904b9a", "sequence": 52, "phase": 3, "label": "AP1 发起提案（自主选路）"}
+{"ts": "2026-07-02T18:40:19.720+00:00", "session_id": "b743e716", "event": "agent_speak_start", "event_id": "98ea732fab7c493fae52e9cab9d71a96", "sequence": 53, "agent": "ap1", "phase": 3, "role": "proposer"}

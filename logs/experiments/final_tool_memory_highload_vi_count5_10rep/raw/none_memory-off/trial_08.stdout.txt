@@ -1,0 +1,100 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=ca434d74 event_db=logs/experiments/final_tool_memory_highload_vi_count5_10rep/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_035422_ca434d74.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+MAC 与 EDCA 参数：发射功率为 10 dBm，竞争窗口 CWmin/CWmax 分别为 31/63，AIFSN 为 7（BE 与 VI 队列参数保持一致）。
+干扰感知：本机扫描到的邻居 AP2 RSSI 为 -80.99 dBm，邻居 AP3 RSSI 为 -71.96 dBm。
+感知与业务质量指标：己方 STA RSSI 为 -45.71 dBm，SINR 为 48.29 dB。当前用户侧吞吐量为 0.48 Mbps，端到端延迟 492.27 ms，抖动 2.13 ms，丢包率高达 98.04%。
+STA 反馈与 SLA 状态：关联 STA sta_ap1_user（普通业务/medium 优先级）SLA 状态为 violated。系统日志显示其吞吐量低于 0.5 Mbps 阈值、延迟高于 300 ms 限制、丢包率远超 5% 上限，三项核心指标均发生越限。
+
+状态简述：当前链路质量严重恶化，极高丢包与长延迟表明信道竞争激烈或存在显著干扰；邻居 AP3 信号相对较强（-71.96 dBm）可能带来额外的同频/邻频冲突压力。整体处于高拥塞与 SLA 违约状态，亟需启动多 AP 协同优化。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我本机的实测参数汇报：
+MAC 参数：当前发射功率（TX Power）为 10 dBm，EDCA 竞争窗口设为 CWmin=7、CWmax=15，AIFSN 为 2。
+感知与干扰：本机扫描到的邻居 AP 信号强度为 ap1 ≈ -81.0 dBm，ap3 ≈ -72.0 dBm；关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm。（注：当前快照未包含信道利用率、TX Retries Ratio 及噪声底噪的具体数值。）
+业务质量：用户侧吞吐量（throughput_user）为 8.19 Mbps，平均延迟 8.98 ms，抖动 1.97 ms，丢包率 0%。
+终端反馈：当前关联 1 个 STA，SLA 状态为“satisfied”，无违规或告警记录。
+
+状态简述：当前无线环境相对干净，邻居干扰较弱（ap1 极弱，ap3 中等偏下），自身发射功率适中；业务链路稳定，低延迟与零丢包表明信道条件良好，STA 体验完全满足 SLA 要求。现阶段各项指标健康，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+MAC 与 EDCA 参数：发射功率为 10 dBm，竞争窗口 CWmin/CWmax 分别为 15/31，AIFSN 为 3。
+干扰感知：本机扫描到的邻居 AP1 RSSI 为 -71.96 dBm，邻居 AP2 RSSI 为 -71.96 dBm。
+感知与业务质量指标：己方 STA RSSI 为 -45.71 dBm。当前用户侧吞吐量为 7.28 Mbps，端到端延迟 468.15 ms，抖动 2.13 ms，丢包率高达 27.03%。（注：当前快照未提供信道利用率、TX Retries Ratio 及 Noise Floor 数值）
+STA 反馈与 SLA 状态：关联 STA sta_ap3_user（普通业务/medium 优先级）SLA 状态为 violated。系统日志显示其延迟（468.15 ms）与丢包率（27.03%）均严重越限，仅吞吐量满足最低阈值。
+
+状态简述：当前链路具备基础吞吐能力，但高延迟与高丢包表明信道竞争或同频干扰已显著劣化传输稳定性；两台邻居 AP 信号强度相近且偏强（约 -72 dBm），存在明显的空间复用冲突压力。整体处于 SLA 违约状态，亟需启动多 AP 协同优化以恢复 QoS。
+
+[1m[96mAP1[0m:
+我是 AP1，作为本轮提案方，基于三台 AP 的广播状态提出以下 Co-SR（空间复用/功率控制） 参数调整方案。
+
+现状分析：
+AP1 与 AP3 均出现严重 SLA 违约（丢包率分别高达 98.04% 和 27.03%，延迟超 460 ms），而 AP2 业务指标健康。这表明信道中存在显著的同频干扰或碰撞竞争，而非单纯的拥塞。
+干扰感知显示 AP1↔AP3 互访 RSSI 约为 -72 dBm，属于较强干扰水平；AP2 位于中间位置，对两端均有约 -72 dBm 的干扰。当前所有 AP 发射功率均为 10 dBm，OBSS 信号过强导致接收机 CCA 门限频繁触发，引发大量重传与退避。
+各 AP 业务优先级均为 `medium`，无需通过 Co-EDCA 强制构建优先级梯度；核心矛盾在于空间复用受限与干扰压制。
+
+策略选择：采用 Co-SR 路径。通过适度降低发射功率，削弱 OBSS 干扰强度，提升链路 SINR，从而降低重传率与端到端延迟。己方 STA RSSI 为 -45.7 dBm，具备充足的功率下调余量，不会危及自身覆盖。
+
+参数方案与依据：将 AP1、AP3 功率降至 6 dBm（降幅 4 dB），AP2 降至 7 dBm（降幅 3 dB）。该降幅为整数 dB，足以将 OBSS 干扰拉低至可接受范围，同时保留足够的本地覆盖。
+设置并发组 `["ap1", "ap3"]`，AP2 放入 `non_concurrent_aps`。利用拓扑上的相对距离，允许两端的 AP1 与 AP3 在降功率后安全复用同一信道，而中间的 AP2 错峰传输以避免三节点冲突。
+OBSS_PD 统一设为 -72 dBm，配合降功率形成标准的 SR 耦合窗口，确保非关联 BSS 帧能被正确忽略以开启并发。
+
+预期效果与权衡：预计 AP1/AP3 的重传率将显著下降，延迟与丢包率回归 SLA 阈值内；AP2 因避开并发时段且干扰源减弱，吞吐量与稳定性将进一步巩固。代价是单 AP 理论峰值吞吐略有下降，但整体网络有效容量与 QoE 将大幅提升。
+
+```json
+{
+  "AP1": {"tx_power_dbm": 6, "obss_pd_dbm": -72},
+  "AP2": {"tx_power_dbm": 7, "obss_pd_dbm": -72},
+  "AP3": {"tx_power_dbm": 6, "obss_pd_dbm": -72},
+  "_sr": {"concurrent_group": ["ap1", "ap3"], "non_concurrent_aps": ["ap2"]}
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】历史提案梳理
+本轮为协商流程的首次提案阶段，尚未存在任何历史提案或被拒绝的记录。AP1 基于三台 AP 的广播状态直接发起了首个 Co-SR 方案。
+
+【第二步】针对 AP2 参数的验算与判断
+结合本机实测状态与提案内容，对 AP2 相关参数进行逐项核对：
+TX Power 与降幅：当前发射功率为 10 dBm，提案调整为 7 dBm，降幅为 3 dB，严格符合整数 dB 调整要求。
+STA RSSI 与覆盖余量：本机关联 STA 当前 RSSI 为 -45.7 dBm。TX Power 下调 3 dB 后，路径损耗不变，预计 STA 接收信号强度约为 -48.7 dBm，远高于协议硬性约束阈值（-75 dBm），本地覆盖完全充足，不会引发链路中断或 SLA 违约。CCA 门限与干扰抑制：提案将 OBSS_PD 统一设为 -72 dBm。结合本机扫描到的邻居 AP RSSI（AP1≈-81 dBm，AP3≈-72 dBm），该门限能有效过滤中远距离的 OBSS 帧，避免接收机误触发 CCA 导致不必要的退避。同时，AP2 被划入 `non_concurrent_aps`，在时间上错峰传输，可进一步降低多节点碰撞概率。业务质量预期：AP2 当前 SLA 已满足（吞吐 8.19 Mbps，延迟 8.98 ms，丢包 0%）。适度降功率并配合错峰策略，将在不牺牲自身链路质量的前提下，显著改善 AP1/AP3 的干扰环境，整体网络容量与稳定性将得到提升，符合协作优化目标。
+
+综上，该提案对本机参数调整合理、各项约束全部满足，且有利于全局 QoS 恢复。本节点表示同意。
+
+```json
+{"agreed": true, "reason": "TX Power 由 10 dBm 降至 7 dBm（降幅 3 dB，整数合规）；降功率后预估 STA RSSI 约 -48.7 dBm，远高于 -75 dBm 安全底线，覆盖不受影响；OBSS_PD 设为 -72 dBm 配合非并发组错峰策略，可有效过滤邻居干扰、降低 CCA 误触发率；本机当前 SLA 已满足，该调整在保障自身链路稳定的同时能显著改善全网干扰环境，符合协作优化目标。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】历史提案梳理
+本轮为协商流程的首次提案阶段，尚未存在任何历史提案或被拒绝的记录。AP1 基于三台 AP 的广播状态直接发起了首个 Co-SR 方案。
+
+【第二步】针对 AP3 参数的验算与判断
+结合本机实测状态与提案内容，对 AP3 相关参数进行逐项核对：
+TX Power 与降幅：当前发射功率为 10 dBm，提案调整为 6 dBm，降幅为 4 dB，严格符合整数 dB 调整要求，未触发“TX Power < 5 dBm”的强制反对条件。STA RSSI 与覆盖余量：本机关联 STA 当前 RSSI 为 -45.71 dBm。TX Power 下调 4 dB 后，路径损耗不变，预计 STA 接收信号强度约为 -49.71 dBm，远高于协议硬性约束阈值（-75 dBm），本地覆盖完全充足，不会引发链路中断或 SLA 二次违约。
+- CCA 门限与干扰抑制：本机扫描到的邻居 AP1/AP2 RSSI 均约为 -71.96 dBm。提案将 OBSS_PD 统一设为 -72 dBm，精准匹配当前干扰电平，符合标准 SR 耦合窗口（`tx ≤ 23-(obss_pd+82)` → `6 ≤ 13` 成立）。该门限能有效过滤中远距离 OBSS 帧，避免接收机误触发 CCA 导致不必要的退避。
+并发组逻辑：提案将本节点与 AP1 划入 `concurrent_group`，AP2 放入 `non_concurrent_aps`。利用拓扑上的相对距离，允许两端节点安全复用信道，中间节点错峰传输，可直接降低三节点碰撞概率。SLA 预期：当前丢包率 27.03%、延迟 468.15 ms 主要源于全功率下的同频竞争与重传累积。降功率至 6 dBm 配合 OBSS_PD 门限将显著提升链路 SINR，降低重传率，有望使 SLA 指标回归阈值内。
+
+综上，该提案对本机参数调整合理、各项硬性约束全部满足，且直击当前高延迟与高丢包的根因。本节点表示同意。
+
+```json
+{"agreed": true, "reason": "TX Power 由 10 dBm 降至 6 dBm（降幅 4 dB，整数合规）；降功率后预估 STA RSSI 约 -49.71 dBm，远高于 -75 dBm 安全底线，覆盖不受影响；OBSS_PD 设为 -72 dBm 精准匹配邻居干扰电平（≈-71.96 dBm），符合 SR 耦合窗口，可有效抑制 CCA 误触发；被纳入 ap1/ap3 并发组、ap2 错峰的策略符合拓扑空间复用逻辑，能直接缓解当前高重传与长延迟问题，助力 SLA 恢复。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 6, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap3"], "non_concurrent_aps": ["ap2"]}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=7 用时 156s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m {'ap1': {'tx_power_dbm': 6, 'obss_pd_dbm': -72}, 'ap2': {'tx_power_dbm': 7, 'obss_pd_dbm': -72}, 'ap3': {'tx_power_dbm': 6, 'obss_pd_dbm': -72}, '_sr': {'concurrent_group': ['ap1', 'ap3'], 'non_concurrent_aps': ['ap2']}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'ca434d74', 'strategy': 'co_sr', 'ap_id': 'ap1', 'params': {'tx_power_dbm': 6, 'obss_pd_dbm': -72}}, 'response': "{'obss_pd': -72.0, 'tx': 6.0}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'ca434d74', 'strategy': 'co_sr', 'ap_id': 'ap3', 'params': {'tx_power_dbm': 6, 'obss_pd_dbm': -72}}, 'response': "{'obss_pd': -72.0, 'tx': 6.0}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'ca434d74', 'strategy': 'co_sr', 'ap_id': 'ap2', 'params': {'tx_power_dbm': 7, 'obss_pd_dbm': -72}}, 'response': "{'obss_pd': -72.0, 'tx': 7.0}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_sr，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.111186 confidence=0.5559

@@ -1,0 +1,90 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=faulty memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=1a10270f event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/faulty_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_092549_1a10270f.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。
+
+实测参数汇报：
+   MAC/信道参数：发射功率 tx_power_dbm 为 10 dBm；EDCA 参数 CWmin=3、CWmax=15、AIFSN=2（BE 与 VI 队列参数一致）。
+   业务质量：用户侧吞吐 throughput_mbps_user 为 17.0 Mbps，平均延迟 latency_ms 为 1.0 ms，丢包率 packet_loss_pct 为 0.0%。
+   感知指标：己方关联 STA RSSI 为 -45.7 dBm；本机扫描到的邻居 AP2 RSSI 为 -62.0 dBm，邻居 AP3 RSSI 为 -62.0 dBm。
+   STA 反馈：当前关联 STA (sta_ap1_user) 的 SLA 状态为 satisfied，未检测到吞吐量或丢包率的违规。
+
+状态简述：
+本节点当前 EDCA 竞争参数设置较为激进（高优先级配置），且 STA 侧业务质量稳定达标。但两个邻居 AP 的信号强度均达到 -62 dBm，属于强干扰范围，存在明显的同频干扰风险，建议后续评估是否通过 Co-SR 降低发射功率以释放空间复用机会。
+
+[1m[92mAP2[0m:
+我是 AP2。
+
+实测参数汇报：
+   MAC/信道参数：发射功率 tx_power_dbm 为 10 dBm；EDCA 参数 CWmin=31、CWmax=127、AIFSN=4（BE 与 VI 队列参数一致）。
+   业务质量：用户侧吞吐 throughput_mbps_user 为 0.326 Mbps，平均延迟 latency_ms 为 2700 ms，丢包率 packet_loss_pct 为 45.0%。
+   感知指标：己方关联 STA RSSI 为 -45.7 dBm；本机扫描到的邻居 AP1 RSSI 为 -84.0 dBm，邻居 AP3 RSSI 为 -84.0 dBm。
+   STA 反馈：当前关联 STA (sta_ap2_user) 的 SLA 状态为 violated，检测到吞吐量不足（0.326 < 0.5 Mbps）、延迟超标（2700 > 300 ms）及高丢包率（45% > 5%）三项违规。
+
+状态简述：
+本节点当前业务质量严重恶化，STA 侧出现显著的性能降级（低吞吐、高延迟、高丢包），但邻居信号强度处于 -84 dBm 的中等偏弱水平，干扰并非极端强烈。需进一步评估是否通过 Co-SR 或 Co-EDCA 调整来改善信道竞争环境与空间复用效率。
+
+[1m[93mAP3[0m:
+我是 AP3。
+
+实测参数汇报：
+   MAC/信道参数：发射功率 tx_power_dbm 为 10 dBm；EDCA 参数 CWmin=15、CWmax=31、AIFSN=3（BE 与 VI 队列参数一致）。
+   业务质量：用户侧吞吐 throughput_mbps_user 为 8.04 Mbps，平均延迟 latency_ms 为 6.23 ms，丢包率 packet_loss_pct 为 17.65%。
+   感知指标：己方关联 STA RSSI 为 -45.71 dBm；本机扫描到的邻居 AP1 RSSI 为 -71.96 dBm，邻居 AP2 RSSI 为 -71.96 dBm。
+   STA 反馈：当前关联 STA (sta_ap3_user) 的 SLA 状态为 violated，检测到丢包率超标（17.65% > 5%），延迟与吞吐均满足 SLA 要求。
+
+状态简述：
+本节点当前丢包率显著高于 SLA 阈值，但延迟表现良好。邻居信号强度处于 -72 dBm 左右，属于中等干扰范围，需评估是否通过 Co-SR 或 Co-EDCA 调整来改善信道竞争环境与空间复用效率。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.329489；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.329489；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 33s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.1299, confidence=0.6497
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.129939 confidence=0.6497

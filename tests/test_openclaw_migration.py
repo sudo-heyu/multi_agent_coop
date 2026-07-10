@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.mock_scenes import MOCK_SCENES
@@ -34,6 +35,41 @@ def decision_for(scene_name: str) -> dict:
         "non_concurrent_aps": best["non_concurrent_aps"],
     }
     return decision
+
+
+def noop_state() -> dict:
+    state = copy.deepcopy(MOCK_SCENES["edca"])
+    for ap_id, ap_state in state.items():
+        ap_state["traffic_priority"] = "medium"
+        ap_state["neighbor_rssi_dbm"] = {
+            ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
+        }
+        ap_state["cwmin"] = 3
+        ap_state["cwmax"] = 4
+        ap_state["aifsn"] = 2
+        ap_state.pop("be_cwmin", None)
+        ap_state.pop("be_cwmax", None)
+        ap_state.pop("be_aifsn", None)
+        ap_state.pop("vi_cwmin", None)
+        ap_state.pop("vi_cwmax", None)
+        ap_state.pop("vi_aifsn", None)
+        ap_state["throughput_mbps_user"] = 8.0
+        ap_state["latency_ms"] = 20.0
+        ap_state["packet_loss_pct"] = 0.0
+        ap_state["sta_feedback_summary"] = {
+            "status": "satisfied",
+            "sta_count": 1,
+            "violated_count": 0,
+            "warning_count": 0,
+        }
+        ap_state["sla_violations"] = []
+        ap_state["stas"] = [{
+            "sta_id": f"sta_{ap_id}_user",
+            "sla_status": "satisfied",
+            "violations": [],
+            "warnings": [],
+        }]
+    return state
 
 
 class FakeOpenClawAP:
@@ -102,6 +138,9 @@ class OpenClawMigrationTests(unittest.TestCase):
             ap_state["neighbor_rssi_dbm"] = {
                 ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
             }
+            ap_state["throughput_mbps_user"] = 10.0
+            ap_state["latency_ms"] = 10.0
+            ap_state["packet_loss_pct"] = 0.0
         fake = FakeOpenClawAP({})
 
         with patch.object(orch, "get_all_states", return_value=state), \
@@ -112,13 +151,63 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertEqual(result["strategy"], "noop")
         self.assertEqual(len(fake.calls), 3)
 
-    def test_structured_relay_streams_agent_chunks(self):
+    def test_uniform_priority_qos_pressure_triggers_edca(self):
         state = copy.deepcopy(MOCK_SCENES["edca"])
-        for ap_state in state.values():
+        for ap_id, ap_state in state.items():
             ap_state["traffic_priority"] = "medium"
             ap_state["neighbor_rssi_dbm"] = {
-                ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
+                peer: -90.0 for peer in ap_state["neighbor_rssi_dbm"]
             }
+            ap_state["throughput_mbps_user"] = 8.0
+            ap_state["latency_ms"] = 5.0
+            ap_state["packet_loss_pct"] = 0.0
+            ap_state["be_cwmin"] = 4
+            ap_state["be_cwmax"] = 5
+            ap_state["be_aifsn"] = 3
+            ap_state["vi_cwmin"] = 3
+            ap_state["vi_cwmax"] = 4
+            ap_state["vi_aifsn"] = 2
+        state["ap1"]["throughput_mbps_user"] = 0.0
+        state["ap3"]["latency_ms"] = 480.0
+        state["ap3"]["packet_loss_pct"] = 16.0
+
+        self.assertEqual(orch.determine_strategy(orch.apply_profile(state)), "co_edca")
+
+    def test_memory_off_removes_workspace_and_recalled_memory_from_prompt(self):
+        workspace = Path(self._workspace_td.name) / "ap1"
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "MEMORY.md").write_text(
+            "历史记忆不应出现在无记忆 prompt 中", encoding="utf-8"
+        )
+        orch.reset_session(copy.deepcopy(MOCK_SCENES["edca"]))
+        recalled = [{
+            "strategy": "co_edca",
+            "decision": {"ap1": {"CWmin": 15}},
+            "case_narrative": "共享历史案例不应出现",
+            "evaluation": {"final_verdict": "improved"},
+        }]
+
+        with patch.dict(os.environ, {"MULTIAP_MEMORY_MODE": "off"}):
+            msg = orch._build_agent_message(
+                "ap1",
+                "AP1: 当前会话内容",
+                "请提案",
+                shared_positive=recalled,
+                shared_warnings=recalled,
+                shared_rules=[{"rule_id": "r1", "summary": "共享规律不应出现"}],
+            )
+            instruction = orch.propose_instruction("ap1", "co_edca", recalled, [], recalled)
+
+        self.assertIn("当前会话内容", msg)
+        self.assertNotIn("历史记忆不应出现", msg)
+        self.assertNotIn("共享历史案例不应出现", msg)
+        self.assertNotIn("共享经验假设", msg)
+        self.assertIn("对话记录", instruction)
+        self.assertNotIn("历史正例/失败警告", instruction)
+        self.assertNotIn("历史案例假设", instruction)
+
+    def test_structured_relay_streams_agent_chunks(self):
+        state = noop_state()
         events = []
 
         def fake_drive(ap_id, instruction, thinking="off", extra_env=None, on_text_delta=None):
@@ -144,12 +233,7 @@ class OpenClawMigrationTests(unittest.TestCase):
         )
 
     def test_structured_relay_streaming_broadcast_runs_in_order(self):
-        state = copy.deepcopy(MOCK_SCENES["edca"])
-        for ap_state in state.values():
-            ap_state["traffic_priority"] = "medium"
-            ap_state["neighbor_rssi_dbm"] = {
-                ap: -90.0 for ap in ap_state["neighbor_rssi_dbm"]
-            }
+        state = noop_state()
         calls = []
         events = []
 
@@ -663,8 +747,8 @@ class OpenClawMigrationTests(unittest.TestCase):
         state = copy.deepcopy(MOCK_SCENES["edca"])
         proposal = {
             "ap1": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
-            "ap2": {"cwmin": 10, "cwmax": 15, "aifsn": 3},
-            "ap3": {"cwmin": 15, "cwmax": 15, "aifsn": 4},
+            "ap2": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
+            "ap3": {"cwmin": 7, "cwmax": 7, "aifsn": 2},
         }
         vote_count = 0
 
@@ -684,7 +768,7 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "success", result)
         self.assertEqual(result["strategy"], "co_edca")
         self.assertGreaterEqual(vote_count, 2)
-        self.assertEqual(result["decision"]["ap3"]["cwmax"], 31)
+        self.assertEqual(result["decision"]["ap3"]["cwmax"], 15)
         self.assertTrue(result["validation"]["approved"], result["validation"])
         self.assertTrue(
             any(
@@ -701,10 +785,10 @@ class OpenClawMigrationTests(unittest.TestCase):
                 "edca": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
             },
             "ap2": {
-                "edca": {"cwmin": 9, "cwmax": 20, "aifsn": 3},
+                "edca": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
             },
             "ap3": {
-                "edca": {"cwmin": 14, "cwmax": 35, "aifsn": 4},
+                "edca": {"cwmin": 7, "cwmax": 15, "aifsn": 2},
             },
         }
 
@@ -722,9 +806,9 @@ class OpenClawMigrationTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "success", result)
         self.assertEqual(result["strategy"], "co_edca")
         self.assertNotIn("edca", result["decision"]["ap2"])
-        self.assertEqual(result["decision"]["ap2"]["cwmin"], 9)
+        self.assertEqual(result["decision"]["ap2"]["cwmin"], 7)
         self.assertEqual(
-            result["validation"]["per_ap"]["ap2"]["proposed_params"]["CWmin"], 9
+            result["validation"]["per_ap"]["ap2"]["proposed_params"]["CWmin"], 7
         )
 
     def test_proposal_prompt_uses_non_mandatory_tool_language(self):

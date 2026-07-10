@@ -1,0 +1,47 @@
+Traceback (most recent call last):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 383, in <module>
+    main()
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 310, in main
+    result = orch.structured_relay(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2437, in structured_relay
+    return _structured_relay_impl(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2687, in _structured_relay_impl
+    rv = run_vote(
+         ^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1859, in run_vote
+    reply, _ = _run_agent_turn(
+               ^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1760, in _run_agent_turn
+    reply = driver(
+            ^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 175, in speak
+    return self._chat_loop(ap, messages, on_text_delta)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 249, in _chat_loop
+    text, tool_calls = self._stream_once(messages, on_text_delta)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 301, in _stream_once
+    for raw_line in resp.iter_lines(decode_unicode=False):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/models.py", line 1008, in iter_lines
+    for chunk in self.iter_content(
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/requests/models.py", line 937, in generate
+    yield from self.raw.stream(chunk_size, decode_content=True)
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/urllib3/response.py", line 1260, in stream
+    yield from self.read_chunked(amt, decode_content=decode_content)
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/urllib3/response.py", line 1430, in read_chunked
+    self._update_chunk_length()
+  File "/Users/heyu/Developer/ap/multi_agent_coop/.venv/lib/python3.11/site-packages/urllib3/response.py", line 1343, in _update_chunk_length
+    line = self._fp.fp.readline()  # type: ignore[union-attr]
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/socket.py", line 718, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/ssl.py", line 1326, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/ssl.py", line 1178, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

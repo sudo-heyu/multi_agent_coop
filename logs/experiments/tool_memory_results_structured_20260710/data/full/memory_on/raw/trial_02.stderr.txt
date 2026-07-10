@@ -1,0 +1,38 @@
+Traceback (most recent call last):
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 386, in <module>
+    main()
+  File "/Users/heyu/Developer/ap/multi_agent_coop/run.py", line 312, in main
+    result = orch.structured_relay(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2791, in structured_relay
+    return _structured_relay_impl(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 2909, in _structured_relay_impl
+    reply, streamed = futures[ap].result()
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/Users/heyu/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/orchestration.py", line 1944, in _run_agent_turn
+    reply = driver(
+            ^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 178, in speak
+    return self._chat_loop(ap, messages, on_text_delta)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 252, in _chat_loop
+    text, tool_calls = self._stream_once(messages, on_text_delta)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 302, in _stream_once
+    raise last_error
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 292, in _stream_once
+    return self._stream_once_attempt(messages, on_text_delta)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/heyu/Developer/ap/multi_agent_coop/openclaw/mcp/stream_runtime.py", line 321, in _stream_once_attempt
+    raise RuntimeError(f"PPIO stream API HTTP {resp.status_code}: {body}")
+RuntimeError: PPIO stream API HTTP 429: {"message":"server overload, please try again later trace_id: 059e6bb8f04cf4973110c86ebe5c6a56","type":"server_overload"}
+

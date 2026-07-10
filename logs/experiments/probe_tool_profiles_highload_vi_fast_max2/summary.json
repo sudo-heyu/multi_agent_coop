@@ -1,0 +1,32 @@
+{
+  "conditions": [
+    {
+      "profile": "basic",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 14.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 331.123
+    },
+    {
+      "profile": "basic",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 1,
+      "avg_turns": 8.0,
+      "avg_effect_score": 0.245921,
+      "avg_wall_duration_s": 77.189
+    }
+  ],
+  "memory_gaps": [
+    {
+      "profile": "basic",
+      "turn_reduction": 6.0,
+      "effect_gain": 1.245921
+    }
+  ],
+  "rows": 3,
+  "valid_rows": 2,
+  "infra_rows": 1
+}

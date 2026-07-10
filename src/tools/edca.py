@@ -38,6 +38,8 @@ _LIMITS = {
     "AIFSN": (1, 15),
 }
 
+CANONICAL_CW_VALUES: tuple[int, ...] = tuple((1 << n) - 1 for n in range(2, 11))
+
 _STATE_CW_KEYS: tuple[str, ...] = (
     "cwmin", "cwmax",
     "be_cwmin", "be_cwmax",
@@ -79,6 +81,15 @@ def ecw_to_cw(n: int) -> int:
 def cw_to_ecw(cw: int) -> int:
     """实际竞争窗口值 CW → 最接近的指数 n（硬件只能取 2^n - 1 的离散值）。"""
     return max(0, round(math.log2(int(cw) + 1)))
+
+
+def is_valid_cw_value(cw: int | float | str) -> bool:
+    """Return whether a proposed actual CW value can be represented exactly."""
+    try:
+        value = int(cw)
+    except (TypeError, ValueError):
+        return False
+    return value in CANONICAL_CW_VALUES
 
 
 def decode_state_edca(state: dict) -> dict:
@@ -175,6 +186,18 @@ def validate(params: dict) -> tuple[bool, list[str]]:
         if group.get("CWmin") is not None and group.get("CWmax") is not None:
             cwmin = int(group.get("CWmin"))
             cwmax = int(group.get("CWmax"))
+            if not is_valid_cw_value(cwmin):
+                nearest = ecw_to_cw(cw_to_ecw(cwmin))
+                errors.append(
+                    f"{ac}: CWmin={cwmin} 不是可下发竞争窗口值；"
+                    f"必须取 2^n-1（如 {CANONICAL_CW_VALUES}），最接近会被编码为 {nearest}"
+                )
+            if not is_valid_cw_value(cwmax):
+                nearest = ecw_to_cw(cw_to_ecw(cwmax))
+                errors.append(
+                    f"{ac}: CWmax={cwmax} 不是可下发竞争窗口值；"
+                    f"必须取 2^n-1（如 {CANONICAL_CW_VALUES}），最接近会被编码为 {nearest}"
+                )
             if cwmax <= cwmin:
                 errors.append(f"{ac}: CWmax={cwmax} 必须大于 CWmin={cwmin}")
 

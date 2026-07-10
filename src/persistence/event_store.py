@@ -962,10 +962,10 @@ class EventStore:
                     topology_signature, feature_json, initial_state_json,
                     decision_json, validation_json, execution_json,
                     observed_state_json, metrics_json, quality_score,
-                    lifecycle, quality_vector_json, episode_fingerprint,
+                    evaluation_json, lifecycle, quality_vector_json, episode_fingerprint,
                     feature_schema_version, evaluation_policy_version,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     scene=excluded.scene,
                     strategy=excluded.strategy,
@@ -983,6 +983,10 @@ class EventStore:
                         THEN episodic_memories.quality_score
                         ELSE excluded.quality_score
                     END,
+                    evaluation_json=COALESCE(
+                        episodic_memories.evaluation_json,
+                        excluded.evaluation_json
+                    ),
                     lifecycle=CASE
                         WHEN episodic_memories.evaluation_json IS NOT NULL
                         THEN episodic_memories.lifecycle
@@ -1013,6 +1017,8 @@ class EventStore:
                     _json(episode["observed_state"]) if episode.get("observed_state") is not None else None,
                     _json(episode.get("metrics") or {}),
                     float(episode.get("quality_score") or 0.0),
+                    _json(episode["evaluation"])
+                    if episode.get("evaluation") is not None else None,
                     episode.get("lifecycle") or "awaiting_evaluation",
                     _json(episode.get("quality_vector") or {}),
                     episode.get("episode_fingerprint"),

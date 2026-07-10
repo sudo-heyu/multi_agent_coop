@@ -1,0 +1,41 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=9393981b event_db=logs/experiments/probe_4profiles_1rep_highload_seeded_vi/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_021147_9393981b.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是本机实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；竞争窗口 CWmin/CWmax 设为 31/63；AIFSN 为 7。
+业务质量：用户侧吞吐量（user）为 0 Mbps；端到端延迟为 0 ms；丢包率高达 99.86%。当前快照中未上报信道利用率与 TX Retries Ratio 数据。
+感知指标：关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm；本机扫描到的邻居 AP 信号强度分别为：AP2 约 -81.0 dBm，AP3 约 -72.0 dBm。噪声底噪（Noise Floor）当前未提供。
+SLA/QoE 反馈：关联终端 sta_ap1_user（AC_VI 类别，medium 优先级）SLA 状态为 violated。具体违规项为吞吐量 0.0 Mbps（低于 0.5 Mbps 下限）及丢包率 99.86%（远超 5% 上限），反馈明确指出两项核心指标均不达标。
+
+状态简述：当前业务链路处于高丢包、零吞吐的异常状态，SLA 已严重违约。干扰感知方面，AP3 信号相对较强（-72 dBm），存在潜在的同频/邻频干扰风险；AP2 信号较弱（-81 dBm）。整体信道负载情况暂缺，但连接质量极不稳定，亟需通过参数协商或链路排查恢复基础通信能力。
+
+[1m[92mAP2[0m:
+我是 AP2。当前实测参数汇报如下：
+
+MAC 与 EDCA 参数：本机 TX Power 为 10 dBm，基础竞争窗口 CWmin/CWmax 设为 7/15，AIFSN 为 2。
+感知指标：己方关联 STA 的 RSSI 为 -45.71 dBm；本机扫描测得的邻居 AP RSSI 为：ap1 约 -80.99 dBm，ap3 约 -71.96 dBm。当前快照未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数，以实际可用数据为准。
+业务质量：用户侧吞吐量为 8.09 Mbps，平均延迟 10.25 ms，抖动约 2.00 ms，丢包率 0%。
+STA 反馈与 SLA：当前承载 1 个 medium 优先级的 best_effort 业务终端，SLA 状态为 satisfied。终端实测延迟、丢包率均远低于协议阈值（300ms / 5%），吞吐量充足，无违规或告警记录。
+
+状态简述：本节点当前运行平稳，STA 信号良好且业务 SLA 完全达标。邻居干扰方面，ap3 信号相对较强（-71.96 dBm），存在一定同频/邻频重叠可能；ap1 信号较弱。本轮仅作状态同步，暂不提出参数调整建议。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是本机实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；竞争窗口 CWmin/CWmax 设为 15/31；AIFSN 为 3。
+感知指标：关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm；本机扫描到的邻居 AP 信号强度分别为：AP1 约 -72.0 dBm，AP2 约 -72.0 dBm。噪声底噪（Noise Floor）当前未提供。
+业务质量：用户侧吞吐量（user）为 7.2 Mbps；端到端延迟为 475.4 ms；丢包率为 28.3%。当前快照中未上报信道利用率与 TX Retries Ratio 数据。
+SLA/QoE 反馈：关联终端 sta_ap3_user（AC_VI 类别，medium 优先级）SLA 状态为 violated。具体违规项为延迟 475.4 ms（超出 300 ms 上限）及丢包率 28.3%（远超 5% 上限），反馈明确指出两项核心指标均不达标。
+
+状态简述：当前链路虽有一定吞吐量，但面临极高的延迟和丢包率，QoS 表现严重劣化。干扰感知方面，AP1 和 AP2 的信号强度相当且较强（约 -72 dBm），可能存在显著的同频干扰影响传输稳定性。[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mnoop[0m turns=3 用时 52s
+[1m[34m[策略][0m noop
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [90m无可验收决策（协商未收敛或未解析出决策 JSON）[0m

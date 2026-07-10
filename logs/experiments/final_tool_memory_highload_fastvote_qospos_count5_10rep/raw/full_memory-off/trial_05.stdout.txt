@@ -1,0 +1,188 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=c6739777 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_070157_c6739777.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态：
+
+MAC/信道参数：
+发射功率 (TX Power)：10 dBm
+EDCA 参数：CWmin=31, CWmax=63, AIFSN=7（BE/VI 队列一致）
+业务类型：best_effort（普通业务），流量优先级 medium
+
+STA 与干扰感知：
+关联 STA RSSI：-45.71 dBm（信号强度良好）
+邻居 AP RSSI（本机扫描）：ap2 = -80.99 dBm，ap3 = -71.96 dBm
+ap3 的信号相对较强，可能对并发造成一定干扰
+
+业务质量指标：
+用户侧吞吐：约 0.32 Mbps
+时延：约 492 ms
+抖动：约 2.17 ms
+丢包率：100%
+
+SLA 反馈：
+我关联的 STA (sta_ap1_user) 当前 SLA 状态为 violated，三项指标全部违约：
+吞吐 0.32 Mbps < 要求 ≥0.5 Mbps
+时延 492 ms > 要求 ≤300 ms
+丢包 100% > 要求 ≤5%
+
+状态简述：
+本节点 STA 信号良好但业务质量严重恶化，表现为近乎 100% 的丢包和超高时延，SLA 全面违约。邻居 ap3 的 RSSI 接近 -72 dBm，存在中等干扰风险；ap2 较弱（-81 dBm）。整体信道可能偏忙或存在严重冲突，需要进一步分析干扰关系和业务调度问题。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测参数与状态：
+
+MAC 与信道参数
+TX Power：10 dBm
+CWmin / CWmax / AIFSN：7 / 15 / 2（BE 与 VI 队列一致）
+
+感知指标
+己方 STA RSSI：-45.7 dBm（信号良好）
+邻居 AP RSSI（本机扫描）：ap1 = -81.0 dBm，ap3 = -72.0 dBm
+Noise Floor：未在当前快照中提供
+
+业务质量
+用户吞吐：约 8.1 Mbps
+时延：约 10.6 ms，抖动约 2.0 ms
+丢包率：0%
+
+STA 反馈
+关联 STA（sta_ap2_user）SLA 状态：satisfied，无违反项；反馈为"STA SLA satisfied"。
+
+简述
+我当前信道竞争参数较激进（CW 较小），但 STA 连接质量稳定、吞吐与时延均远优于 SLA 阈值。邻居信号方面，ap1 干扰较弱（-81 dBm），ap3 中等（-72 dBm）。整体自身运行平稳，暂无异常。
+
+[1m[93mAP3[0m:
+我是 AP3，以下是我的实测状态：
+
+MAC/信道参数：
+发射功率 (TX Power)：10 dBm
+EDCA 参数：CWmin=15, CWmax=31, AIFSN=3（BE/VI 队列一致）
+业务类型：best_effort（普通业务），流量优先级 medium
+
+STA 与干扰感知：
+关联 STA RSSI：-45.71 dBm（信号强度良好）
+邻居 AP RSSI（本机扫描）：ap1 = -71.96 dBm，ap2 = -71.96 dBm
+两台邻居的信号强度相近且接近 -72 dBm，存在中等干扰风险
+
+业务质量指标：
+用户侧吞吐：约 4.80 Mbps
+时延：约 489.59 ms
+抖动：约 2.12 ms
+丢包率：26.47%
+
+SLA 反馈：
+我关联的 STA (sta_ap3_user) 当前 SLA 状态为 violated，两项指标违约：
+时延 489.59 ms > 要求 ≤300 ms
+丢包 26.47% > 要求 ≤5%
+
+状态简述：
+本节点 STA 信号良好、吞吐尚可，但时延和丢包严重超标，SLA 违约。邻居 ap1/ap2 的 RSSI 均接近 -72 dBm，存在中等干扰风险；整体信道可能偏忙或存在冲突，需要进一步分析干扰关系和业务调度问题。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(5.0ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0.16Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.05Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=5.8Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90manalyze_sr_interference[0m [90m(2.1ms)[0m  CoSR=[90m未触发[0m strong=0 moderate=4
+[90m无强干扰链路[0m  干扰源:ap3(2分)  受害:ap3(2分)
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(6.5ms)[0m  [1m[92m全部合规[0m  [90map1=15/31/3  ap2=7/15/2  ap3=15/31/3[0m
+提案阶段 — AP1 发起 Co-EDCA 提案
+
+现状分析
+
+根据最新状态与干扰分析：
+
+Co-SR 未触发：`analyze_sr_interference` 返回 `co_sr_triggered=false`，无强干扰链路，仅存在 4 条中等干扰链路（ap1↔ap3、ap2↔ap3 均为 -72 dBm 级别）。功率调整对缓解干扰的收益有限。EDCA 竞争失衡：三台 AP 业务优先级均为 `medium`，但当前 EDCA 参数差异显著：
+   - ap2：CWmin=7, CWmax=15, AIFSN=2（最激进）→ STA 吞吐 8 Mbps、时延 ~10 ms、丢包 0%，SLA 满足
+  ap3：CWmin=15, CWmax=31, AIFSN=3 → STA 吞吐 ~5 Mbps、时延 ~485 ms、丢包 ~22%，SLA 违约
+   - ap1：CWmin=31, CWmax=63, AIFSN=7（最保守）→ STA 吞吐 ~0.16 Mbps、时延 ~492 ms、丢包 100%，SLA 全面违约
+
+根因推断：ap1 和 ap3 的 STA RSSI 均良好（-45.7 dBm），SINR 也很高（~48 dB），说明物理层信号质量并非瓶颈。ap1 100% 丢包的核心原因是其 EDCA 参数过于保守，在信道竞争中持续处于劣势，几乎无法获取发送机会。ap2 的激进参数进一步挤压了 ap1/ap3 的竞争窗口。
+
+策略选择：Co-EDCA
+
+理由：
+- 干扰未达到 Co-SR 触发阈值（`co_sr_triggered=false`）
+- 三 AP 优先级同为 medium，无需按优先级梯度强制差异化，但现有参数已造成事实上的竞争不公
+ap1 的极端丢包表明其退避窗口过大，需适度放宽以获取合理信道机会
+
+参数方案
+
+| AP | 当前 CWmin/CWmax/AIFSN | 提案 CWmin/CWmax/AIFSN | 依据 |
+|----|----------------------|----------------------|------|
+| ap1 | 31 / 63 / 7 | 15 / 31 / 3 | 大幅放宽退避，缩小与 ap3 的差距，使其获得合理竞争机会 |
+| ap2 | 7 / 15 / 2 | 7 / 15 / 2 | 保持不变——当前性能最优，参数已足够激进 |
+| ap3 | 15 / 31 / 3 | 15 / 31 / 3 | 保持不变——参数适中，性能介于 ap1/ap2 之间 |
+
+单调性校验：三 AP 优先级同为 medium，无优先级排序约束。`validate_edca_proposal` 已确认该方案 `all_ok=true`，所有 CWmin/CWmax/AIFSN 均在合法离散值范围内。
+
+预期效果与权衡ap1：CWmin 从 31 降至 15，AIFSN 从 7 降至 3，预计可显著减少退避等待时间，降低丢包率，改善时延
+ap2：参数不变，继续维持高性能
+- ap3：参数不变，维持当前水平
+权衡：ap1 参数放宽后可能与 ap2 竞争更激烈，但由于 ap2 本身已占优势，整体网络公平性将得到改善
+
+```json
+{"AP1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "AP2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "AP3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(6.3ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0.16Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.26Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=7.48Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(2.5ms)[0m  [1m[92m全部合规[0m  [90map1=15/31/3  ap2=7/15/2  ap3=15/31/3[0m
+### 提案 #1 验算与表态
+
+验算过程：
+调用 `get_latest_ap_states` 获取最新状态，并调用 `validate_edca_proposal` 对提案进行校验。
+- 合法性：工具返回 `all_ok=true`，所有 AP 的 CWmin/CWmax/AIFSN 均在合法离散值范围内，且无优先级排序违规（三 AP 均为 medium 优先级）。
+针对 AP2 的参数：提案中 AP2 的 EDCA 参数为 `CWmin=7, CWmax=15, AIFSN=2`，与我当前的实际参数完全一致。
+
+判断依据：
+1.  自身利益无损：我的 STA 当前 SLA 状态为 satisfied（吞吐 ~8.26 Mbps，时延 ~9.1 ms，丢包 0%）。提案未调整我的参数，因此我的业务性能预期不会受到负面影响。 网络整体收益：提案大幅放宽了 ap1 的竞争参数（CWmin 31→15, AIFSN 7→3），这直接针对 ap1 因退避过保守导致的 100% 丢包问题。ap3 参数保持不变。 竞争格局：虽然 ap1 参数放宽可能增加信道竞争，但我（AP2）保留了最激进的参数（CWmin=7），在竞争中仍具优势，无需担心被挤压。
+
+结论：该提案合规且合理，对我方无不利影响，予以同意。
+
+```json
+{"agreed": true, "reason": "提案中 AP2 的 EDCA 参数（CWmin=7, CWmax=15, AIFSN=2）保持不变，与我当前最优状态一致；验算工具确认方案合法且无优先级冲突。该调整主要帮助 ap1 缓解极端丢包，不影响我方 SLA 满足状态。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(5.0ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0.32Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.16Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=7.2Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(2.9ms)[0m  [1m[92m全部合规[0m  [90map1=15/31/3  ap2=7/15/2  ap3=15/31/3[0m
+### 提案 #1 验算与表态（AP3）
+
+验算过程：
+调用 `get_latest_ap_states` 获取最新状态，并调用 `validate_edca_proposal` 对提案进行校验。
+
+- 合法性：工具返回 `all_ok=true`，所有 AP 的 CWmin/CWmax/AIFSN 均在合法离散值范围内，且无优先级排序违规（三 AP 均为 medium 优先级）。针对 AP3 的参数：提案中 AP3 的 EDCA 参数为 `CWmin=15, CWmax=31, AIFSN=3`，与我当前的实际参数完全一致。
+
+判断依据：
+自身利益无损：提案未调整我的 EDCA 参数，我的竞争条件保持不变。当前我的 STA 虽 SLA 违约（时延 ~483 ms、丢包 ~13%），但吞吐尚可（~6.4 Mbps），参数不变意味着预期性能不会恶化。
+2.  网络整体收益：提案大幅放宽了 ap1 的竞争参数（CWmin 31→15, AIFSN 7→3），直接针对 ap1 因退避过保守导致的 ~96% 丢包问题。ap2 参数保持不变。
+3.  竞争格局：ap1 参数放宽后可能与 ap2/ap3 竞争更激烈，但 ap1 此前因参数过于保守几乎无法获取发送机会，此次调整是修复严重的不公平。ap2 保留了最激进参数（CWmin=7），ap3 保持适中参数（CWmin=15），整体网络公平性将得到改善。
+
+结论：该提案合规且合理，对我方无不利影响，予以同意。
+
+```json
+{"agreed": true, "reason": "提案中 AP3 的 EDCA 参数（CWmin=15, CWmax=31, AIFSN=3）保持不变，与我当前参数一致；验算工具确认方案合法且无优先级冲突。该调整主要帮助 ap1 缓解极端丢包，不影响我方竞争条件。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=7 用时 118s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3}, 'ap2': {'CWmin': 7, 'CWmax': 15, 'AIFSN': 2}, 'ap3': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'c6739777', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'c6739777', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'c6739777', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'CWmin': 3, 'CWmax': 4, 'AIFSN': 2}}, 'response': "{'aifsn': 2, 'cwmax': 15, 'cwmin': 7}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_edca，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.191326 confidence=0.75

@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from openclaw.mcp import direct_tools, multiap_mcp
+from openclaw.mcp import direct_tools, multiap_mcp, tool_policy
 from tests.mock_scenes import MOCK_SCENES
 
 
@@ -93,6 +93,24 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertNotIn("throughput_mbps_user", ap1)
         self.assertNotIn("neighbor_rssi_dbm", ap1)
         self.assertIn("ap_states.exact_metrics", result["policy_redactions"])
+
+    def test_faulty_profile_exposes_full_tools_but_returns_wrong_state(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+
+        with patch.dict(os.environ, {"MULTIAP_TOOL_PROFILE": "faulty"}), \
+                patch.object(multiap_mcp, "get_all_states", return_value=state):
+            names = [tool["function"]["name"] for tool in direct_tools.openai_tools()]
+            result = multiap_mcp.get_latest_ap_states()
+
+        self.assertEqual(set(names), set(direct_tools.TOOL_NAMES))
+        self.assertEqual(result["ap_states"]["ap1"]["traffic_priority"], "high")
+        self.assertEqual(result["ap_states"]["ap2"]["traffic_priority"], "low")
+        self.assertNotIn("tool_fault_injected", result)
+        self.assertNotIn("tool_fault_injected", result["ap_states"]["ap1"])
+
+    def test_faulty_profile_is_hidden_from_agent_visible_label(self):
+        self.assertEqual(tool_policy.agent_visible_profile("faulty"), "full")
+        self.assertTrue(tool_policy.is_faulty("faulty"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,134 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=1dad3e6b event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/basic_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_063910_1dad3e6b.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：
+发射功率 (TX Power)：10 dBm
+CWmin：31，CWmax：63，AIFSN：7
+当前业务优先级：medium，业务类型：best_effort（普通业务）
+
+感知指标：
+己方关联 STA (sta_ap1_user) RSSI：-45.71 dBm（信号良好）
+邻居 AP 扫描 RSSI：ap2 = -80.99 dBm（弱干扰），ap3 = -71.96 dBm（中等干扰）
+噪声底噪：当前状态未提供具体数值
+
+业务质量：
+用户侧吞吐：0.48 Mbps
+端到端时延：492.11 ms
+丢包率：0%
+抖动：2.16 ms
+
+STA QoE/SLA 反馈：
+关联 STA sta_ap1_user 当前 SLA 状态为 violated（违反）
+违反项：
+吞吐量 0.48 Mbps < 阈值 0.5 Mbps（略低于要求）
+时延 492.11 ms > 阈值 300 ms（超出约 64%）
+
+状态简述：
+本节点当前信道竞争参数较为保守（CWmin=31），STA 信号强度良好但业务 SLA 出现违反，主要表现为吞吐不足和时延偏高。邻居干扰方面，ap2 信号较弱（-81 dBm），ap3 信号中等（-72 dBm），整体干扰水平不算严重。由于时延和吞吐问题同时存在，且当前 EDCA 参数偏宽松，后续可能需要结合 Co-EDCA 或 Co-SR 进行优化调整。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：
+发射功率 (TX Power)：10 dBm
+CWmin：7，CWmax：15，AIFSN：2
+当前业务优先级：medium，业务类型：best_effort（普通业务）
+
+感知指标：
+己方关联 STA (sta_ap2_user) RSSI：-45.71 dBm（信号良好）
+邻居 AP 扫描 RSSI：ap1 = -80.99 dBm（弱干扰），ap3 = -71.96 dBm（中等干扰）
+噪声底噪：当前状态未提供具体数值
+
+业务质量：
+用户侧吞吐：8.16 Mbps
+端到端时延：7.38 ms
+丢包率：0%
+抖动：1.94 ms
+
+STA QoE/SLA 反馈：
+关联 STA sta_ap2_user 当前 SLA 状态为 satisfied（满足）
+无违反项，吞吐、时延、丢包均在 SLA 阈值内
+
+状态简述：
+本节点当前信道竞争参数较为激进（CWmin=7），STA 信号强度良好且业务 SLA 完全满足，各项指标表现稳定。邻居干扰方面，ap1 信号较弱（-81 dBm），ap3 信号中等（-72 dBm），整体干扰水平可控。
+
+[1m[93mAP3[0m:
+我是 AP3，以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：
+发射功率 (TX Power)：10 dBm
+CWmin：15，CWmax：31，AIFSN：3
+当前业务优先级：medium，业务类型：best_effort（普通业务）
+
+感知指标：
+己方关联 STA (sta_ap3_user) RSSI：-45.71 dBm（信号良好）
+邻居 AP 扫描 RSSI：ap1 = -71.96 dBm（中等干扰），ap2 = -71.96 dBm（中等干扰）
+噪声底噪：当前状态未提供具体数值
+
+业务质量：
+用户侧吞吐：约 6.0 Mbps
+端到端时延：约 98 ms
+丢包率：约 0.42%
+抖动：约 2.6 ms
+
+STA QoE/SLA 反馈：
+关联 STA sta_ap3_user 当前 SLA 状态为 satisfied（满足）
+无违反项，吞吐、时延、丢包均在 SLA 阈值内
+
+状态简述：
+本节点当前信道竞争参数适中（CWmin=15），STA 信号强度良好且业务 SLA 完全满足，各项指标表现稳定。邻居干扰方面，ap1 和 ap2 信号均为中等水平（-72 dBm），整体干扰水平可控。由于时延和吞吐问题均不存在，当前状态较为健康。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.329489；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.329489；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 46s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.2265, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.2265 confidence=0.75

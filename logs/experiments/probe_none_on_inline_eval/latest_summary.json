@@ -1,0 +1,17 @@
+{
+  "conditions": [
+    {
+      "profile": "none",
+      "memory": "on",
+      "n": 3,
+      "success_rate": 0,
+      "avg_turns": 17.0,
+      "avg_effect_score": -0.676811,
+      "avg_wall_duration_s": 169.54766666666666
+    }
+  ],
+  "memory_gaps": [],
+  "rows": 3,
+  "valid_rows": 3,
+  "infra_rows": 0
+}

@@ -1,0 +1,52 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=6a830774 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/basic_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_061657_6a830774.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1，以下是我的实测状态：
+
+MAC/信道参数：TX Power 10 dBm；CWmin/CWmax/AIFSN 均为 31/63/7（BE 与 VI 队列一致）。
+
+感知指标：己方关联 STA RSSI 约 -45.7 dBm，信号良好；本机扫描到的邻居 AP RSSI 为：ap2 ≈ -81.0 dBm，ap3 ≈ -72.0 dBm。噪声底噪未检测到异常。
+
+业务质量：当前 user 吞吐约 0.16 Mbps，时延约 492 ms，抖动约 2.2 ms，丢包率 0%。
+
+STA 反馈：我关联的唯一 STA（sta_ap1_user）SLA 状态为 violated。具体违反项为：吞吐 0.16 Mbps < 阈值 0.5 Mbps，时延 492 ms > 阈值 300 ms；丢包率当前为 0%，未触发丢包违规。
+
+简述：本节点 STA 信号强度充足，但吞吐与时延均严重偏离 SLA 目标；邻居 ap3 的 RSSI 相对较强（-72 dBm），可能存在一定干扰风险，而 ap2 距离较远（-81 dBm）干扰较弱。整体信道负载情况需结合其他 AP 状态进一步判断。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测参数与状态：
+
+MAC 与信道参数：当前发射功率（TX Power）为 10 dBm；EDCA 退避窗口 CWmin/CWmax 分别为 7/15，AIFSN 为 2。
+
+感知指标：本机扫描到的邻居信号强度方面，ap1 的 RSSI 约为 -81 dBm，ap3 的 RSSI 约为 -72 dBm；己方关联 STA 的 RSSI 为 -45.7 dBm，信号质量良好。
+
+业务质量：用户侧吞吐约 8.26 Mbps，平均时延约 10.8 ms，抖动约 2.0 ms，丢包率为 0%。
+
+STA 反馈：当前关联的 1 台 STA 处于 SLA satisfied 状态，无违反项或告警。
+
+状态简述：本节点信道竞争参数较为宽松（CWmin=7），自身业务运行稳定、SLA 完全满足；邻居中 ap3 的信号相对较强（-72 dBm），ap1 较弱（-81 dBm）。
+
+[1m[93mAP3[0m:
+我是 AP3，以下是我的实测状态：
+
+MAC/信道参数：TX Power 10 dBm；CWmin/CWmax/AIFSN 均为 15/31/3（BE 与 VI 队列一致）。
+
+感知指标：己方关联 STA RSSI 约 -45.7 dBm，信号良好；本机扫描到的邻居 AP RSSI 为：ap1 ≈ -72.0 dBm，ap2 ≈ -72.0 dBm。噪声底噪未检测到异常。
+
+业务质量：当前 user 吞吐约 6.56 Mbps，时延约 483.5 ms，抖动约 2.1 ms，丢包率约 10.6%。
+
+STA 反馈：我关联的唯一 STA（sta_ap3_user）SLA 状态为 violated。具体违反项为：时延 483.5 ms > 阈值 300 ms；丢包率 10.6% > 阈值 5%；吞吐 6.56 Mbps 满足 ≥ 0.5 Mbps 要求，未触发吞吐违规。
+
+简述：本节点 STA 信号强度充足，但时延和丢包率均严重偏离 SLA 目标；两个邻居 AP（ap1 和 ap2）的 RSSI 均为 -72 dBm 左右，干扰相对较强，可能导致信道竞争加剧和重传增加。整体信道负载情况需结合其他 AP 状态进一步判断。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.5ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=0Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=8.12Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=5.63Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m

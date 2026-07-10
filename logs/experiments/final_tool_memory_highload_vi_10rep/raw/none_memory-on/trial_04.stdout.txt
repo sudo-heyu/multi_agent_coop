@@ -1,0 +1,109 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=3bf34682 event_db=logs/experiments/final_tool_memory_highload_vi_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_032544_3bf34682.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是本机实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，AC_BE 与 AC_VI 队列均统一配置为 CWmin=31、CWmax=63、AIFSN=7。
+
+感知指标：本机扫描到的邻居 AP 信号强度分别为 ap2（-81.0 dBm）与 ap3（-72.0 dBm）；己方关联 STA 的接收信号强度（RSSI）为 -45.7 dBm；噪声底噪（Noise Floor）为 -94 dBm。
+
+业务质量：iperf 与用户侧吞吐均为 0 Mbps，端到端延迟为 0 ms，丢包率高达 97.9%。当前快照未提供信道利用率（Data rate-to-bandwidth ratio）与 TX Retries Ratio 的具体数值。
+
+STA 反馈与状态简述：关联 STA sta_ap1_user 处于严重 SLA 违规状态，核心表现为吞吐量完全中断且丢包率远超 5% 的上限。整体来看，当前链路面临极高的传输阻塞与丢包，业务质量极不稳定；结合 ap3 较强的干扰信号（-72.0 dBm），网络亟需通过协作机制缓解竞争冲突或空间干扰。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，AC_BE 与 AC_VI 队列均统一配置为 CWmin=7、CWmax=15、AIFSN=2。
+
+感知指标：本机扫描到的邻居 AP 信号强度分别为 ap1（-81.0 dBm）与 ap3（-72.0 dBm）；己方关联 STA 的接收信号强度（RSSI）为 -45.7 dBm；噪声底噪（Noise Floor）为 -94 dBm。
+
+业务质量：用户侧吞吐量为 8.05 Mbps，端到端延迟为 8.81 ms，抖动为 2.01 ms，丢包率为 0%。当前快照未提供信道利用率（Data rate-to-bandwidth ratio）与 TX Retries Ratio 的具体数值。
+
+STA 反馈与状态简述：关联 STA sta_ap2_user 处于 SLA 满足状态，QoE 指标正常且无违规记录。整体来看，本节点链路质量稳定、负载较轻；结合 ap3 较强的干扰信号（-72.0 dBm），网络具备一定空间复用潜力，但当前自身业务运行平稳，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是本机实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，AC_BE 与 AC_VI 队列均统一配置为 CWmin=15、CWmax=31、AIFSN=3。
+
+感知指标：本机扫描到的邻居 AP 信号强度分别为 ap1（-71.96 dBm）与 ap2（-71.96 dBm）；己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm；噪声底噪（Noise Floor）当前快照未提供具体数值。
+
+业务质量：用户侧吞吐量为 5.44 Mbps，端到端延迟为 485.27 ms，抖动为 2.18 ms，丢包率为 18.74%。当前快照未提供信道利用率（Data rate-to-bandwidth ratio）与 TX Retries Ratio 的具体数值。
+
+STA 反馈与状态简述：关联 STA sta_ap3_user 处于严重 SLA 违规状态，核心表现为延迟高达 485.27 ms（超过 300 ms 上限）且丢包率 18.74%（远超 5% 上限）。整体来看，本节点面临较高的传输阻塞与延迟问题，结合 ap1/ap2 较强的干扰信号（约 -72 dBm），网络亟需通过协作机制缓解竞争冲突或空间干扰。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+本节点（AP2）对提案#1 表示同意。
+
+现状与验算分析：
+1. 本机 QoE/SLA：AP2 当前关联 STA 运行平稳，用户侧吞吐 8.05 Mbps，延迟仅 8.81 ms，丢包率 0%，完全满足 SLA 要求（最大延迟 300 ms，最大丢包 5%）。
+参数对比：提案要求 AP2 将 BE 队列 EDCA 参数从当前的 CWmin=7/CWmax=15/AIFSN=2 调整为 CWmin=15/CWmax=31/AIFSN=3，VI 队列保持不变。
+3. 优先级与排序：AP2 当前业务优先级为 medium。提案中三台 AP 参数配置完全一致，符合“同优先级无需强制单调排序”的规范，且未违反 IEEE 802.11 基础范围限制。
+全局权衡：AP1 面临 97.9% 极端丢包与吞吐中断，AP3 存在 485 ms 超高延迟与 18.74% 丢包，全网信道竞争处于高度饱和状态。提案通过统一增大退避窗口（CWmin/CWmax）来降低整体信道碰撞概率，是缓解全网拥塞的有效手段。AP2 现有延迟余量极大（8.81 ms vs 300 ms SLA），完全能够承受因 CW 调大带来的轻微延迟波动，不会影响本机业务体验。
+
+综上，该 Co-EDCA 提案在保障本机 SLA 的前提下，有效响应了 AP1 与 AP3 的拥塞痛点，AP2 予以支持。
+
+```json
+{"agreed": true, "reason": "AP2 当前业务质量良好（吞吐 8.05 Mbps，延迟 8.81 ms，丢包 0%），SLA 满足。提案将 AP2 的 BE 队列 CWmin/CWmax 适度调大（7/15 -> 15/31），有助于降低整体信道竞争强度，配合 AP1（严重丢包）和 AP3（高延迟）缓解拥塞。由于各 AP 优先级均为 medium，参数一致符合规范，且 AP2 现有 QoS 余量充足，可接受该全局协调方案。"}
+```
+
+[1m[93mAP3[0m:
+【现状与验算分析】
+本机 QoE/SLA：AP3 当前关联 STA 延迟高达 485.27 ms（超过 300 ms 上限），丢包率 18.74%（远超 5% 上限），处于严重 SLA 违规状态。
+2. 参数对比：提案要求 AP3 将 VI 队列 EDCA 参数从当前的 CWmin=15/CWmax=31/AIFSN=3 调整为 CWmin=7/CWmax=15/AIFSN=2，BE 队列维持 CWmin=15/CWmax=31/AIFSN=3 不变。
+3. 优先级与排序：本机业务优先级为 medium。提案中三台 AP 参数配置完全一致，符合“同优先级无需强制单调排序”的规范，且各项参数均在 IEEE 802.11 合法范围内。
+4. 全局权衡：提案通过统一增大 BE 队列退避窗口来降低整体信道碰撞概率，同时优化 VI 队列竞争参数以优先保障实时业务。这直接针对我方高延迟痛点及 AP1 的极端丢包问题，能有效缓解全网拥塞。AP3 现有 VI 队列退避偏大，采纳该调整可显著改善延迟体验。
+
+综上，该 Co-EDCA 提案在保障本机 VI 业务低延迟需求的同时，有效响应了全网拥塞痛点，AP3 予以支持。
+
+```json
+{"agreed": true, "reason": "AP3 当前面临严重 SLA 违规（延迟 485.27 ms，丢包 18.74%）。提案将 VI 队列 EDCA 参数优化为更激进的竞争窗口（CWmin=7, AIFSN=2），有助于显著降低实时业务延迟；BE 队列维持 CWmin=15/CWmax=31/AIFSN=3 配合全网统一退避策略缓解信道碰撞。各节点优先级均为 medium，参数配置合理合规，能有效协同解决 AP1 丢包与 AP3 高延迟问题，AP3 表示同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 72s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.1686, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.168555 confidence=0.75

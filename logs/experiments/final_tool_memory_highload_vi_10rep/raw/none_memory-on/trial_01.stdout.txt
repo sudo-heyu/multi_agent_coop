@@ -1,0 +1,107 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=29314dc3 event_db=logs/experiments/final_tool_memory_highload_vi_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_032112_29314dc3.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。当前实测数据播报如下：
+MAC 与 EDCA 参数：TX Power 为 10 dBm，CWmin/CWmax/AIFSN 均配置为 31/63/7。
+感知指标：己方关联 STA RSSI 为 -45.7 dBm；本机扫描到的邻居 AP 信号强度为 AP2 (-81.0 dBm)、AP3 (-72.0 dBm)。
+业务质量：当前吞吐量为 0 Mbps，延迟 0 ms，丢包率高达 100%。（注：当前状态快照中未包含信道利用率、重传率及噪声底噪的具体数值）。
+
+状态简述：
+当前业务处于完全中断状态，丢包率极高。尽管己方 STA 信号覆盖良好（-45.7 dBm），但 100% 的丢包与零吞吐表明传输链路存在严重障碍。邻居 AP 信号强度处于中等水平（AP3 约 -72 dBm），虽未达到极强干扰阈值，但结合全量丢包现象，信道竞争或隐性冲突可能极为激烈。关联 STA (sta_ap1_user) 已触发严重 SLA 违规，实际吞吐 0 Mbps 低于 0.5 Mbps 底线，丢包率 100% 远超 5% 上限，亟需通过协商调整参数以恢复基础连通性。
+
+[1m[92mAP2[0m:
+我是 AP2。当前实测数据播报如下：
+MAC 与 EDCA 参数：发射功率（TX Power）为 10 dBm；BE 与 VI 类别的退避参数均为 CWmin=7、CWmax=15，AIFSN=2。
+感知指标：本机扫描到的邻居 AP 信号强度为 AP1 (-81.0 dBm)、AP3 (-72.0 dBm)；己方关联 STA (sta_ap2_user) 的接收信号强度（RSSI）为 -45.7 dBm。当前状态快照中未包含信道利用率、TX Retries Ratio 及噪声底噪（Noise Floor）的具体数值。
+业务质量：当前用户侧吞吐量为 8.32 Mbps，平均延迟约 8.95 ms，抖动约 1.99 ms，丢包率为 0%。
+SLA 反馈：关联 STA 的各项 QoE 指标均满足 SLA 约束（吞吐≥0.5 Mbps、延迟≤300 ms、丢包≤5%），系统判定为 satisfied，无违规或警告记录。
+
+状态简述：
+本节点当前链路稳定，STA 信号覆盖优良且业务零丢包，各项指标均符合 SLA 要求。邻居 AP 信号处于中等偏弱水平，对本机直连链路的潜在干扰较低，整体信道竞争环境相对宽松，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是 AP3。当前实测数据播报如下：
+MAC 与 EDCA 参数：发射功率（TX Power）为 10 dBm；BE 类别的退避参数配置为 CWmin=15、CWmax=31，AIFSN=3。
+感知指标：己方关联 STA (sta_ap3_user) 的接收信号强度（RSSI）为 -45.71 dBm；本机扫描到的邻居 AP 信号强度均为约 -72.0 dBm（AP1 与 AP2）。
+业务质量：当前用户侧吞吐量为 6.88 Mbps，平均延迟约 463.94 ms，抖动约 2.10 ms，丢包率高达 40.34%。
+SLA 反馈：关联 STA 的延迟与丢包率均严重违反 SLA 约束（延迟上限 300 ms，丢包上限 5%），系统判定为 violated。
+
+状态简述：
+本节点链路面临严重的传输障碍，尽管己方 STA 信号覆盖优良且邻居干扰处于中等水平，但极高的延迟与丢包率表明信道竞争异常激烈或存在严重冲突。当前业务处于 SLA 违规状态，亟需通过后续协商优化参数以恢复基础服务质量。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】梳理此前提案及拒绝原因
+本轮为协商首轮提案，尚无历史拒绝记录。AP1 基于高质量历史经验直接发起统一 Co-EDCA 提案。
+
+【第二步】验算与判断
+针对本节点（AP2）的参数验算如下：合规性：提案中 AP2 的 BE 参数调整为 CWmin=15、CWmax=31、AIFSN=3，均符合 IEEE 802.11 标准范围，且满足 CWmax > CWmin 的单调递增约束。
+优先级与 QoS 匹配：本机 traffic_priority 为 medium，当前 STA 业务质量优良（吞吐 8.32 Mbps，延迟 8.95 ms，零丢包，SLA satisfied）。提案采用全网统一参数策略，未强行制造优先级梯度，避免了因优先级误判导致的资源错配。
+网络协同效益：尽管增大退避窗口会略微增加本机发送等待时间，但能有效降低信道竞争烈度。结合 AP1 严重丢包（100%）与 AP3 高延迟/高丢包现状，适度放宽竞争条件有助于缓解隐性冲突，提升整体网络连通性。本机 SLA 裕量充足，可承受此折中。
+
+综上，该提案参数合法、逻辑稳健，且有利于全局收敛，本节点予以同意。
+
+```json
+{"agreed": true, "reason": "提案参数符合 IEEE 802.11 标准，CWmin/CWmax/AIFSN 取值合理。本机 traffic_priority 为 medium，当前 SLA 满足且裕量充足。在全网统一退避参数的策略下，虽本机竞争窗口略增，但能有效缓解 AP1 与 AP3 面临的严重冲突与高丢包问题，符合整体网络性能优先的协作原则，故同意该方案。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】梳理此前提案及拒绝原因
+本轮为协商首轮提案，尚无历史拒绝记录。AP1 基于高质量历史经验直接发起统一 Co-EDCA 提案，要求三台 AP 统一 BE 与 VI 类别的退避参数。
+
+【第二步】验算与判断
+针对本节点（AP3）的参数验算如下：合规性：提案中 AP3 的 BE 参数维持 CWmin=15、CWmax=31、AIFSN=3，VI 参数调整为 CWmin=7、CWmax=15、AIFSN=2，均符合 IEEE 802.11 标准范围，且严格满足 CWmax > CWmin 的单调递增约束。优先级与 QoS 匹配：本机 `traffic_priority` 为 medium，当前主要承载 best_effort 业务。提案采用全网统一参数策略，未强行制造优先级梯度，符合多 AP 同优先级场景下的协作原则。
+3. 网络协同效益：本机当前面临严重的高延迟（~464 ms）与高丢包（~40%），尽管 STA 信号覆盖优良（-45.71 dBm），但信道竞争异常激烈。提案中的 BE 参数与我当前配置完全一致，且统一策略能有效抑制全网范围内的信道碰撞概率。在 AP1 零吞吐、AP3 高丢包的严峻局面下，维持现有退避窗口并同步全网参数是缓解隐性冲突、恢复基础连通性的必要折中。
+
+综上，该提案参数合法、逻辑稳健，且有利于全局收敛，本节点予以同意。
+
+```json
+{"agreed": true, "reason": "提案参数符合 IEEE 802.11 标准，CWmin/CWmax/AIFSN 取值合理。本机 traffic_priority 为 medium，当前 SLA 虽因高延迟/高丢包违规，但 STA 信号覆盖良好（-45.71 dBm）。提案采用全网统一退避参数策略，未强行制造优先级梯度，且 BE 参数与我当前配置一致。在全网高冲突背景下，该方案有助于降低信道竞争烈度、缓解隐性碰撞，符合整体网络性能优先的协作原则，故同意该方案。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=8 用时 77s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap2': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap3': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '29314dc3', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '29314dc3', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '29314dc3', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_edca，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.152647 confidence=0.75

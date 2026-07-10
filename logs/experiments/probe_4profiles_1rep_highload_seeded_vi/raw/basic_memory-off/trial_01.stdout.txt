@@ -1,0 +1,72 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=656029f4 event_db=logs/experiments/probe_4profiles_1rep_highload_seeded_vi/db/basic_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_021338_656029f4.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态：
+
+MAC 与信道参数
+TX Power：10 dBm
+EDCA（BE/VI 统一）：CWmin=31，CWmax=63，AIFSN=7
+
+感知指标
+己方 STA RSSI：-45.71 dBm（信号良好）
+邻居 AP RSSI（本机扫描）：ap2 = -80.99 dBm，ap3 = -71.96 dBm
+噪声底噪：未在当前快照中提供
+
+业务质量
+用户侧吞吐：0 Mbps
+时延：0 ms
+丢包率：100.14%
+
+STA QoE/SLA 反馈
+关联 STA sta_ap1_user（普通业务，medium 优先级，AC_VI）当前 SLA 状态为 violated。
+违反项：吞吐量 0.0 Mbps < 阈值 0.5 Mbps；丢包率 100.14% > 阈值 5%。
+
+简述
+本节点 STA 连接信号良好，但业务完全不可用（零吞吐、极高丢包），存在严重 SLA 违约。邻居干扰方面，ap2 信号较弱（约 -81 dBm），ap3 相对较强（约 -72 dBm），整体信道负载情况需结合其他 AP 广播进一步判断。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测状态：
+
+MAC 与信道参数：当前发射功率为 10 dBm；EDCA 参数方面，CWmin=7、CWmax=15、AIFSN=2（BE 和 VI 队列一致）。
+
+业务质量：承载的是 best_effort 普通业务，优先级 medium。用户侧吞吐约 8.26 Mbps，平均时延约 11 ms，抖动约 2 ms，丢包率 0%。
+
+信号感知：己方关联 STA 的 RSSI 约为 -45.7 dBm，信号良好。本机扫描到的邻居 AP 中，ap1 的 RSSI 约为 -81 dBm，ap3 的 RSSI 约为 -72 dBm，两者均处于中等偏弱干扰水平。
+
+STA 反馈：当前关联的 sta_ap2_user SLA 状态为 satisfied，未检测到任何违反项（吞吐、时延、丢包均在 SLA 阈值内），反馈正常。
+
+状态简述：本节点业务运行稳定，信道竞争参数适中，邻居干扰信号偏弱，整体链路质量健康。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态：
+
+MAC 与信道参数
+TX Power：10 dBm
+EDCA（BE/VI 统一）：CWmin=15，CWmax=31，AIFSN=3
+
+感知指标
+己方 STA RSSI：-45.71 dBm（信号良好）
+邻居 AP RSSI（本机扫描）：ap1 = -71.96 dBm，ap2 = -71.96 dBm
+噪声底噪：未在当前快照中提供
+
+业务质量
+用户侧吞吐：5.76 Mbps
+时延：486.25 ms
+丢包率：22.13%
+
+STA QoE/SLA 反馈
+关联 STA sta_ap3_user（普通业务，medium 优先级，AC_VI）当前 SLA 状态为 violated。
+违反项：时延 486.25 ms > 阈值 300 ms；丢包率 22.13% > 阈值 5%。
+
+简述
+本节点 STA 连接信号良好且有一定吞吐，但时延偏高、丢包严重，存在 SLA 违约。邻居干扰方面，ap1 和 ap2 的信号强度相近（均约 -72 dBm），属于中等干扰水平，整体信道负载情况需结合其他 AP 广播进一步判断。[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mnoop[0m turns=3 用时 24s
+[1m[34m[策略][0m noop
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [90m无可验收决策（协商未收敛或未解析出决策 JSON）[0m

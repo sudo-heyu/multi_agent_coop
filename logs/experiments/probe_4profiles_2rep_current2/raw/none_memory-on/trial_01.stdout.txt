@@ -1,0 +1,39 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=0e5897c5 event_db=logs/experiments/probe_4profiles_2rep_current2/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_210120_0e5897c5.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+MAC 参数：TX Power 为 10 dBm；基础退避参数 CWmin/CWmax/AIFSN 分别为 31/63/7（当前关联 STA 业务走 AC_VI 队列）。
+信道指标：当前快照未提供信道利用率与 TX Retries Ratio 数据。
+感知指标：本机扫描到邻居 AP 信号强度为 ap2: -80.99 dBm，ap3: -71.96 dBm；己方关联 STA 的 RSSI 为 -45.71 dBm；噪声底噪（Noise Floor）当前未上报。
+业务质量：用户侧吞吐量 1.02 Mbps，延迟 5.51 ms，抖动 4.60 ms，丢包率 0%。
+STA 反馈：当前仅关联 1 台 STA（大文件下载，low 优先级），SLA 状态为 satisfied，吞吐与延迟均远优于协议阈值（Min 吞吐 1.0 Mbps / Max 延迟 500 ms），无违规或告警项。
+
+状态简述：本机 STA 链路质量优良，业务运行平稳且 SLA 完全达标。干扰感知上，ap3 信号相对较强（约 -72 dBm），存在一定同频干扰潜在风险，但当前信道负载与重传数据暂缺，整体处于低负载稳态，暂无需激进调整。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+MAC 参数：TX Power 为 10 dBm；基础退避参数 CWmin/CWmax/AIFSN 分别为 7/15/2。
+信道指标：当前快照未提供信道利用率与 TX Retries Ratio 数据。
+感知指标：本机扫描到邻居 AP 信号强度为 ap1: -80.99 dBm，ap3: -71.96 dBm；己方关联 STA 的 RSSI 为 -45.71 dBm；噪声底噪（Noise Floor）当前未上报。
+业务质量：用户侧吞吐量 4.08 Mbps，延迟 8.93 ms，抖动 3.89 ms，丢包率 0%。
+STA 反馈：当前仅关联 1 台 STA（直播业务，high 优先级），SLA 状态为 satisfied，吞吐、延迟、抖动及丢包均远优于协议阈值（Min 吞吐 3.0 Mbps / Max 延迟 120 ms / Max 抖动 50 ms），无违规项。
+
+状态简述：本机 STA 链路质量优良，直播业务运行平稳且 SLA 完全达标。干扰感知上，ap3 信号相对较强（约 -72 dBm），存在一定同频干扰潜在风险，但当前信道负载与重传数据暂缺，整体处于低负载稳态，暂无需激进调整。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+MAC 参数：发射功率（TX Power）为 10 dBm；基础退避参数 CWmin/CWmax/AIFSN 分别为 15/31/3（BE 队列），VI 队列参数为 CWmin 7/CWmax 15/AIFSN 2。
+信道指标：当前快照未提供信道利用率与 TX Retries Ratio 数据。
+感知指标：本机扫描到邻居 AP 信号强度为 ap1: -71.96 dBm，ap2: -71.96 dBm；己方关联 STA 的 RSSI 为 -45.71 dBm；噪声底噪（Noise Floor）当前未上报。
+业务质量：用户侧吞吐量 1.52 Mbps，延迟 6.20 ms，抖动 5.40 ms，丢包率 0%。
+STA 反馈：当前仅关联 1 台 STA（普通业务，medium 优先级），SLA 状态为 satisfied，吞吐、延迟及丢包均远优于协议阈值（Min 吞吐 0.5 Mbps / Max 延迟 300 ms / Max 丢包 5%），无违规或告警项。
+
+状态简述：本机 STA 链路质量优良，业务运行平稳且 SLA 完全达标。干扰感知上，ap1 与 ap2 信号相对较强（约 -72 dBm），存在一定同频干扰潜在风险，但当前信道负载与重传数据暂缺，整体处于低负载稳态，暂无需激进调整。
+
+[1m[96mAP1[0m:

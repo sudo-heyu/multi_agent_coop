@@ -1,0 +1,11 @@
+{
+  "bootstrap_rounds": 20000,
+  "bootstrap_seed": 20260710,
+  "valid_row_filter": "run_status == completed",
+  "memory_advantage": {
+    "wall_duration_s": "off_mean - on_mean",
+    "turns": "off_mean - on_mean",
+    "effect_score": "on_mean - off_mean",
+    "success_rate": "on_mean - off_mean"
+  }
+}

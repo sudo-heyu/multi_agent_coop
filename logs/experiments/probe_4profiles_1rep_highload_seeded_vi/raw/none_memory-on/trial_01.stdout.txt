@@ -1,0 +1,44 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=e5a36685 event_db=logs/experiments/probe_4profiles_1rep_highload_seeded_vi/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_021253_e5a36685.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 退避参数设置较为保守，BE 与 VI 类别的 CWmin 均为 31，CWmax 均为 63，AIFSN 均为 7。业务优先级标记为 medium，服务类型为 best_effort。
+
+感知指标：本机关联的 STA（sta_ap1_user）接收信号强度（STA RSSI）为 -45.71 dBm。通过本机扫描获取的邻居 AP RSSI 分别为：ap2 约 -81.0 dBm，ap3 约 -72.0 dBm。（注：本次状态快照中未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。）
+
+业务质量：当前用户侧吞吐量（throughput_mbps_user）为 0 Mbps，端到端延迟为 0 ms，丢包率高达 100.14%。
+
+状态简述：当前邻居 AP 信号强度处于中等偏弱水平，未构成极强的近距离同频干扰。但关联 STA 的 SLA 严重违规，表现为吞吐量归零且近乎全量丢包，业务质量极不稳定，表明当前信道访问机制或底层链路存在严重的传输阻塞或冲突问题。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 退避参数设置相对紧凑，BE 与 VI 类别的 CWmin 均为 7，CWmax 均为 15，AIFSN 均为 2。业务优先级标记为 medium，服务类型为 best_effort。
+
+感知指标：本机关联的 STA（sta_ap2_user）接收信号强度（STA RSSI）为 -45.71 dBm。通过本机扫描获取的邻居 AP RSSI 分别为：ap1 约 -81.0 dBm，ap3 约 -72.0 dBm。（注：本次状态快照中未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。）
+
+业务质量：当前用户侧吞吐量（throughput_mbps_user）为 8.17 Mbps，端到端延迟为 16.41 ms，丢包率为 0%。
+
+状态简述：当前关联 STA 信号强度高且 SLA 完全满足，业务传输稳定。邻居 AP 信号处于中等偏弱水平，同频干扰风险较低，网络整体负载较轻。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 退避参数设置中等，BE 与 VI 类别的 CWmin 均为 15，CWmax 均为 31，AIFSN 均为 3。业务优先级标记为 medium，服务类型为 best_effort。
+
+感知指标：本机关联的 STA（sta_ap3_user）接收信号强度（STA RSSI）为 -45.71 dBm。通过本机扫描获取的邻居 AP RSSI 分别为：ap1 约 -72.0 dBm，ap2 约 -72.0 dBm。（注：本次状态快照中未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。）
+
+业务质量：当前用户侧吞吐量（throughput_mbps_user）约为 7.36 Mbps，端到端延迟高达 462.57 ms，丢包率约为 28.01%。
+
+状态简述：当前关联 STA 信号强度高，但 SLA 严重违规，表现为延迟大幅超标且丢包率远超 5% 阈值，业务传输极不稳定；邻居 AP 信号处于中等偏弱水平，同频干扰风险相对可控，但高延迟与高丢包表明当前信道竞争机制或底层链路存在明显瓶颈，亟需通过协商优化改善 QoE。[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mnoop[0m turns=3 用时 33s
+[1m[34m[策略][0m noop
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [90m无可验收决策（协商未收敛或未解析出决策 JSON）[0m

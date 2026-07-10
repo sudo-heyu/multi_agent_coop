@@ -1,0 +1,91 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=25ad8d31 event_db=logs/experiments/probe_none_on_eval_warning_broadcast/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_195911_25ad8d31.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数
+当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，BE 队列的 CWmin/CWmax/AIFSN 分别配置为 31/63/7，VI 队列配置为 7/15/2。
+
+链路感知指标
+我关联的 STA RSSI 为 -45.71 dBm，链路连接稳固。通过本机扫描，检测到的邻居 AP RSSI 为：ap2 约 -80.99 dBm，ap3 约 -71.96 dBm。当前会话未返回信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数，暂按无有效采样处理。
+
+业务质量指标
+我当前承载的业务为低优先级（traffic_priority: low）的 bulk_download（大文件下载）。实测用户侧吞吐量为 0 Mbps，延迟 0 ms，抖动 0 ms，丢包率 0%。
+
+状态简述
+当前网络状态存在明显异常：尽管 STA 信号良好且无丢包，但业务吞吐量已跌至 0 Mbps，直接触发了 SLA 违规（低于 1 Mbps 的最低保障阈值）。干扰感知方面，ap3 的扫描信号强度达到 -72 dBm 级别，属于偏强干扰范围，可能对后续的同频竞争或空间复用策略产生实质性影响。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数
+当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，VI 队列与 BE 队列的 CWmin/CWmax/AIFSN 均配置为 7/15/2。
+
+链路感知指标
+我关联的 STA RSSI 为 -45.71 dBm，链路连接稳固。通过本机扫描，检测到的邻居 AP RSSI 为：ap1 约 -80.99 dBm，ap3 约 -71.96 dBm。当前状态快照未返回信道利用率、TX Retries Ratio 及 Noise Floor 的具体读数。
+
+业务质量指标
+我当前承载的业务为高优先级（traffic_priority: high）的直播流（live_stream）。实测用户侧吞吐量为 4.10 Mbps，延迟 7.32 ms，抖动 3.89 ms，丢包率 0%。
+
+状态简述
+本机 STA 信号良好，各项业务指标均严格满足 SLA 要求，无违规记录。干扰感知方面，ap3 的扫描信号达到 -72 dBm 级别，属于偏强干扰范围，可能对后续同频竞争产生一定影响；整体网络目前运行平稳，暂无拥塞或重传异常。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态播报：
+
+MAC 与 EDCA 参数
+当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，BE 队列的 CWmin/CWmax/AIFSN 配置为 15/31/3，VI 队列配置为 7/15/2。
+
+链路感知指标
+我关联的 STA RSSI 为 -45.71 dBm，链路连接稳固。通过本机扫描，检测到的邻居 AP RSSI 为：ap1 约 -71.96 dBm，ap2 约 -71.96 dBm。
+
+业务质量指标
+我当前承载的业务为中等优先级（traffic_priority: medium）的 best_effort（尽力而为）业务。实测用户侧吞吐量为 1.55 Mbps，延迟 6.19 ms，抖动 5.52 ms，丢包率 0%。
+
+状态简述
+本机 STA 信号良好，各项业务指标均严格满足 SLA 要求（最低吞吐保障 0.5 Mbps），无违规记录。干扰感知方面，ap1 和 ap2 的扫描信号均达到 -72 dBm 级别，属于偏强干扰范围，可能对后续同频竞争产生一定影响；整体网络目前运行平稳，暂无拥塞或重传异常。
+
+[1m[96mAP1[0m:
+结论先行：建议采用 Co-SR 路径，将三台 AP 的发射功率统一降至 8 dBm，并同步将 OBSS_PD 门限调整为 -68 dBm。
+
+现状分析
+当前网络中，ap3 对本机及 ap2 的扫描 RSSI 均达到 -72 dBm 级别，属于偏强干扰范围。本机（AP1）虽关联 STA 信号良好（-45.71 dBm），但业务吞吐已跌至 0 Mbps 并触发 SLA 违规，结合 ap2（高优先级直播）稳定运行在 4.1 Mbps 的现象，判断主要瓶颈在于同频重叠导致的信道竞争加剧与隐藏节点冲突，而非单纯的优先级调度问题。历史共享警告指出上一轮 Co-SR（全量 9 dBm / obss_pd -69）导致全局性能降级，推测是功率降幅不足未能有效压制 OBSS，或 OBSS_PD 阈值未与新功率匹配导致 CCA 检测窗口过宽。
+
+### 策略选择与依据
+路径选择：Co-SR。邻居 RSSI 偏强且存在明显的吞吐量异常，降低发射功率是切断 OBSS 干扰链最直接的手段。
+参数设定依据：
+ TX Power：从 10 dBm 降至 8 dBm（降幅 2 dB）。本机 STA RSSI 余量充足（-45.71 dBm >> -75 dBm 安全下界），2 dB 降幅不会引发本地链路质量恶化，但足以使接收端信干噪比（SINR）跨过干扰临界点。
+ OBSS_PD：设为 -68 dBm。根据协议耦合约束 `tx ≤ 23 - (obss_pd + 82)`，当 tx=8 时，obss_pd 需满足 `≤ -67`。选取 -68 dBm 可在合法窗口内收紧 CCA 侦听阈值，避免其他 AP 在弱干扰下误判信道空闲而发起碰撞，弥补上一轮 -69 dBm 可能存在的侦听宽松问题。
+ 并发组：维持 `["ap1","ap2","ap3"]` 全并发。三台 AP 间距对称，统一降功率后空间复用增益可最大化释放信道容量。
+
+预期效果与权衡预期改善：OBSS 干扰电平下降约 2~4 dB，SINR 提升将直接缓解 AP1 的吞吐饥饿状态，恢复 bulk_download 业务至 SLA 阈值以上；ap2/ap3 的高/中优先级业务因信道竞争减少，延迟与抖动有望进一步收敛。
+权衡说明：功率下调会略微缩小覆盖半径，但在当前密集部署且 STA 距离极近的场景下影响可忽略。若后续实测发现某侧边缘用户 RSSI 逼近 -75 dBm，可动态回调至 9 dBm 并微调 OBSS_PD。
+
+```json
+{
+  "AP1": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -68
+  },
+  "AP2": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -68
+  },
+  "AP3": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -68
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2", "ap3"],
+    "non_concurrent_aps": []
+  }
+}
+```
+
+[1m[92mAP2[0m:

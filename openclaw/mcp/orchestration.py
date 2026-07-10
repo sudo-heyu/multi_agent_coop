@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import copy
+import math
 import os
 import re
 import shutil
@@ -192,6 +194,25 @@ _tool_logger = None
 _agent_driver: Callable | None = None
 
 
+def memory_enabled() -> bool:
+    value = os.environ.get("MULTIAP_MEMORY_MODE", "on").strip().lower()
+    return value not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
 def _log_mcp_tool(ap_id: str, name: str, args, result, dur_ms) -> None:
     """把 AP agent 的 MCP 工具调用写入事件流；日志失败绝不干扰协商。"""
     if _tool_logger is None:
@@ -220,6 +241,9 @@ class Session:
         self.proposal: dict | None = None
         self.strategy: str | None = None
         self.proposal_num: int = 0
+        self.memory_anchor_proposal_num: int | None = None
+        self.memory_anchor_decision: dict | None = None
+        self.memory_anchor_memory: dict | None = None
         self.decision: dict | None = None
         self.recalled_episodes: list[dict] = []
         self.recalled_warnings: list[dict] = []
@@ -263,10 +287,15 @@ class Session:
     def record(self, speaker: str, content: str, *, kind: str = "message") -> None:
         item = {"speaker": speaker, "content": content, "kind": kind}
         self.transcript.append(item)
+        if not memory_enabled():
+            return
         # Keep the shared audit memory advancing even though AP prompts use local memories.
         self.memory_manager.build_context(self.transcript)
 
     def transcript_text(self, agent_id: str | None = None) -> str:
+        if not memory_enabled():
+            lines = [f"{item['speaker']}: {item['content']}" for item in self.transcript]
+            return "\n\n".join(lines)
         if agent_id is None:
             return self.memory_manager.build_context(self.transcript)
         # Public history has one authoritative projection. Agent-local context is injected
@@ -285,6 +314,8 @@ class Session:
                 })
 
     def sync_agent_workspace(self, agent_id: str) -> bool:
+        if not memory_enabled():
+            return True
         agent = agent_id.lower()
         manager = self.agent_memory_managers[agent]
         try:
@@ -305,6 +336,8 @@ class Session:
 
     def refresh_agent_workspace(self, agent_id: str) -> None:
         """Accept workspace-side maintenance before building the next agent turn."""
+        if not memory_enabled():
+            return
         agent = agent_id.lower()
         stored = load_current_session(agent, run_id=self.run_id)
         if not stored or stored.get("agent_id") != agent:
@@ -345,6 +378,76 @@ def reset_session(ap_state: dict | None = None) -> dict:
 
 def _agent_visible_state() -> dict:
     return tool_policy.transform_agent_state(agent_view(_SESSION.ap_state))
+
+
+def _memory_anchor_enabled() -> bool:
+    value = os.environ.get("MULTIAP_MEMORY_ANCHOR", "on").strip().lower()
+    return value not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _memory_fast_proposal_enabled() -> bool:
+    value = os.environ.get("MULTIAP_MEMORY_FAST_PROPOSAL", "on").strip().lower()
+    return value not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _memory_fast_vote_enabled() -> bool:
+    value = os.environ.get("MULTIAP_MEMORY_FAST_VOTE", "on").strip().lower()
+    return value not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _mark_memory_anchor_proposal(proposal: dict | None, memory: dict | None) -> None:
+    if proposal is None or memory is None:
+        return
+    _SESSION.memory_anchor_proposal_num = _SESSION.proposal_num
+    _SESSION.memory_anchor_decision = copy.deepcopy(proposal)
+    _SESSION.memory_anchor_memory = memory
+
+
+def _current_proposal_is_memory_anchor() -> bool:
+    s = _SESSION
+    if (
+        not memory_enabled()
+        or not _memory_anchor_enabled()
+        or s.proposal is None
+        or s.memory_anchor_decision is None
+        or s.memory_anchor_proposal_num != s.proposal_num
+    ):
+        return False
+    return _canonical_json(s.proposal) == _canonical_json(s.memory_anchor_decision)
+
+
+def _best_improved_memory_decision(episodes: list[dict] | None = None) -> tuple[dict | None, dict | None]:
+    if not memory_enabled() or not _memory_anchor_enabled():
+        return None, None
+    candidates = episodes if episodes is not None else _SESSION.recalled_episodes
+    best: dict | None = None
+    best_rank: tuple[float, float, float] | None = None
+    for item in candidates or []:
+        evaluation = item.get("evaluation") or {}
+        if evaluation.get("final_verdict") != "improved":
+            continue
+        decision = item.get("decision")
+        if not isinstance(decision, dict) or not decision:
+            continue
+        try:
+            score = float(evaluation.get("final_score") or 0.0)
+            quality = float(item.get("quality_score") or 0.0)
+            similarity = float(item.get("similarity") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if quality < 0.7 or score <= 0:
+            continue
+        rank = (quality, score, similarity)
+        if best_rank is None or rank > best_rank:
+            best = item
+            best_rank = rank
+    if best is None:
+        return None, None
+    return copy.deepcopy(best.get("decision")), best
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -460,7 +563,8 @@ def _build_agent_message(
     shared_rules: list[dict] | None = None,
     total_budget: int | None = None,
 ) -> str:
-    workspace_memory = read_prompt_memory(agent_id)
+    use_memory = memory_enabled()
+    workspace_memory = read_prompt_memory(agent_id) if use_memory else ""
     conversation = (
         f"当前对话记录：\n\n{transcript}\n\n{'─' * 40}\n\n" if transcript else ""
     )
@@ -469,7 +573,7 @@ def _build_agent_message(
         + workspace_memory + "\n\n" if workspace_memory else ""
     )
     warning_block = ""
-    if shared_warnings:
+    if use_memory and shared_warnings:
         lines = ["【共享失败警告（所有 Agent 可见，不建议直接复用）】"]
         for item in shared_warnings[:2]:
             evaluation = item.get("evaluation") or {}
@@ -481,7 +585,7 @@ def _build_agent_message(
             )
         warning_block = "\n".join(lines) + "\n\n"
     shared_block = ""
-    if shared_positive or shared_rules:
+    if use_memory and (shared_positive or shared_rules):
         lines = ["【共享经验假设（待检验，低于实时状态、本地 SLA 和失败警告；"
                  "信任分衰减或前提不符时放弃引用）】"]
         for item in (shared_positive or [])[:3]:
@@ -1207,13 +1311,71 @@ def determine_strategy(ap_state: dict) -> str:
         for state in ap_state.values()
         if isinstance(state, dict)
     }
-    edca_triggered = len(priorities) > 1
+    edca_triggered = (
+        len(priorities) > 1
+        or _edca_parameters_imbalanced(ap_state)
+        or _qos_pressure_triggered(ap_state)
+    )
 
     if sr_triggered:
         return "co_sr"
     if edca_triggered:
         return "co_edca"
     return "noop"
+
+
+def _state_num(state: dict, key: str) -> float | None:
+    value = state.get(key) if isinstance(state, dict) else None
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _edca_parameters_imbalanced(ap_state: dict) -> bool:
+    """Trigger EDCA negotiation when same-priority APs expose unequal BE/VI settings."""
+    for fields in (
+        ("be_cwmin", "be_cwmax", "be_aifsn"),
+        ("vi_cwmin", "vi_cwmax", "vi_aifsn"),
+        ("cwmin", "cwmax", "aifsn"),
+    ):
+        values = {
+            tuple(_state_num(state, key) for key in fields)
+            for state in (ap_state or {}).values()
+            if isinstance(state, dict)
+            and all(_state_num(state, key) is not None for key in fields)
+        }
+        if len(values) > 1:
+            return True
+    return False
+
+
+def _qos_pressure_triggered(ap_state: dict) -> bool:
+    """Trigger EDCA negotiation on visible starvation, high delay, loss, or SLA violations."""
+    latency_threshold = _env_float("MULTIAP_QOS_TRIGGER_LATENCY_MS", 100.0)
+    loss_threshold = _env_float("MULTIAP_QOS_TRIGGER_LOSS_PCT", 5.0)
+    throughput_floor = _env_float("MULTIAP_QOS_TRIGGER_THROUGHPUT_MBPS", 0.01)
+    for state in (ap_state or {}).values():
+        if not isinstance(state, dict):
+            continue
+        if state.get("sla_violations"):
+            return True
+        feedback = state.get("sta_feedback_summary")
+        if isinstance(feedback, dict) and feedback.get("status") == "violated":
+            return True
+        throughput = _state_num(state, "throughput_mbps_user")
+        if throughput is not None and throughput <= throughput_floor:
+            return True
+        latency = _state_num(state, "latency_ms")
+        if latency is not None and latency >= latency_threshold:
+            return True
+        loss = _state_num(state, "packet_loss_pct")
+        if loss is not None and loss >= loss_threshold:
+            return True
+    return False
 
 
 _NOOP_MARKERS = (
@@ -1247,6 +1409,57 @@ def broadcast_instruction(ap_id: str) -> str:
     )
 
 
+def _invalid_broadcast_reply(reply: str | None) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return True
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return False
+    if parsed in ({}, [], None):
+        return True
+    return isinstance(parsed, dict) and set(parsed) <= {
+        "tool", "name", "arguments", "args"
+    }
+
+
+def _broadcast_fallback(ap_id: str) -> str:
+    state = (_agent_visible_state().get(ap_id) or {})
+
+    def pick(*keys, default="未知"):
+        for key in keys:
+            value = state.get(key)
+            if value is not None:
+                return value
+        return default
+
+    neighbors = state.get("neighbor_rssi_dbm") or {}
+    neighbor_text = (
+        ", ".join(f"{peer} {rssi} dBm" for peer, rssi in sorted(neighbors.items()))
+        if isinstance(neighbors, dict) and neighbors else "未提供"
+    )
+    be = (
+        f"{pick('CWmin', 'cwmin')}/{pick('CWmax', 'cwmax')}/"
+        f"{pick('AIFSN', 'aifsn')}"
+    )
+    vi = (
+        f"{pick('vi_cwmin', 'VI_CWmin')}/{pick('vi_cwmax', 'VI_CWmax')}/"
+        f"{pick('vi_aifsn', 'VI_AIFSN')}"
+    )
+    return (
+        f"我是 {ap_id.upper()}。当前 TX Power={pick('tx_power_dbm')} dBm；"
+        f"BE 队列 CWmin/CWmax/AIFSN={be}，VI 队列={vi}。"
+        f"本机扫描邻居 RSSI：{neighbor_text}；STA RSSI={pick('sta_rssi_dbm')} dBm，"
+        f"SINR={pick('sinr_db')} dB。业务类型={pick('service_name', 'business_type')}，"
+        f"优先级={pick('traffic_priority')}，用户吞吐={pick('throughput_mbps_user')} Mbps，"
+        f"延迟={pick('latency_ms')} ms，抖动={pick('jitter_ms')} ms，"
+        f"丢包={pick('packet_loss_pct')}%。SLA 状态="
+        f"{pick('sla_status', 'sta_sla_status')}。整体按当前可见状态播报，"
+        "若缺少字段则以上述“未知/未提供”为准。"
+    )
+
+
 def _trust_suffix(memory: dict) -> str:
     """反思字段展示：信任分 + 最近验证时间（反思关闭时记忆无 trust 字段，返回空）。"""
     if memory.get("trust") is None:
@@ -1265,19 +1478,41 @@ def propose_instruction(
 ) -> str:
     state_summary = json.dumps(_agent_visible_state(), ensure_ascii=False, indent=2)
     tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    visible_tool_profile = tool_policy.agent_visible_profile(tool_profile)
     tools_available = bool(tool_policy.allowed_tools(tool_profile))
-    if tool_profile != "full":
+    use_memory = memory_enabled()
+    memory_basis = (
+        "已给状态、对话记录、历史正例/失败警告和自身推理"
+        if use_memory else
+        "已给状态、当前对话记录和自身推理"
+    )
+    candidate_basis = (
+        "历史正例/失败警告"
+        if use_memory else
+        "当前状态和对话记录"
+    )
+    no_tool_basis = (
+        "上方状态、对话记录和历史记忆"
+        if use_memory else
+        "上方状态和当前对话记录"
+    )
+    no_tool_evidence = (
+        "当前状态、对话记录和历史记忆"
+        if use_memory else
+        "当前状态和对话记录"
+    )
+    if visible_tool_profile != "full":
         if not tools_available:
             tool_policy_hint = (
-                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={tool_profile}，"
-                "本回合没有任何可调用工具。请只基于已给状态、对话记录、历史正例/失败警告"
-                "和自身推理提出候选；不要声称调用过工具，也不要把推理估计写成工具结论。\n\n"
+                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={visible_tool_profile}，"
+                f"本回合没有任何可调用工具。请只基于{memory_basis}提出候选；"
+                "不要声称调用过工具，也不要把推理估计写成工具结论。\n\n"
             )
         else:
             tool_policy_hint = (
-                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={tool_profile}。"
+                f"【工具能力限制】当前 MULTIAP_TOOL_PROFILE={visible_tool_profile}。"
                 "部分会直接给出推荐答案、排序或完整有效性判断的工具可能不可用，"
-                "或只返回范围/合法性结果。请优先利用历史正例/失败警告提出候选，"
+                f"或只返回范围/合法性结果。请优先利用{candidate_basis}提出候选，"
                 "再用可用的状态、STA 反馈和候选验算工具确认硬约束；不要把缺失的工具结果"
                 "伪造成已调用结论。\n\n"
             )
@@ -1321,6 +1556,7 @@ def propose_instruction(
         )
         edca_guidance = (
             "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
+            "CWmin/CWmax 必须使用可下发实际 CW 离散值 3/7/15/31/63/127/255/511/1023，不能使用 23 等中间值。"
             "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
             "同优先级或未知优先级时不要强行制造梯度。可用 validate_edca_proposal（传 proposed_edca）辅助自检。"
         )
@@ -1335,7 +1571,7 @@ def propose_instruction(
         )
     else:
         state_update_hint = (
-            "当前没有任何可调用工具；请只基于上方状态、对话记录和历史记忆形成判断，不要输出工具调用 JSON。"
+            f"当前没有任何可调用工具；请只基于{no_tool_basis}形成判断，不要输出工具调用 JSON。"
         )
         sr_trigger_hint = "邻居 RSSI 偏强"
         sr_guidance = (
@@ -1346,6 +1582,7 @@ def propose_instruction(
         )
         edca_guidance = (
             "【Co-EDCA】按当前状态中的 traffic_priority、QoS 和 EDCA 参数差异调整 CWmin/CWmax/AIFSN。"
+            "CWmin/CWmax 必须使用可下发实际 CW 离散值 3/7/15/31/63/127/255/511/1023，不能使用 23 等中间值。"
             "当优先级确实不同，满足 high.CWmin ≤ medium ≤ low、high.AIFSN ≤ medium ≤ low；"
             "同优先级或未知优先级时不要强行制造梯度。"
         )
@@ -1355,29 +1592,53 @@ def propose_instruction(
             "STA 不直接给控制参数，AP 需要把这些反馈转化为 TX Power/EDCA 的可执行调整。"
         )
         evidence_wording = (
-            "当前没有工具可用；请把判断表述为基于当前状态、对话记录和历史记忆的推理估计，"
+            f"当前没有工具可用；请把判断表述为基于{no_tool_evidence}的推理估计，"
             "避免和真实工具结果混淆；"
         )
     memory_hint = ""
+    if recalled_episodes:
+        recalled_episodes = recalled_episodes if use_memory else []
     if recalled_episodes:
         lines = [
             "【历史案例假设（每条是待检验的假设，不是事实：前提成立才可参考；"
             "前提=当前状态与其相似、且信任分未衰减；可结合最新状态和必要工具重新验算，"
             "若证据不支持就放弃该假设）】"
         ]
+        has_near_miss = False
+        best_improved_action = None
         for item in recalled_episodes[:3]:
             metrics = item.get("metrics") or {}
             evaluation = item.get("evaluation") or {}
             if evaluation.get("final_verdict"):
-                verdict_map = {
-                    "improved": "实际改善", "degraded": "实际恶化",
-                    "neutral": "无明显变化", "inconclusive": "数据不足",
-                }
-                feedback = (
-                    f"预测：复用该动作应得到"
-                    f"{verdict_map.get(evaluation['final_verdict'], evaluation['final_verdict'])}"
-                    f"(历史置信度={evaluation.get('final_confidence', 0)})"
-                )
+                score = evaluation.get("final_score")
+                if (
+                    evaluation.get("final_verdict") == "neutral"
+                    and evaluation.get("approved") is False
+                    and isinstance(score, (int, float))
+                    and score >= 0.03
+                ):
+                    has_near_miss = True
+                    feedback = (
+                        f"接近成功阈值但未通过：score={score}；"
+                        "可优先复用该动作并只做小幅修正"
+                    )
+                else:
+                    verdict_map = {
+                        "improved": "实际改善", "degraded": "实际恶化",
+                        "neutral": "无明显变化", "inconclusive": "数据不足",
+                    }
+                    if (
+                        evaluation.get("final_verdict") == "improved"
+                        and isinstance(score, (int, float))
+                        and float(item.get("quality_score", 0) or 0) >= 0.7
+                        and isinstance(item.get("decision"), dict)
+                    ):
+                        best_improved_action = item.get("decision")
+                    feedback = (
+                        f"预测：复用该动作应得到"
+                        f"{verdict_map.get(evaluation['final_verdict'], evaluation['final_verdict'])}"
+                        f"(历史置信度={evaluation.get('final_confidence', 0)})"
+                    )
             else:
                 feedback = f"实测反馈={'可用' if metrics.get('available') else '尚无'}"
             lines.append(
@@ -1388,21 +1649,47 @@ def propose_instruction(
                 f"动作={json.dumps(item.get('decision'), ensure_ascii=False)}；"
                 f"{feedback}"
             )
+        if has_near_miss and not tools_available:
+            lines.append(
+                "【无工具记忆约束】当前没有工具可重新搜索大范围候选；若上方存在"
+                "接近成功阈值案例，本轮首个提案必须复用该历史动作，或只改动其中"
+                "一个参数一个离散档位。除非当前状态出现新的 SLA 违规或强干扰证据，"
+                "不得切换到另一策略族。"
+            )
+        if best_improved_action:
+            lines.append(
+                "【高质量成功记忆约束】上方存在已验证 improved 的高质量相似案例。"
+                "本轮首个提案必须优先复用该历史动作，不要从更激进或更保守的参数重新试错。"
+                "只有当最新状态出现新的 SLA 违规、强干扰证据，或可用工具明确验证该动作不适用时，"
+                "才允许偏离。历史动作="
+                f"{json.dumps(best_improved_action, ensure_ascii=False)}"
+            )
         memory_hint = "\n".join(lines) + "\n\n"
     warning_hint = ""
+    if recalled_warnings:
+        recalled_warnings = recalled_warnings if use_memory else []
     if recalled_warnings:
         lines = ["【历史失败警告（不建议直接复用其动作，请说明如何规避相同风险）】"]
         for item in recalled_warnings[:2]:
             evaluation = item.get("evaluation") or {}
+            verdict = evaluation.get("final_verdict")
+            result_label = (
+                "恶化" if verdict == "degraded"
+                else "未改善且 QoS 验收未通过"
+                if verdict == "neutral" and evaluation.get("approved") is False
+                else str(verdict or "未知")
+            )
             lines.append(
                 f"- 策略={item.get('strategy')}，历史动作="
                 f"{json.dumps(item.get('decision'), ensure_ascii=False)}，"
-                f"实际结果=恶化（置信度={evaluation.get('final_confidence', 0)}）"
+                f"实际结果={result_label}（置信度={evaluation.get('final_confidence', 0)}）"
                 + _trust_suffix(item) + "，"
                 f"案例总结={item.get('case_narrative') or '无'}"
             )
         warning_hint = "\n".join(lines) + "\n\n"
     rule_hint = ""
+    if recalled_rules:
+        recalled_rules = recalled_rules if use_memory else []
     if recalled_rules:
         from src.memory import format_rule
         rule_lines = [
@@ -1450,6 +1737,7 @@ def propose_instruction(
 def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
                      proposal: dict, proposal_num: int) -> str:
     tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    visible_tool_profile = tool_policy.agent_visible_profile(tool_profile)
     tools_available = bool(tool_policy.allowed_tools(tool_profile))
     if tools_available:
         verify_hint = {
@@ -1460,7 +1748,8 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
             "可结合 get_latest_ap_states、get_sta_feedback 或验算工具检查该提案。"
             "如果调用验算工具，请把上方提案中针对各 AP 的参数"
             "（Co-SR 传 proposed_powers，部分并发连同 concurrent_group；Co-EDCA 传 proposed_edca）"
-            "显式填入工具参数；编排层也会执行确定性安全验证。"
+            "显式填入工具参数；Co-EDCA 的 CWmin/CWmax 必须是 3/7/15/31/63/127/255/511/1023；"
+            "编排层也会执行确定性安全验证。"
             "未实际调用工具时，请把相关判断表述为基于当前状态和参数的推理估计，避免和真实工具结果混淆。"
         )
     else:
@@ -1469,7 +1758,7 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
             "co_edca": "关注你自己的 traffic_priority、关联 STA QoE/SLA、当前 EDCA 参数与优先级排序，并基于已给状态和对话记录推理",
         }.get(strategy, "关注参数对你的影响，并基于已给状态和对话记录推理")
         tool_vote_hint = (
-            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具。"
+            f"当前 MULTIAP_TOOL_PROFILE={visible_tool_profile}，没有任何可调用工具。"
             "请不要输出工具调用 JSON，也不要声称调用过 get_latest_ap_states、get_sta_feedback 或验算工具；"
             "只能基于上方状态、对话记录和最新提案参数进行推理。编排层会执行确定性安全验证。"
         )
@@ -1482,12 +1771,19 @@ def vote_instruction(voter_id: str, proposer_id: str, strategy: str,
         stall_hint = ""
     challenge_hint = ""
     if tool_policy.coarsens_state(tool_profile):
+        memory_clause = (
+            "可信历史记忆、"
+            if memory_enabled() else
+            ""
+        )
         challenge_hint = (
             "\n\n【弱状态提示】当前档位隐藏精确参数与效果指标。"
             "如果提案只通过弱校验，未报错只代表没有明显格式/范围硬错误，"
-            "不代表效果已经被工具证明。投票时请区分：真实状态、历史记忆、"
-            "弱工具结果和推理估计。"
-            "若提案把你自己的 EDCA 设置得明显过度保守，且没有可信历史记忆、"
+            "不代表效果已经被工具证明。投票时请区分：真实状态、"
+            + ("历史记忆、" if memory_enabled() else "")
+            + "弱工具结果和推理估计。"
+            "若提案把你自己的 EDCA 设置得明显过度保守，且没有"
+            f"{memory_clause}"
             "当前 SLA 风险或明确失败警告支撑，不应仅因范围合法就同意；"
             "应反对并给出更小改动的反提案。经验锚点：high 通常不应劣于 "
             "CWmin=3/AIFSN=2，medium 通常不应劣于 CWmin=7/AIFSN=3，"
@@ -1522,10 +1818,11 @@ def repair_vote_instruction(
 ) -> str:
     proposal_json = json.dumps(proposal, ensure_ascii=False, indent=2)
     tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    visible_tool_profile = tool_policy.agent_visible_profile(tool_profile)
     no_tool_hint = ""
     if not tool_policy.allowed_tools(tool_profile):
         no_tool_hint = (
-            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具；"
+            f"当前 MULTIAP_TOOL_PROFILE={visible_tool_profile}，没有任何可调用工具；"
             "不要输出 {\"tool\": ...} 或 {\"arguments\": ...} 形式的伪工具调用。\n"
         )
     return (
@@ -1546,6 +1843,7 @@ def repair_counter_instruction() -> str:
     """反对者回复中未解析出反提案 JSON 时的「修复轮」指令（移植自
     orchestrator._phase_counter_propose）。"""
     tool_profile = os.environ.get("MULTIAP_TOOL_PROFILE", "full").strip().lower()
+    visible_tool_profile = tool_policy.agent_visible_profile(tool_profile)
     if tool_policy.allowed_tools(tool_profile):
         evidence_hint = (
             "如果选择 Co-SR，请说明可用并发组依据；可使用 get_latest_ap_states、"
@@ -1553,9 +1851,10 @@ def repair_counter_instruction() -> str:
             "并在 JSON 中写入 _sr.concurrent_group。\n"
         )
     else:
+        basis = "已给状态、对话记录和历史记忆" if memory_enabled() else "已给状态和当前对话记录"
         evidence_hint = (
-            f"当前 MULTIAP_TOOL_PROFILE={tool_profile}，没有任何可调用工具；"
-            "请只基于已给状态、对话记录和历史记忆推理，不要输出伪工具调用。"
+            f"当前 MULTIAP_TOOL_PROFILE={visible_tool_profile}，没有任何可调用工具；"
+            f"请只基于{basis}推理，不要输出伪工具调用。"
             "如果选择 Co-SR，请在 JSON 中写入你基于现有证据推理出的 _sr.concurrent_group。\n"
         )
     return (
@@ -1564,6 +1863,7 @@ def repair_counter_instruction() -> str:
         "给出一个能兼顾所有人需求的反提案。\n"
         "你可以根据实时证据选择协商路径：Co-SR 使用 tx_power_dbm 字段，"
         "Co-EDCA 使用 CWmin/CWmax/AIFSN 字段；当前只允许选择其中一种单一路径，"
+        "Co-EDCA 的 CWmin/CWmax 必须是 3/7/15/31/63/127/255/511/1023，不能使用 23 等中间值；"
         "不要同时输出 TX Power/OBSS_PD 与 EDCA 字段；"
         "证据不足时不要为了形成反提案强行改变无关参数。\n"
         f"{evidence_hint}"
@@ -1699,6 +1999,57 @@ def run_propose(
             agent_episodes=[(proposer_id.lower(), item) for item in conclusive_local],
             proposal_num=_SESSION.proposal_num + 1,
         )
+    anchor_decision, anchor_memory = _best_improved_memory_decision(_SESSION.recalled_episodes)
+    if (
+        anchor_decision is not None
+        and _SESSION.proposal_num == 0
+        and _memory_fast_proposal_enabled()
+    ):
+        proposal = _with_sr_concurrent_group(anchor_decision, _SESSION.ap_state)
+        strategy = resolve_strategy(proposal)
+        score = (anchor_memory.get("evaluation") or {}).get("final_score")
+        quality = anchor_memory.get("quality_score")
+        reply = (
+            "【记忆锚定提案】召回到高质量 improved 历史案例，"
+            "本轮直接复用该已验证动作以减少重复试错。\n"
+            f"quality={quality}, score={score}\n"
+            "```json\n"
+            f"{json.dumps(proposal, ensure_ascii=False, indent=2)}\n"
+            "```"
+        )
+        _SESSION.record(
+            "MEMORY",
+            "【记忆锚定】召回到高质量 improved 历史案例，"
+            f"直接生成首个提案。quality={quality}, score={score}, "
+            f"action={json.dumps(proposal, ensure_ascii=False)}",
+            kind="memory_anchor",
+        )
+        if logger is not None:
+            logger.agent_speak(
+                agent=proposer_id,
+                phase=3,
+                role="proposer",
+                instruction=instruction,
+                response=reply,
+                duration_ms=0.0,
+            )
+        if on_event_start:
+            on_event_start("proposer", proposer_id)
+        if on_event_chunk:
+            on_event_chunk("proposer", proposer_id, reply)
+        _SESSION.record(proposer_id.upper(), reply, kind="proposal")
+        _SESSION.proposer = proposer_id
+        _SESSION.proposal = proposal
+        _SESSION.strategy = strategy
+        _SESSION.proposal_num += 1
+        _mark_memory_anchor_proposal(proposal, anchor_memory)
+        if logger is not None and proposal is not None:
+            logger.record_proposal(
+                _SESSION.proposal_num, proposer_id, strategy, proposal,
+            )
+        return {"proposer": proposer_id, "reply": reply, "proposal": proposal,
+                "strategy": strategy, "proposal_num": _SESSION.proposal_num,
+                "parsed": proposal is not None}
     reply, _ = _run_agent_turn(
         proposer_id,
         3,
@@ -1712,11 +2063,29 @@ def run_propose(
     proposal = _extract_proposal(reply)
     if proposal is not None:
         proposal = _with_sr_concurrent_group(proposal, _SESSION.ap_state)
+    if anchor_decision is not None and _SESSION.proposal_num == 0:
+        anchored = _with_sr_concurrent_group(anchor_decision, _SESSION.ap_state)
+        if proposal is None or anchored != proposal:
+            score = (anchor_memory.get("evaluation") or {}).get("final_score")
+            quality = anchor_memory.get("quality_score")
+            _SESSION.record(
+                "MEMORY",
+                "【记忆锚定】召回到高质量 improved 历史案例，"
+                f"将首个提案锚定为该历史动作以减少重复试错。"
+                f"quality={quality}, score={score}, "
+                f"action={json.dumps(anchored, ensure_ascii=False)}",
+                kind="memory_anchor",
+            )
+            proposal = anchored
     strategy = resolve_strategy(proposal)
     _SESSION.proposer = proposer_id
     _SESSION.proposal = proposal
     _SESSION.strategy = strategy
     _SESSION.proposal_num += 1
+    if anchor_decision is not None and anchor_memory is not None:
+        anchored = _with_sr_concurrent_group(anchor_decision, _SESSION.ap_state)
+        if proposal is not None and _canonical_json(proposal) == _canonical_json(anchored):
+            _mark_memory_anchor_proposal(proposal, anchor_memory)
     if logger is not None and proposal is not None:
         # 参数时间线：结构化保留每个候选提案的参数（与发言原文互补）。
         logger.record_proposal(
@@ -1739,6 +2108,43 @@ def run_vote(
         return {"error": "当前无有效提案，请先 run_propose"}
     instruction = vote_instruction(
         voter_id, s.proposer, s.strategy or "co_edca", s.proposal, s.proposal_num)
+    if _memory_fast_vote_enabled() and _current_proposal_is_memory_anchor():
+        memory = s.memory_anchor_memory or {}
+        evaluation = memory.get("evaluation") or {}
+        quality = memory.get("quality_score")
+        score = evaluation.get("final_score")
+        reply = json.dumps({
+            "agreed": True,
+            "reason": (
+                "当前提案与高质量 improved 记忆案例完全一致，"
+                f"历史 quality={quality}, score={score}；"
+                "本轮优先复用已验证动作以减少重复试错。"
+            ),
+        }, ensure_ascii=False)
+        if logger is not None:
+            logger.agent_speak_start(voter_id, 4, "memory_fast_vote")
+            logger.push_chunk(voter_id, reply)
+            logger.agent_speak_chunk(voter_id, reply)
+            logger.agent_speak(
+                agent=voter_id,
+                phase=4,
+                role="memory_fast_vote",
+                instruction=instruction,
+                response=reply,
+                duration_ms=0.0,
+            )
+        if on_event_start:
+            on_event_start("voter", voter_id)
+        if on_event_chunk:
+            on_event_chunk("voter", voter_id, reply)
+        s.record(voter_id.upper(), reply, kind="vote")
+        return {
+            "voter": voter_id,
+            "reply": reply,
+            "vote": "agree",
+            "counter_proposal": None,
+            "memory_fast_vote": True,
+        }
     try:
         reply, _ = _run_agent_turn(
             voter_id,
@@ -1852,6 +2258,9 @@ def promote_counter(new_proposer: str, counter_proposal: dict) -> dict:
     s.proposal = _with_sr_concurrent_group(counter_proposal, s.ap_state)
     s.strategy = resolve_strategy(s.proposal)
     s.proposal_num += 1
+    s.memory_anchor_proposal_num = None
+    s.memory_anchor_decision = None
+    s.memory_anchor_memory = None
     return {"proposer": new_proposer, "proposal": s.proposal,
             "strategy": s.strategy, "proposal_num": s.proposal_num}
 
@@ -1989,7 +2398,8 @@ def _push_decision(decision: dict, strategy: str,
                 logger.mark_action_running(action.action_id)
         try:
             import requests
-            resp = requests.post(f"{url.rstrip('/')}/apply", json=payload, timeout=8)
+            timeout = float(os.environ.get("MULTIAP_EXECUTOR_TIMEOUT", "15") or 15)
+            resp = requests.post(f"{url.rstrip('/')}/apply", json=payload, timeout=timeout)
             ok = resp.status_code == 200
             try:
                 body = resp.json()
@@ -2136,10 +2546,49 @@ def _collect_observed_state(
     wait_seconds = max(0.0, observation_wait_seconds)
     if wait_seconds:
         time.sleep(wait_seconds)
+    sample_count = max(1, _env_int("MULTIAP_QOS_SAMPLE_COUNT", 1))
+    sample_interval = max(0.0, _env_float("MULTIAP_QOS_SAMPLE_INTERVAL", 1.0))
+    samples: list[dict] = []
     try:
-        return apply_profile(observation_state_getter()), None, True
+        for index in range(sample_count):
+            if index > 0 and sample_interval:
+                time.sleep(sample_interval)
+            samples.append(apply_profile(observation_state_getter()))
+        return _average_observed_states(samples), None, True
     except Exception as exc:  # noqa: BLE001
         return {}, f"观测状态获取失败: {exc}", False
+
+
+def _average_observed_states(samples: list[dict]) -> dict:
+    if not samples:
+        return {}
+    if len(samples) == 1:
+        return samples[0]
+
+    def merge(values: list):
+        numeric = []
+        for value in values:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                numeric.append(float(value))
+        if len(numeric) == len(values):
+            avg = sum(numeric) / len(numeric)
+            return int(avg) if all(isinstance(value, int) and not isinstance(value, bool) for value in values) else avg
+        dict_values = [value for value in values if isinstance(value, dict)]
+        if len(dict_values) == len(values):
+            keys = set().union(*(value.keys() for value in dict_values))
+            return {
+                key: merge([value[key] for value in dict_values if key in value])
+                for key in keys
+            }
+        return values[-1]
+
+    ap_ids = set().union(*(sample.keys() for sample in samples if isinstance(sample, dict)))
+    return {
+        ap_id: merge([sample[ap_id] for sample in samples if ap_id in sample])
+        for ap_id in sorted(ap_ids)
+    }
 
 
 def _qos_acceptance_result(
@@ -2170,6 +2619,28 @@ def _qos_acceptance_result(
             f"verdict={verdict}, score={score:.4f}, confidence={confidence:.4f}"
         ),
     }
+
+
+def _validation_only_sta_qoe_blocked(validation: dict | None) -> bool:
+    """Return true when deterministic checks passed and only STA QoE blocked.
+
+    In QoS acceptance mode, post-apply STA feedback is a short-window signal.
+    The multi-sample QoS scorer is the stronger arbiter for aggregate effect, so
+    a transient new STA violation can be overridden only when no parameter or
+    self-harm errors are present and QoS verdict is improved.
+    """
+    if not validation or validation.get("approved"):
+        return False
+    errors = validation.get("global_errors") or []
+    if not errors:
+        return False
+    if any(not str(item).startswith("决策后引入新的 STA SLA 违规") for item in errors):
+        return False
+    for entry in (validation.get("per_ap") or {}).values():
+        if isinstance(entry, dict) and entry.get("errors"):
+            return False
+    sta_qoe = validation.get("sta_qoe") or {}
+    return bool(sta_qoe.get("checked") and not sta_qoe.get("approved"))
 
 
 def _finish(logger, outcome: str, rounds: int, started_at: float) -> None:
@@ -2390,7 +2861,8 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
     s.memory_callback = memory_callback
     s.goal_context = goal_context
 
-    if logger is not None and not resume_projection:
+    use_memory = memory_enabled()
+    if logger is not None and use_memory and not resume_projection:
         from src.memory.workspace import try_save_long_term_memory
         s.agent_recalled_episodes = {
             agent: logger.recall_agent_episodes(
@@ -2403,7 +2875,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                 s.workspace_memory_errors.append({
                     "agent": agent, "error": "failed to update long-term workspace memory"
                 })
-    elif logger is not None and resume_projection:
+    elif logger is not None and use_memory and resume_projection:
         restored = logger.load_recalled_memory(
             list(resume_projection.get("recalled_episode_ids") or []),
             list(resume_projection.get("recalled_warning_ids") or []),
@@ -2435,6 +2907,9 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                 }
                 for ap in AP_IDS:
                     reply, streamed = futures[ap].result()
+                    if _invalid_broadcast_reply(reply):
+                        reply = _broadcast_fallback(ap)
+                        streamed = False
                     s.record(ap.upper(), reply, kind="broadcast")
                     if streaming_broadcast:
                         if logger is not None:
@@ -2470,7 +2945,7 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
             "transcript_turns": len(s.transcript),
         }
 
-    if logger is not None and not (
+    if logger is not None and use_memory and not (
         resume_projection
         and str(resume_projection.get("boundary") or "")
         in {"proposal_ready", "vote_progress", "counter_proposal_ready"}
@@ -2742,14 +3217,29 @@ def _structured_relay_impl(max_validation_retries: int = 3, max_turns: int = 30,
                             val["approved"] = False
                             val["global_errors"].insert(0, obs_error)
                             val["summary"] = f"验证失败（策略={strategy}）：{obs_error}"
-                        if val["approved"] and acceptance_mode == "qos":
+                        sta_qoe_only_block = _validation_only_sta_qoe_blocked(val)
+                        if (
+                            acceptance_mode == "qos"
+                            and (val["approved"] or sta_qoe_only_block)
+                        ):
                             qos = _qos_acceptance_result(
                                 s.ap_state,
                                 observed,
                                 observed_is_real=obs_real,
                             )
                             val["qos_acceptance"] = qos
-                            if not qos["approved"]:
+                            if qos["approved"] and sta_qoe_only_block:
+                                val["approved"] = True
+                                val["global_errors"] = []
+                                val["summary"] = (
+                                    f"验证通过（策略={strategy}）："
+                                    f"{qos['summary']}；瞬时 STA QoE 新违规由多样本 "
+                                    "QoS improved 结果覆盖"
+                                )
+                                sta_qoe = val.get("sta_qoe")
+                                if isinstance(sta_qoe, dict):
+                                    sta_qoe["overridden_by_qos_acceptance"] = True
+                            elif not qos["approved"]:
                                 val["approved"] = False
                                 val["global_errors"].insert(0, qos["summary"])
                                 val["summary"] = (

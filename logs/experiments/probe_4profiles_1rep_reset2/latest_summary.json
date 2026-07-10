@@ -1,0 +1,101 @@
+{
+  "conditions": [
+    {
+      "profile": "basic",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 252.593
+    },
+    {
+      "profile": "basic",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 1,
+      "avg_turns": 7.0,
+      "avg_effect_score": 0.05735,
+      "avg_wall_duration_s": 68.124
+    },
+    {
+      "profile": "faulty",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 234.83
+    },
+    {
+      "profile": "faulty",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 9.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 99.166
+    },
+    {
+      "profile": "full",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 7.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 90.25
+    },
+    {
+      "profile": "full",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 254.943
+    },
+    {
+      "profile": "none",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": 0.032548,
+      "avg_wall_duration_s": 232.876
+    },
+    {
+      "profile": "none",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -0.110102,
+      "avg_wall_duration_s": 196.675
+    }
+  ],
+  "memory_gaps": [
+    {
+      "profile": "basic",
+      "turn_reduction": 11.0,
+      "effect_gain": 1.05735
+    },
+    {
+      "profile": "faulty",
+      "turn_reduction": 9.0,
+      "effect_gain": 0.0
+    },
+    {
+      "profile": "full",
+      "turn_reduction": -11.0,
+      "effect_gain": 0.0
+    },
+    {
+      "profile": "none",
+      "turn_reduction": 0.0,
+      "effect_gain": -0.14265
+    }
+  ],
+  "rows": 8,
+  "valid_rows": 8,
+  "infra_rows": 0
+}

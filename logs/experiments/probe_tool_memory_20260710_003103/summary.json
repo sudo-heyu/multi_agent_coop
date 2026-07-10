@@ -1,0 +1,99 @@
+{
+  "conditions": [
+    {
+      "profile": "basic",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.064
+    },
+    {
+      "profile": "basic",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.066
+    },
+    {
+      "profile": "faulty",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.067
+    },
+    {
+      "profile": "faulty",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.066
+    },
+    {
+      "profile": "full",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.065
+    },
+    {
+      "profile": "full",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.066
+    },
+    {
+      "profile": "none",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.095
+    },
+    {
+      "profile": "none",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": null,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 0.067
+    }
+  ],
+  "memory_gaps": [
+    {
+      "profile": "basic",
+      "turn_reduction": null,
+      "effect_gain": 0.0
+    },
+    {
+      "profile": "faulty",
+      "turn_reduction": null,
+      "effect_gain": 0.0
+    },
+    {
+      "profile": "full",
+      "turn_reduction": null,
+      "effect_gain": 0.0
+    },
+    {
+      "profile": "none",
+      "turn_reduction": null,
+      "effect_gain": 0.0
+    }
+  ],
+  "rows": 8
+}

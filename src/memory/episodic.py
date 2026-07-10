@@ -13,6 +13,7 @@ from src.persistence import EventStore
 
 PRIORITY = {"low": 0.0, "medium": 0.5, "high": 1.0}
 SIGNATURE_VERSION = 2
+NEAR_MISS_SCORE = 0.03
 RADIO_FIELDS = (
     "channel", "channel_number", "frequency_mhz", "band", "bandwidth_mhz",
     "channel_width_mhz", "phy_mode", "standard", "bssid", "ssid",
@@ -92,6 +93,15 @@ def materialize_episode(store: EventStore, run_id: str) -> dict[str, Any] | None
     strategy = (validation or {}).get("strategy")
     metrics = _outcome_metrics(initial_state, observed)
     outcome = str(end.get("outcome") or run.outcome or "incomplete")
+    validation_payload = _event_payload(validation)
+    inline_evaluation = (
+        _inline_qos_evaluation(validation_payload)
+        or _inline_validation_failure_evaluation(validation_payload)
+    )
+    lifecycle = _lifecycle_for_evaluation(inline_evaluation)
+    quality_score = _quality(outcome, validation, executions, observed)
+    if inline_evaluation:
+        quality_score = _quality_with_evaluation(quality_score, inline_evaluation)
     episode = {
         "run_id": run_id,
         "scene": start.get("scene") or run.scene,
@@ -101,21 +111,23 @@ def materialize_episode(store: EventStore, run_id: str) -> dict[str, Any] | None
         "features": features,
         "initial_state": initial_state,
         "decision": decision,
-        "validation": _event_payload(validation),
+        "validation": validation_payload,
         "execution": [_event_payload(event) for event in executions],
         "observed_state": observed,
         "metrics": metrics,
-        "quality_score": _quality(outcome, validation, executions, observed),
-        "lifecycle": "awaiting_evaluation",
+        "quality_score": quality_score,
+        "lifecycle": lifecycle,
         "feature_schema_version": SIGNATURE_VERSION,
         "evaluation_policy_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
     }
+    if inline_evaluation:
+        episode["evaluation"] = inline_evaluation
     episode["quality_vector"] = {
-        "pipeline_reliability": episode["quality_score"],
-        "outcome_confidence": 0.0,
-        "metric_coverage": 0.0,
-        "causal_confidence": 0.0,
+        "pipeline_reliability": _quality(outcome, validation, executions, observed),
+        "outcome_confidence": float((inline_evaluation or {}).get("final_confidence") or 0.0),
+        "metric_coverage": 1.0 if inline_evaluation and metrics.get("available") else 0.0,
+        "causal_confidence": float((inline_evaluation or {}).get("final_confidence") or 0.0),
     }
     episode["episode_fingerprint"] = hashlib.sha256(json.dumps({
         "topology": topology_signature, "scene": episode["scene"],
@@ -214,11 +226,35 @@ def find_episode_memory(
             continue
         seen.add(fingerprint)
         verdict = (item.get("evaluation") or {}).get("final_verdict")
-        if verdict == "degraded" and len(warnings) < warning_limit:
+        if _is_warning_evaluation(item.get("evaluation")) and len(warnings) < warning_limit:
             warnings.append(item)
-        elif verdict == "improved" and len(positive) < positive_limit:
+        elif _is_positive_evaluation(item.get("evaluation")) and len(positive) < positive_limit:
             positive.append(item)
     return {"positive": positive, "warnings": warnings}
+
+
+def _is_warning_evaluation(evaluation: dict[str, Any] | None) -> bool:
+    evaluation = evaluation or {}
+    verdict = evaluation.get("final_verdict")
+    if verdict == "degraded":
+        return True
+    score = _num(evaluation.get("final_score"))
+    return verdict == "neutral" and evaluation.get("approved") is False and (
+        score is None or score < NEAR_MISS_SCORE
+    )
+
+
+def _is_positive_evaluation(evaluation: dict[str, Any] | None) -> bool:
+    evaluation = evaluation or {}
+    if evaluation.get("final_verdict") == "improved":
+        return True
+    score = _num(evaluation.get("final_score"))
+    return (
+        evaluation.get("final_verdict") == "neutral"
+        and evaluation.get("approved") is False
+        and score is not None
+        and score >= NEAR_MISS_SCORE
+    )
 
 
 def _compatible_structure(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -303,6 +339,91 @@ def _outcome_metrics(initial, observed) -> dict[str, Any]:
     return result
 
 
+def _inline_qos_evaluation(validation: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not validation:
+        return None
+    qos = validation.get("qos_acceptance")
+    if not isinstance(qos, dict):
+        return None
+    verdict = str(qos.get("verdict") or "").lower()
+    if verdict not in {"improved", "neutral", "degraded", "inconclusive"}:
+        return None
+    confidence = _bounded_float(qos.get("confidence"), default=0.0)
+    deltas = qos.get("deltas") if isinstance(qos.get("deltas"), dict) else {}
+    return {
+        "source": "qos_acceptance",
+        "scope": "global",
+        "windows": [],
+        "final_verdict": verdict,
+        "final_confidence": confidence,
+        "global_verdict": verdict,
+        "global_confidence": confidence,
+        "final_score": _num(deltas.get("score")),
+        "needs_rollback": verdict == "degraded",
+        "pending_windows": 0,
+        "collected_windows": 1,
+        "reason": qos.get("reason") or "inline_qos_acceptance",
+        "approved": bool(qos.get("approved")) if qos.get("approved") is not None else None,
+        "deltas": deltas,
+    }
+
+
+def _inline_validation_failure_evaluation(validation: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not validation or validation.get("approved") is not False:
+        return None
+    sta_qoe = validation.get("sta_qoe") if isinstance(validation.get("sta_qoe"), dict) else {}
+    new_violations = validation.get("new_violations") or sta_qoe.get("new_violations") or []
+    sta_rejected = bool(sta_qoe.get("checked")) and sta_qoe.get("approved") is False
+    if not sta_rejected and not new_violations:
+        return None
+    reason = validation.get("summary") or "; ".join(validation.get("global_errors") or [])
+    return {
+        "source": "validation_result",
+        "scope": "global",
+        "windows": [],
+        "final_verdict": "degraded",
+        "final_confidence": 0.85,
+        "global_verdict": "degraded",
+        "global_confidence": 0.85,
+        "final_score": None,
+        "needs_rollback": True,
+        "pending_windows": 0,
+        "collected_windows": 1,
+        "reason": reason or "validator_rejected_candidate_after_observation",
+        "approved": False,
+        "new_violations": new_violations,
+    }
+
+
+def _lifecycle_for_evaluation(evaluation: dict[str, Any] | None) -> str:
+    if _is_warning_evaluation(evaluation):
+        return "warning"
+    verdict = (evaluation or {}).get("final_verdict")
+    return {
+        "improved": "trusted",
+        "inconclusive": "inconclusive",
+        "neutral": "evaluated",
+    }.get(verdict, "awaiting_evaluation")
+
+
+def _quality_with_evaluation(base: float, evaluation: dict[str, Any]) -> float:
+    verdict = evaluation.get("final_verdict")
+    confidence = float(evaluation.get("final_confidence") or 0.0)
+    if _is_warning_evaluation(evaluation):
+        return round(max(min(base, 0.45), 0.20 + 0.10 * confidence), 4)
+    if _is_positive_evaluation(evaluation):
+        return round(max(base, 0.55 + 0.10 * confidence), 4)
+    floor = {
+        "improved": 0.75,
+        "neutral": 0.55,
+        "degraded": 0.20,
+        "inconclusive": 0.10,
+    }.get(verdict, 0.0)
+    if verdict == "degraded":
+        return round(max(min(base, 0.45), floor + 0.10 * confidence), 4)
+    return round(max(base, floor + 0.20 * confidence), 4)
+
+
 def pipeline_quality(episode: dict[str, Any]) -> float:
     """从 episode 内容重算流水线基础质量分（不含执行后效果修订）。"""
     return _quality(
@@ -330,6 +451,13 @@ def _event_payload(event):
     if event is None:
         return None
     return {key: value for key, value in event.items() if key not in {"event_id", "sequence", "event", "ts"}}
+
+
+def _bounded_float(value, *, default: float) -> float:
+    number = _num(value)
+    if number is None:
+        return default
+    return max(0.0, min(float(number), 1.0))
 
 
 def _num(value):

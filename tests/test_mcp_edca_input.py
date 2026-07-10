@@ -44,6 +44,17 @@ class TestMcpEdcaInput(unittest.TestCase):
         self.assertTrue(all(result[ap]["valid"] for ap in ("ap1", "ap2", "ap3")))
         self.assertEqual(result["ap1"]["VI_CWmin"], 7)
 
+    def test_rejects_non_canonical_cw_values(self):
+        state = copy.deepcopy(MOCK_SCENES["edca"])
+        proposal = copy.deepcopy(self.proposal)
+        proposal["ap1"]["CWmin"] = 23
+        with patch.object(multiap_mcp, "get_all_states", return_value=state):
+            result = multiap_mcp.validate_edca_proposal(proposal)
+
+        self.assertFalse(result["ap1"]["valid"], result)
+        self.assertFalse(result["all_ok"], result)
+        self.assertIn("不是可下发竞争窗口值", ";".join(result["ap1"]["errors"]))
+
     def test_edca_tool_reports_self_harm_guard(self):
         state = {
             "ap1": {"cwmin": 15, "cwmax": 1023, "aifsn": 3,

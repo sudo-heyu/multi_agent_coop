@@ -1,0 +1,44 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=faulty memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=53657c36 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/faulty_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_084442_53657c36.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。
+
+以下是我的实测参数与状态汇报：
+
+MAC 与信道参数
+   发射功率 (TX Power)：10 dBm
+   EDCA 参数：CWmin 为 3，CWmax 为 15，AIFSN 为 2
+   业务优先级：high（当前业务类型为 best_effort）
+
+感知与连接指标
+   己方 STA RSSI：-45.7086 dBm（信号强度良好）
+   邻居 AP RSSI：本机扫描到 ap2 的信号为 -62.0 dBm，ap3 的信号为 -62.0 dBm，表明邻居信号较强，存在一定的同频干扰风险。
+
+业务质量指标
+   用户侧吞吐：约 0.29 Mbps
+   平均时延：约 241 ms
+   丢包率：高达 94.12%
+
+STA 反馈摘要
+我关联的 STA (sta_ap1_user) 当前 SLA 状态为 violated。具体违规情况如下：
+吞吐量不足：实测仅 0.16 Mbps，未达到 0.5 Mbps 的最低要求。
+时延超标：实测高达 492 ms，超过了 300 ms 的限制。
+丢包严重：丢包率 94.12%，远超 5% 的安全阈值。
+
+状态简述
+当前本节点面临严重的业务质量问题，表现为高丢包和高时延，虽然 STA 信号良好，但受限于较高的邻居干扰（RSSI -62 dBm）及自身的高重传/丢包状况，网络性能已显著恶化，亟需进行参数优化。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我本机实测的最新参数与状态：
+MAC 与 EDCA 参数：当前 TX Power 为 10 dBm。EDCA 配置上，BE 队列 CWmin/CWmax/AIFSN 为 31/127/4，VI 队列为 7/15/2。本节点整体 traffic_priority 标记为 low，关联 STA 的优先级为 medium。
+感知指标：本机扫描到的邻居 AP RSSI 为 AP1 = -84 dBm、AP3 = -84 dBm，干扰处于弱水平。己方关联 STA 的接收信号强度为 -45.7 dBm。当前状态源未提供信道利用率、TX Retries Ratio 及 Noise Floor 的具体数值。
+业务质量：用户侧吞吐约 2.45 Mbps，端到端时延约 32.5 ms，丢包率 2.5%。
+STA 反馈：关联 STA 的 SLA 状态为 satisfied，违约计数为 0，无任何 SLA 违规记录，QoE 反馈正常。
+
+状态简述：当前邻居信号较弱，信道竞争环境宽松，本节点业务运行平稳且完全满足 SLA 约束，暂无明显的性能瓶颈或调参紧迫性。

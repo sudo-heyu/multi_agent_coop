@@ -1,0 +1,51 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=dfaf859d event_db=logs/experiments/probe_script_retry_full_off/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_164516_dfaf859d.jsonl
+
+[1m[96mAP1[0m:
+我是AP1，以下是我的实测状态：
+
+MAC与信道参数：
+发射功率（TX Power）：10 dBm
+基础EDCA参数：CWmin=15，CWmax=63，AIFSN=7
+BE（Best Effort）类别：CWmin/CWmax/AIFSN = 15/63/7
+VI（Video）类别：CWmin/CWmax/AIFSN = 7/15/2
+
+业务与服务质量：
+当前业务：大文件下载（bulk_download），流量优先级为low
+己方STA RSSI：-45.71 dBm（信号良好）
+用户侧吞吐量：约1.0 Mbps
+平均延迟：约6.3 ms
+抖动：约5.6 ms
+丢包率：0%
+
+邻居感知（本机扫描所得）：
+ap2 RSSI：-81.0 dBm
+ap3 RSSI：-72.0 dBm
+
+STA反馈：
+当前关联STA的SLA状态为satisfied，无违反项，反馈正常。
+
+状态简述：我当前运行稳定，信道负载不高，邻居干扰水平适中（ap3信号稍强但在可接受范围内），业务质量满足SLA要求，整体状态健康。
+
+[1m[92mAP2[0m:
+我是 AP2。
+
+以下是我的实时状态播报：
+
+业务与 MAC 参数
+我当前承载的业务类型为直播（live_stream），流量优先级标记为 high。在 MAC 层参数上，我的发射功率（TX Power）设定为 10 dBm，竞争窗口 CWmin/CWmax 分别为 7 和 15，AIFSN 值为 2。
+
+性能与感知指标
+根据最新测量，我的用户侧吞吐量约为 4.06 Mbps，平均时延为 9.54 ms，抖动为 3.94 ms，丢包率为 0%。
+在链路感知方面，我关联的 STA 信号强度（STA RSSI）为 -45.71 dBm，信号质量很好。本机扫描到的邻居 AP 信号中，AP1 的 RSSI 为 -80.99 dBm，AP3 的 RSSI 为 -71.96 dBm，说明邻居干扰信号较弱。
+
+STA 反馈摘要
+当前关联的 STA SLA 状态为 satisfied，违规计数（violated_count）为 0，未检测到任何 SLA 违约项，业务体验稳定。
+
+状态简述
+本节点目前运行平稳，STA 信号强且各项 QoS 指标均满足 SLA 要求；由于邻居 AP 的 RSSI 较低，信道环境相对宽松，暂无明显的同频干扰压力。

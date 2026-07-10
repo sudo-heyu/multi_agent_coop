@@ -1,0 +1,93 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=faulty memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=24766671 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/faulty_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_091516_24766671.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。
+
+实测参数：
+MAC 参数：TX Power 10 dBm，CWmin 31，CWmax 63，AIFSN 7
+EDCA 参数：BE 与 VI 接入类别均为 CWmin 31 / CWmax 63 / AIFSN 7
+业务属性：service_name = best_effort（普通业务），traffic_priority = medium
+感知指标：
+己方 STA RSSI：-45.7 dBm
+邻居 AP RSSI（本机扫描）：ap2 = -81.0 dBm，ap3 = -72.0 dBm
+业务质量：user 吞吐 0 Mbps，延迟 0 ms，抖动 0 ms，丢包率 100%
+其他指标：当前状态中未上报信道利用率与 TX Retries Ratio 数据
+
+状态简述：
+邻居 ap3 信号约 -72 dBm，处于中等偏强干扰区间；ap2 信号较弱（-81 dBm）。
+关联 STA（sta_ap1_user）SLA 已违反：吞吐 0 Mbps（< 0.5 Mbps 阈值）、丢包 100%（> 5% 上限），QoE 严重受损。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我的实测数据：
+
+MAC 参数：TX Power 为 10 dBm，CWmin = 31，CWmax = 127，AIFSN = 4。
+
+感知指标：本机扫描到的邻居 AP RSSI 为 ap1 = -84.0 dBm、ap3 = -84.0 dBm；己方关联 STA 的 RSSI 为 -45.7086 dBm。
+
+业务质量：用户侧吞吐约 0.32 Mbps，端到端延迟约 2700 ms，抖动约 2.04 ms，丢包率 45%。
+
+当前状态简述：邻居信号偏强（-84 dBm），信道竞争压力较大；业务质量明显恶化，STA SLA 已违反。
+
+STA 反馈：关联 STA（sta_ap2_user）的 SLA 状态为 violated，主要违反项包括：吞吐量低于 0.5 Mbps 阈值、延迟超过 300 ms、丢包率超过 5%。
+
+[1m[93mAP3[0m:
+我是 AP3。
+
+实测参数：
+MAC 参数：TX Power 10 dBm，CWmin 31，CWmax 127，AIFSN 4
+EDCA 参数：BE 与 VI 接入类别均为 CWmin 31 / CWmax 127 / AIFSN 4
+业务属性：service_name = best_effort（普通业务），traffic_priority = medium
+感知指标：
+己方 STA RSSI：-45.7 dBm
+邻居 AP RSSI（本机扫描）：ap1 = -62.0 dBm，ap2 = -62.0 dBm
+业务质量：user 吞吐 25.9 Mbps，延迟 2.4 ms，抖动 2.1 ms，丢包率 0%
+STA 反馈：关联 STA (sta_ap3_user) 存在 SLA 违反——latency_ms=470.7 超过 300ms 上限，packet_loss_pct=24.6% 超过 5% 上限。
+
+状态简述：
+邻居 ap1 和 ap2 信号均为 -62 dBm，处于较强干扰区间，可能影响空间复用效果。
+本节点 user 侧吞吐良好（25.9 Mbps）、时延低、无丢包，但关联 STA 报告了较高的端到端时延（~471 ms）和丢包（~24.6%），SLA 存在违反风险。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(6.3ms)[0m
+[96map1:[0m [90mbest_effort/普通业务/high[0m TX=10dBm STA=-45.71dBm tput=17Mbps EDCA=3/15/2 [90m[ap2:-62 ap3:-62][0m
+[92map2:[0m [90mbest_effort/普通业务/low[0m TX=10dBm STA=-45.71dBm tput=0.32Mbps EDCA=31/127/4 [90m[ap1:-84 ap3:-84][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=26.6Mbps EDCA=31/127/4 [90m[ap1:-62 ap2:-62][0m
+[90m[工具][0m [1m[90manalyze_sr_interference[0m [90m(2.3ms)[0m  CoSR=[1m[92m触发[0m strong=0 moderate=4
+[90m无强干扰链路[0m  干扰源:ap3(2分)  受害:ap3(2分)
+[90m[工具][0m [1m[90mselect_sr_concurrent_groups[0m → [1m[91m结果解析失败[0m
+[90m[工具][0m [1m[90mevaluate_sr_candidate[0m {"concurrent_group": "[\"ap1\", \"ap2\", \"ap3\"]", "proposed_powers": "{\"ap1\"... [90m(2.7ms)[0m  [1m[92m全部OK[0m
+[90m并发组:[0m ap1,ap2,ap3  [90m非并发:[0m —
+现状分析
+
+核心问题：`analyze_sr_interference 确认 co_sr_triggered=true`，存在 4 条中度干扰链路（ap1↔ap3、ap2↔ap3），主要干扰源为 ap3（score=2）
+- ap2 业务质量严重恶化：吞吐仅 0.32 Mbps（< 0.5 Mbps）、延迟 2700 ms（300 ms）、丢包 45%（> 5%）
+ap1 和 ap3 虽聚合吞吐尚可，但 ap3 关联 STA 报告延迟 480 ms、丢包 30%，SLA 违反风险高
+
+策略选择：Co-SR依据：实时干扰分析已触发 Co-SR 条件，且三台 AP 间存在对称中度干扰
+- 路径：全并发组 [ap1, ap2, ap3]，统一降功率以抑制 OBSS 干扰
+
+参数方案：
+| AP | 当前功率 | 提案功率 | 降幅 | OBSS_PD |
+|----|---------|---------|------|---------|
+| ap1 | 10 dBm | 3 dBm | -7 dB | -78.96 dBm |
+| ap2 | 10 dBm | 3 dBm | -7 dB | -78.96 dBm |
+| ap3 | 10 dBm | 3 dBm | -7 dB | -78.96 dBm |
+
+验算结果：
+所有 AP 的 CCA、SINR、STA RSSI 约束均通过（valid=true）
+- 最小 STA RSSI 余量：-52.71 dBm（安全）最小 SINR：23.17 dB（充足）
+功率调整量均为整数 dB，符合协议要求
+
+预期效果与权衡：
+预期：OBSS 干扰显著降低，ap2 的高延迟/高丢包应得到改善；三台 AP 获得更公平的信道竞争机会
+- 权衡：总降功率 21 dB，各 AP 覆盖范围缩小；STA RSSI 从 -45.7 dBm 降至约 -52.7 dBm，仍在可接受范围内[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mproposal_parse_error[0m turns=4 用时 69s
+[1m[34m[策略][0m None
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [90m无可验收决策（协商未收敛或未解析出决策 JSON）[0m

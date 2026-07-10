@@ -1,0 +1,75 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=37c5aaa9 event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_043104_37c5aaa9.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。当前实测参数如下：发射功率（TX Power）为 10 dBm；EDCA 竞争参数配置为 CWmin 31、CWmax 63、AIFSN 7。感知指标方面，本机扫描到的邻居 AP 信号强度分别为 ap2 (-80.99 dBm) 和 ap3 (-71.96 dBm)，己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm。业务质量方面，当前吞吐量为 0.32 Mbps，端到端延迟 491.87 ms，抖动 2.68 ms，丢包率 0%。关联 STA 的 SLA 状态显示违规，具体反馈为吞吐量未达到 0.5 Mbps 的下限要求，且延迟超出 300 ms 的上限限制。
+
+当前状态简述：己方 STA 信号覆盖良好，但业务延迟与吞吐均未满足 SLA 约定；邻居 ap3 信号相对较强（约 -72 dBm），存在潜在的同频干扰压力，整体处于性能瓶颈待协调状态。
+
+[1m[92mAP2[0m:
+我是 AP2。当前实测参数汇报如下：
+MAC 参数：发射功率 10 dBm，EDCA 竞争参数 CWmin=7、CWmax=15、AIFSN=2。
+信道指标：本轮快照未提供信道利用率与 TX Retries Ratio 数据。
+感知指标：本机扫描到邻居 AP1 RSSI 为 -81.0 dBm，AP3 RSSI 为 -72.0 dBm；己方关联 STA RSSI 为 -45.7 dBm；噪声底噪数据暂未采集。
+业务质量：用户侧吞吐 8.12 Mbps，端到端延迟 8.69 ms，抖动 1.98 ms，丢包率 0%。
+
+状态简述：本节点承载 medium 优先级普通业务，当前信道竞争窗口配置合理，邻居信号强度处于中低水平（AP3 相对较近但未形成强干扰），STA 连接稳定且 SLA 完全满足（无延迟、丢包或吞吐违规），整体网络负载平稳，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是 AP3。当前实测参数如下：发射功率（TX Power）为 10 dBm；EDCA 竞争参数配置为 CWmin 15、CWmax 31、AIFSN 3。感知指标方面，本机扫描到的邻居 AP 信号强度分别为 ap1 (-71.96 dBm) 和 ap2 (-71.96 dBm)，己方关联 STA 的接收信号强度（RSSI）为 -45.71 dBm。业务质量方面，当前用户侧吞吐量为 5.11 Mbps，端到端延迟 150.85 ms，抖动 2.92 ms，丢包率 0%。关联 STA 的 SLA 状态显示满足要求，各项指标均在约定阈值内，无违规反馈。
+
+当前状态简述：己方 STA 信号覆盖良好，业务吞吐与延迟均稳定达标且无丢包；邻居 ap1/ap2 信号强度相当（约 -72 dBm），存在一定同频干扰潜在压力，整体网络处于平稳运行但需关注邻区干扰协调的状态。
+
+[1m[96mAP1[0m:
+本节点（AP1）发起 Co-SR 参数调整提案。
+
+现状分析：三台 AP 当前 TX Power 均为 10 dBm，本机扫描到的邻居 RSSI 普遍在 -72 dBm 左右，表明小区间存在较强的同频重叠干扰。该物理层干扰直接导致 AP1 承载的 STA 出现高延迟（491.87 ms）与低吞吐（0.32 Mbps），触发 SLA 违规。己方 STA RSSI 为 -45.71 dBm，距离接收底噪有充足余量，具备下调发射功率而不影响本地覆盖的条件。
+
+策略选择：当前各 AP 的 traffic_priority 均为 `medium`，无差异化 QoS 诉求，无需强制构建 EDCA 梯度；核心瓶颈明确为 OBSS 干扰引发的信道竞争恶化与重传堆积。因此选择 Co-SR 路径，通过统一降低发射功率压缩干扰半径，提升整体 SINR 与空间复用效率。
+
+参数方案：建议将 ap1/ap2/ap3 的 TX Power 统一降至 7 dBm（降幅 3 dBm），配套 OBSS_PD 门限设为 -72 dBm。该组合严格满足协议耦合约束（`tx ≤ 23-(obss_pd+82)` → 7 ≤ 13），且能显著削弱邻区信号穿透强度，预计可有效降低 AP1 的信道冲突概率，使吞吐与延迟回归 SLA 阈值内。
+
+```json
+{"AP1": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "AP2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "AP3": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+```
+
+[1m[92mAP2[0m:
+作为 AP2，针对提案#1 的验算与表态如下：
+TX Power 与协议约束：提案要求本机 TX Power 由 10 dBm 降至 7 dBm（降幅 3 dB，符合整数约束）。配套 OBSS_PD 设为 -72 dBm，满足标准耦合关系 `tx ≤ 23-(obss_pd+82)`（即 7 ≤ 13），参数合法。
+- STA 覆盖与 SLA：当前己方关联 STA RSSI 为 -45.7 dBm。功率下调 3 dB 后，预估 STA 接收信号仍维持在 -48~49 dBm 区间，远高于 -75 dBm 的硬性安全下界。本机 medium 优先级业务的 SLA 可继续稳定满足，无需担忧覆盖衰减。
+干扰环境与 SINR：三台 AP 当前均处于 10 dBm 满功率状态，邻居间存在约 -72~-81 dBm 的同频重叠干扰。统一降至 7 dBm 能有效压缩干扰半径，降低信道冲突与重传概率，直接利好 AP1 的 SLA 恢复，同时对本机及 AP3 的信道竞争环境亦属正向优化。
+结论：方案未触碰任何硬限制，代价可控且能兼顾全局性能恢复。本节点无异议。
+
+```json
+{"agreed": true, "reason": "TX Power 由 10 降至 7 dBm（整数降幅 3 dB），严格满足协议耦合约束；预估调整后本机 STA RSSI 仍远高于 -75 dBm 安全阈值，本地覆盖与 medium 优先级业务 SLA 不受影响。统一降功率可有效压缩邻区干扰半径，缓解 AP1 的 SLA 违规问题，同时改善整体 SINR 环境，本节点同意执行。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】历史提案梳理
+当前会话仅存在一轮提案（提案#1），由 AP1 发起。该提案采用 Co-SR 策略，建议将 ap1/ap2/ap3 的 TX Power 统一由 10 dBm 降至 7 dBm，配套 OBSS_PD 门限设为 -72 dBm，并发组包含全部三台 AP。截至目前，AP2 已表示同意，尚无 AP 提出反对或反提案。
+
+【第二步】针对 AP3 的参数验算与表态
+针对提案#1 中分配给本节点（AP3）的参数进行核验：
+功率调整与整数约束：本机 TX Power 由 10 dBm 降至 7 dBm，降幅为 3 dB，严格满足整数 dB 调整要求。
+- 协议耦合约束：提案设定 OBSS_PD 为 -72 dBm，代入标准耦合公式 `tx ≤ 23-(obss_pd+82) 得 7 ≤ 23-(-72+82)=13`，约束成立。覆盖与 SLA 安全性：当前己方关联 STA RSSI 为 -45.71 dBm。发射功率下调 3 dB 后，预估 STA 接收信号强度约为 -48.7 dBm，远高于 -75 dBm 的硬性安全下界。本机当前吞吐（5.11 Mbps）与延迟（150.85 ms）均大幅优于 SLA 阈值，降功率带来的信道竞争改善预计将进一步提升实际体验，不会引发 SLA 违规。
+干扰与 SINR 收益：三台 AP 当前互访 RSSI 均在 -72 dBm 左右，同频重叠严重。统一降功率可有效压缩干扰半径，降低 CCA 虚警与重传概率，显著提升整体 SINR，直接解决 AP1 因干扰导致的高延迟与低吞吐瓶颈。
+
+综合评估，该提案参数合法、对本机覆盖无实质影响，且能兼顾全局性能恢复。本节点无异议。
+
+```json
+{"agreed": true, "reason": "TX Power 由 10 降至 7 dBm（整数降幅 3 dB），严格满足协议耦合约束（7≤13）。预估调整后本机 STA RSSI 仍维持在 -48.7 dBm 左右，远高于 -75 dBm 安全下界，本地 SLA 不受影响。统一降功率可压缩邻区干扰半径，改善整体 SINR 并缓解 AP1 的性能瓶颈，本节点同意执行。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=8 用时 143s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_sr）：QoS 效果验收未通过：verdict=degraded, score=-0.2855, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.285546 confidence=0.75

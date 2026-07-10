@@ -1,0 +1,194 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=1079c5e8 event_db=logs/experiments/final_tool_memory_highload_vi_count5_10rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_040525_1079c5e8.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是本机实测状态广播：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+退避与仲裁参数：BE 与 VI 业务队列均配置为 CWmin=31、CWmax=63、AIFSN=7，当前竞争窗口较宽，退避时间偏长。
+
+感知与信道指标
+己方 STA RSSI：-45.7 dBm（信号良好）
+邻居 AP 扫描 RSSI：ap2 为 -81.0 dBm，ap3 为 -72.0 dBm
+注：当前快照未提供信道利用率（Data rate-to-bandwidth ratio）、TX Retries Ratio 及 Noise Floor 数值。
+
+业务质量与 SLA 反馈
+用户侧吞吐：0.16 Mbps
+延迟与抖动：492.4 ms / 2.3 ms
+丢包率：2.94%
+STA 状态：sta_ap1_user 业务类型为 best_effort（medium 优先级），SLA 状态为 violated。具体违规项为吞吐量低于 0.5 Mbps 下限，且延迟超出 300 ms 上限。
+
+当前状态简述
+本机 STA 信号强度充足，但 ap3 的扫描信号相对较强（-72 dBm），结合较宽的 EDCA 退避窗口，表明同频竞争或邻道干扰可能正在挤压可用空口资源；业务侧呈现“低吞吐+高延迟”特征，SLA 已触发违规，整体链路处于不稳定状态，建议后续协商优先缓解竞争压力并评估干扰源影响。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机实测状态广播：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+退避与仲裁参数：BE 与 VI 业务队列均配置为 CWmin=7、CWmax=15、AIFSN=2，当前竞争窗口适中。
+
+感知与信道指标
+己方 STA RSSI：-45.71 dBm（信号充足）
+邻居 AP 扫描 RSSI：ap1 为 -81.0 dBm，ap3 为 -72.0 dBm
+注：当前快照未提供信道利用率（Data rate-to-bandwidth ratio）、TX Retries Ratio 及 Noise Floor 数值。
+
+业务质量与 SLA 反馈
+用户侧吞吐：8.27 Mbps
+延迟与抖动：9.98 ms / 1.95 ms
+丢包率：0%
+STA 状态：sta_ap2_user 业务类型为 best_effort（medium 优先级），SLA 状态为 satisfied，无违规或警告项。
+
+当前状态简述
+本机 STA 信号强度良好，各项 QoS 指标稳定且完全满足 SLA 要求；ap3 扫描信号相对较强（-72 dBm），但当前 EDCA 参数与空口竞争状况匹配，整体链路处于健康状态。后续将关注 ap1 的 SLA 违规情况，视全局干扰与竞争态势决定是否参与协同调整。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是本机实测状态广播：
+
+MAC 与 EDCA 参数
+发射功率（TX Power）：10 dBm
+退避与仲裁参数：BE 与 VI 业务队列均配置为 CWmin=15、CWmax=31、AIFSN=3，当前竞争窗口适中。
+
+感知与信道指标
+己方 STA RSSI：-45.71 dBm（信号充足）
+邻居 AP 扫描 RSSI：ap1 为 -71.96 dBm，ap2 为 -71.96 dBm
+注：当前快照未提供信道利用率（Data rate-to-bandwidth ratio）、TX Retries Ratio 及 Noise Floor 数值。
+
+业务质量与 SLA 反馈
+用户侧吞吐：7.20 Mbps
+延迟与抖动：442.31 ms / 2.09 ms
+丢包率：0%
+STA 状态：sta_ap3_user 业务类型为 best_effort（medium 优先级），SLA 状态为 violated。具体违规项为延迟超出 300 ms 上限，吞吐量与丢包指标满足基线要求。
+
+当前状态简述
+本机 STA 信号强度良好且链路无丢包，但端到端延迟显著超标触发 SLA 违规；邻居 AP 扫描信号强度中等（约 -72 dBm），结合当前 EDCA 参数，空口竞争或同频干扰可能正在推高排队时延，整体链路处于高延迟不稳定状态。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+投票判断
+
+立场：反对
+
+理由：
+1. 自身性能受损风险：AP2 当前 SLA 状态为 satisfied，STA RSSI 良好（-45.71 dBm），且当前 EDCA 参数（CWmin=7, CWmax=15, AIFSN=2）已证明能有效支撑业务需求。AP1 的提案要求 AP2 将 CWmin 从 7 大幅增加至 15，这将显著扩大退避窗口，削弱 AP2 的信道竞争能力，极可能导致 AP2 的吞吐量下降和延迟上升，破坏现有的稳定状态。
+2. 提案逻辑不一致：AP1 自身的原始参数为 CWmin=31, CWmax=63, AIFSN=7，而提案却将其调整为更激进的 CWmin=15, CWmax=31, AIFSN=3。这表明 AP1 的高延迟（492 ms）可能部分源于退避过大导致的发送不及时，而非单纯的信道冲突。因此，AP1 减小退避有其合理性，但 AP2 不应跟随增大退避。
+3. 差异化配置更优：鉴于所有 AP 的 traffic_priority 均为 `medium`，协议允许在同优先级下进行差异化配置。AP1 和 AP3 面临严重的 SLA 违规（高延迟），可尝试调整参数（AP1 采纳提案值，AP3 保持现状）；而 AP2 应维持当前高效参数以保障自身服务质量。
+
+反提案（Co-EDCA）：
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  },
+  "ap2": {
+    "CWmin": 7,
+    "CWmax": 15,
+    "AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  }
+}
+```
+
+[1m[92mAP2[0m:
+```json
+{"agreed": false, "reason": "AP2 当前 SLA 满足且链路健康，提案强制将 AP2 的 CWmin 从 7 增至 15 会显著扩大退避窗口，削弱信道竞争能力并可能导致吞吐下降。鉴于各 AP 优先级同为 medium 但实际业务质量存在差异，统一拉平退避参数并非最优解，应保留差异化配置以保护已达标节点的性能。"}
+```
+```json
+{
+  "ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3},
+  "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2},
+  "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}
+}
+```
+
+[1m[93mAP3[0m:
+【第一步】此前提案及拒绝原因梳理
+提案#1（AP1 发起）：建议三台 AP 统一将 EDCA 参数调整为 `CWmin=15, CWmax=31, AIFSN=3`。
+拒绝原因：AP2 反对。AP2 当前 SLA 满足且链路健康，原有参数（CWmin=7, CWmax=15, AIFSN=2）已证明高效。提案强制扩大 AP2 的退避窗口会削弱其信道竞争能力，可能导致吞吐下降。此外，AP1 自身原参数更激进（CWmin=31），说明高延迟主因并非退避过大，统一拉平缺乏针对性。
+- 提案#2（AP2 反提案）：采用差异化配置。AP1 与 AP3 调整为 `CWmin=15, CWmax=31, AIFSN=3`，AP2 维持 `CWmin=7, CWmax=15, AIFSN=2`。
+设计意图：在保护已达标节点（AP2）性能的同时，让面临高延迟违规的节点（AP1/AP3）适当增加退避，以缓解同频竞争压力。
+
+【第二步】验算针对 AP3 的参数
+提案#2 中分配给 AP3 的参数为：`CWmin=15, CWmax=31, AIFSN=3`。
+该参数与我本轮广播时的实测参数完全一致，未引入任何额外的退避惩罚或参数变更。
+结合本机状态：`traffic_priority` 为 medium，SLA 违规仅由延迟超标（442 ms > 300 ms）引起，丢包率为 0%。在当前邻居 RSSI 约 -72 dBm 的环境下，保持适中退避窗口有助于平衡信道竞争，且 AP2 维持较小退避可降低整体空口碰撞概率，间接有利于缓解 AP3 的排队延迟。
+- 协议约束检查：三方优先级均为 medium，同优先级节点允许采用相同或相近的 EDCA 参数，无需强制单调排序。该方案合法且合理。
+
+【第三步】判断与表态
+结论：同意。
+理由：提案#2 针对 AP3 的参数与我当前实际配置完全吻合，未对我施加额外负担。差异化策略既保护了 AP2 的健康链路，又为 AP1/AP3 提供了适度的退避调整空间，符合整体网络性能优先原则。鉴于已是第二轮协商且方案可行，直接采纳以避免死锁。
+
+```json
+{"agreed": true, "reason": "提案#2 中分配给 AP3 的 EDCA 参数（CWmin=15, CWmax=31, AIFSN=3）与我当前实测参数完全一致，未引入额外退避惩罚。差异化配置在保护 AP2 高性能链路的同时，适度放宽 AP1/AP3 的竞争强度，有助于缓解同频竞争并间接改善排队延迟。三方优先级同为 medium，参数设置符合协议规范，属可接受折中，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+【第一步】此前提案及拒绝原因梳理
+- 提案#1（AP1 发起）：建议三台 AP 统一将 EDCA 参数调整为 `CWmin=15, CWmax=31, AIFSN=3`。
+拒绝原因：AP2 反对。AP2 当前 SLA 满足且链路健康，原有参数（CWmin=7, CWmax=15, AIFSN=2）已证明高效。提案强制扩大 AP2 的退避窗口会削弱其信道竞争能力，可能导致吞吐下降。此外，AP1 自身原参数更激进（CWmin=31），说明高延迟主因并非退避过大，统一拉平缺乏针对性。提案#2（AP2 反提案）：采用差异化配置。AP1 与 AP3 调整为 `CWmin=15, CWmax=31, AIFSN=3`，AP2 维持 `CWmin=7, CWmax=15, AIFSN=2`。
+ 设计意图：在保护已达标节点（AP2）性能的同时，让面临高延迟违规的节点（AP1/AP3）适当增加退避，以缓解同频竞争压力。
+
+【第二步】验算针对 AP1 的参数
+- 提案#2 中分配给 AP1 的参数为：`CWmin=15, CWmax=31, AIFSN=3`。
+- 对比本机当前实测参数（`CWmin=31, CWmax=63, AIFSN=7`），该提案实际上是将 AP1 的退避窗口缩小，提高了信道竞争的积极性。
+结合本机状态：`traffic_priority` 为 medium，SLA 违规表现为高延迟（492 ms）和低吞吐（0.16 Mbps）。当前过宽的退避窗口可能是导致发送不及时、排队积压的主因。协议约束检查：三方优先级同为 `medium`，采用相同的中等退避参数符合规范。该方案能有效缓解 AP1 的空口饥饿问题，且 AP3 已表示同意。
+
+【第三步】判断与表态
+结论：同意。
+理由：提案#2 针对 AP1 的参数（CWmin=15, CWmax=31, AIFSN=3）相较于本机当前过于保守的配置（31/63/7）更为激进，有助于缩短退避时间、提升信道利用率，从而改善高延迟和低吞吐的 SLA 违规状况。差异化策略兼顾了各方利益，AP3 也已确认接受，为避免协商死锁并尽快优化网络性能，予以同意。
+
+```json
+{"agreed": true, "reason": "提案#2 针对 AP1 的参数（CWmin=15, CWmax=31, AIFSN=3）相较于本机当前过于保守的配置（31/63/7）更为激进，有助于缩短退避时间、提升信道利用率，从而改善高延迟和低吞吐的 SLA 违规状况。差异化策略兼顾了各方利益，AP3 也已确认接受，为避免协商死锁并尽快优化网络性能，予以同意。"}
+```
+
+[1m[92mAP2[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=12 用时 124s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.1137, confidence=0.5683
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.113656 confidence=0.5683

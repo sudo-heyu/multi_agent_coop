@@ -345,7 +345,9 @@ def rank_sr_candidates(candidates: dict, objective: str = "balanced") -> dict:
 
 @mcp.tool()
 def validate_edca_proposal(proposed_edca: dict | str | None = None) -> dict:
-    """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin）
+    """校验各 AP 的 EDCA 参数：范围合规（CWmin∈[3,1023], CWmax∈[7,1023], AIFSN∈[1,15], CWmax>CWmin），
+    且 CWmin/CWmax 必须是可下发的实际竞争窗口离散值 2^n-1
+    （3/7/15/31/63/127/255/511/1023）
     + 按当前状态里的 traffic_priority 检查优先级单调性（优先级确实不同时 high.CWmin ≤ medium ≤ low，AIFSN 同理），
     并执行与编排层一致的 Validator 安全预检（含 Co-EDCA 自伤门）。traffic_priority
     不是 AP 固定身份；同优先级时不要强行制造梯度。

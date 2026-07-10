@@ -1,0 +1,194 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=basic memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=8ec40193 event_db=logs/experiments/probe_4profiles_1rep_reset2/db/basic_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_190006_8ec40193.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测状态：
+
+MAC 与信道参数
+TX Power: 10 dBm
+EDCA (BE): CWmin=31, CWmax=63, AIFSN=7
+EDCA (VI): CWmin=7, CWmax=15, AIFSN=2
+
+业务质量
+业务类型：大文件下载 (bulk_download)，优先级 low
+用户吞吐：约 1.03 Mbps（满足 SLA 最低 1.0 Mbps 要求）
+时延：约 5.4 ms，抖动约 5.2 ms，丢包率 0%
+STA RSSI: -45.7 dBm，SINR: 48.3 dB
+
+干扰感知
+邻居 AP2 RSSI: -81.0 dBm（弱干扰）
+邻居 AP3 RSSI: -72.0 dBm（中等干扰）
+噪声底噪：正常范围
+
+STA 反馈
+关联 STA (sta_ap1_user) SLA 状态：satisfied，无违规
+
+状态简述
+当前本 AP 业务运行稳定，SLA 完全满足。对 AP2 的干扰较弱（-81 dBm），对 AP3 的干扰处于中等水平（-72 dBm）。整体信道环境尚可，但考虑到 AP3 距离较近且存在中等干扰，后续可关注是否需要通过 Co-SR 或 Co-EDCA 进行优化。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测状态：
+
+MAC 与信道参数
+TX Power: 10 dBm
+EDCA (BE): CWmin=7, CWmax=15, AIFSN=2
+EDCA (VI): CWmin=7, CWmax=15, AIFSN=2
+
+业务质量
+业务类型：直播 (live_stream)，优先级 high
+用户吞吐：约 4.18 Mbps（满足 SLA 最低 3.0 Mbps 要求）
+时延：约 8.0 ms，抖动约 3.8 ms，丢包率 0%
+STA RSSI: -45.7 dBm，SINR: 48.3 dB
+
+干扰感知
+邻居 AP1 RSSI: -81.0 dBm（弱干扰）
+邻居 AP3 RSSI: -72.0 dBm（中等干扰）
+噪声底噪：正常范围
+
+STA 反馈
+关联 STA (sta_ap2_user) SLA 状态：satisfied，无违规
+
+状态简述
+当前本 AP 业务运行稳定，SLA 完全满足。对 AP1 的干扰较弱（-81 dBm），对 AP3 的干扰处于中等水平（-72 dBm）。整体信道环境尚可，但考虑到 AP3 距离较近且存在中等干扰，后续可关注是否需要通过 Co-SR 或 Co-EDCA 进行优化。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测状态：
+
+MAC 与信道参数
+TX Power: 10 dBm
+EDCA (BE): CWmin=15, CWmax=31, AIFSN=3
+EDCA (VI): CWmin=7, CWmax=15, AIFSN=2
+
+业务质量
+业务类型：普通业务 (best_effort)，优先级 medium
+用户吞吐：约 1.53 Mbps（满足 SLA 最低 0.5 Mbps 要求）
+时延：约 5.8 ms，抖动约 4.9 ms，丢包率 0%
+STA RSSI: -45.7 dBm，SINR: 48.3 dB
+
+干扰感知
+邻居 AP1 RSSI: -72.0 dBm（中等干扰）
+邻居 AP2 RSSI: -72.0 dBm（中等干扰）
+噪声底噪：正常范围
+
+STA 反馈
+关联 STA (sta_ap3_user) SLA 状态：satisfied，无违规
+
+状态简述
+当前本 AP 业务运行稳定，SLA 完全满足。对 AP1 和 AP2 的干扰均处于中等水平（-72 dBm）。整体信道环境尚可，但考虑到邻居信号强度较高，后续可关注是否需要通过 Co-SR 或 Co-EDCA 进行优化。
+
+[1m[96mAP1[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(22.8ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.08Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.52Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+## 提案：暂不调整
+
+### 现状分析
+
+基于最新状态，三个关键观察：
+
+干扰水平可控：邻居 RSSI 最高为 -72 dBm（AP1↔AP3、AP2↔AP3），属于中等干扰；STA SINR 达 48.3 dB，RSSI -45.7 dBm，信号质量极佳。无强干扰链路，未触发 Co-SR 条件。
+
+2. EDCA 已体现优先级差异：AP2 (high): CWmin=7, CWmax=15, AIFSN=2AP3 (medium): CWmin=15, CWmax=31, AIFSN=3
+   - AP1 (low): CWmin=31, CWmax=63, AIFSN=7
+   
+   单调性校验：CWmin(7≤15≤31)、AIFSN(2≤3≤7) 均满足，高优先级已获得更短的退避和 AIFS 等待时间。
+
+3. 所有 STA SLA 满足：三台 AP 的关联 STA 吞吐、时延、丢包均在 SLA 范围内，无违规。
+
+策略选择
+
+暂不调整。当前网络运行稳定，Co-SR 和 Co-EDCA 均无必要：功率降低会牺牲覆盖且无实际收益EDCA 参数已正确反映优先级梯度
+
+```json
+{
+  "ap1": {"strategy": "维持现状", "cwmin": 31, "cwmax": 63, "aifsn": 7},
+  "ap2": {"strategy": "维持现状", "cwmin": 7, "cwmax": 15, "aifsn": 2},
+  "ap3": {"strategy": "维持现状", "cwmin": 15, "cwmax": 31, "aifsn": 3}
+}
+```
+
+[1m[92mAP2[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(4.2ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.03Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.1Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.49Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(3.2ms)[0m  [1m[33m弱化结果：仅范围/格式检查[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+  [90m弱工具档位只返回参数范围/格式合法性；优先级排序、QoE 权衡和历史效果需要结合状态与记忆自行判断，最终系统 Validator/评估窗口仍会验收。[0m
+第一步：对话梳理
+
+此前仅有一轮广播和一份提案：
+
+| 阶段 | 内容 |
+|------|------|
+| 广播 | AP1、AP2、AP3 各播报自身状态（TX Power 均为 10 dBm，EDCA 已体现优先级差异，STA SLA 均满足） |
+| 提案 #1 | AP1 提出「暂不调整」，维持现有 EDCA 参数 |
+
+拒绝原因：尚无 AP 反对，提案未被拒绝。
+
+---
+
+第二步：验算 AP1 提案中针对 AP2 的参数
+
+提案参数（AP2）：`CWmin=7, CWmax=15, AIFSN=2`（维持现状）
+
+验算结果：
+✅ 范围合规：CWmin=7 ∈ [3,1023]，CWmax=15 ∈ [7,1023]，AIFSN=2 ∈ [1,15]，CWmax > CWmin
+✅ 优先级单调性：AP2(high, CWmin=7, AIFSN=2) ≤ AP3(medium, CWmin=15, AIFSN=3) ≤ AP1(low, CWmin=31, AIFSN=7)，严格满足✅ STA SLA：AP2 关联 STA 吞吐 4.1 Mbps > 3.0 Mbps 要求，时延 9.2 ms < 120 ms，丢包 0%，SLA satisfied✅ 干扰评估：邻居 RSSI 最高 -72 dBm（中等），未触发强干扰，无需 Co-SR
+
+判断：提案合理，无需调整。
+
+```json
+{"agreed": true, "reason": "EDCA 参数维持现状，CWmin/CWmax/AIFSN 取值合法且满足 high≤medium≤low 单调性；AP2(STA SLA satisfied，吞吐/时延/丢包均达标；邻居干扰中等未触发 Co-SR 条件。提案合理，同意。"}
+```
+
+[1m[93mAP3[0m:
+[90m[工具][0m [1m[90mget_latest_ap_states[0m [90m(6.0ms)[0m
+[96map1:[0m [90mbulk_download/大文件下载/low[0m TX=10dBm STA=-45.71dBm tput=1.02Mbps EDCA=31/63/7 [90m[ap2:-80 ap3:-71][0m
+[92map2:[0m [90mlive_stream/直播/high[0m TX=10dBm STA=-45.71dBm tput=4.02Mbps EDCA=7/15/2 [90m[ap1:-80 ap3:-71][0m
+[93map3:[0m [90mbest_effort/普通业务/medium[0m TX=10dBm STA=-45.71dBm tput=1.53Mbps EDCA=15/31/3 [90m[ap1:-71 ap2:-71][0m
+[90m[工具][0m [1m[90mvalidate_edca_proposal[0m [90m(6.9ms)[0m  [1m[33m弱化结果：仅范围/格式检查[0m  [90map1=31/63/7  ap2=7/15/2  ap3=15/31/3[0m
+  [90m弱工具档位只返回参数范围/格式合法性；优先级排序、QoE 权衡和历史效果需要结合状态与记忆自行判断，最终系统 Validator/评估窗口仍会验收。[0m
+## 第一步：对话梳理
+
+此前仅有一轮广播和一份提案：
+
+| 阶段 | 内容 |
+|------|------|
+| 广播 | AP1、AP2、AP3 各播报自身状态（TX Power 均为 10 dBm，EDCA 已体现优先级差异，STA SLA 均满足） |
+| 提案 #1 | AP1 提出「暂不调整」，维持现有 EDCA 参数 |
+
+拒绝原因：尚无 AP 反对，提案未被拒绝。
+
+---
+
+第二步：验算 AP1 提案中针对 AP3 的参数
+
+提案参数（AP3）：`CWmin=15, CWmax=31, AIFSN=3`（维持现状）
+
+验算结果：
+✅ 范围合规：CWmin=15 ∈ [3,1023]，CWmax=31 ∈ [7,1023]，AIFSN=3 ∈ [1,15]，CWmax > CWmin。工具校验通过。
+- ✅ 优先级单调性：AP2(high, CWmin=7, AIFSN=2) ≤ AP3(medium, CWmin=15, AIFSN=3) ≤ AP1(low, CWmin=31, AIFSN=7)，严格满足。
+✅ STA SLA：AP3 关联 STA 吞吐 1.53 Mbps > 0.5 Mbps 要求，时延 5.8 ms < 300 ms，丢包 0%，SLA satisfied。
+✅ 干扰评估：邻居 RSSI 最高 -72 dBm（中等），未触发强干扰，无需 Co-SR。
+
+判断：提案合理，无需调整。
+
+```json
+{"agreed": true, "reason": "EDCA 参数维持现状，CWmin/CWmax/AIFSN 取值合法且满足 high≤medium≤low 单调性；AP3(STA SLA satisfied，吞吐/时延/丢包均达标；邻居干扰中等未触发 Co-SR 条件。提案合理，同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"strategy": "维持现状", "cwmin": 31, "cwmax": 63, "aifsn": 7}, "ap2": {"strategy": "维持现状", "cwmin": 7, "cwmax": 15, "aifsn": 2}, "ap3": {"strategy": "维持现状", "cwmin": 15, "cwmax": 31, "aifsn": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=7 用时 67s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'strategy': '维持现状', 'cwmin': 31, 'cwmax': 63, 'aifsn': 7}, 'ap2': {'strategy': '维持现状', 'cwmin': 7, 'cwmax': 15, 'aifsn': 2}, 'ap3': {'strategy': '维持现状', 'cwmin': 15, 'cwmax': 31, 'aifsn': 3}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '8ec40193', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'strategy': '维持现状', 'cwmin': 5, 'cwmax': 6, 'aifsn': 7}}, 'response': "{'aifsn': 7, 'cwmax': 63, 'cwmin': 31}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '8ec40193', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'strategy': '维持现状', 'cwmin': 4, 'cwmax': 5, 'aifsn': 3}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '8ec40193', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'strategy': '维持现状', 'cwmin': 3, 'cwmax': 4, 'aifsn': 2}}, 'response': "{'aifsn': 2, 'cwmax': 15, 'cwmin': 7}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_edca，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.05735 confidence=0.2868

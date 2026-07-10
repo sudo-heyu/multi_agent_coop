@@ -1,0 +1,90 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=7ac9e49f event_db=logs/experiments/probe_4profiles_1rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_165940_7ac9e49f.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：本机发射功率（TX Power）为 10 dBm；BE 队列退避参数 CWmin/CWmax/AIFSN 设定为 31/63/7，VI 队列设定为 7/15/2。
+
+感知指标：关联 STA 的接收信号强度（RSSI）为 -45.71 dBm；本机空口扫描到的邻居 AP 信号强度为：ap2 约 -80.99 dBm，ap3 约 -71.96 dBm。（注：当前轮次未捕获到信道利用率、TX Retries Ratio 及 Noise Floor 的具体监测值，以实际空口采样为准。）
+
+业务质量：当前承载低优先级的大文件下载（bulk_download）业务；user 侧吞吐量为 1.02 Mbps，端到端延迟 5.45 ms，抖动 5.01 ms，丢包率为 0%。关联 STA 的 SLA 状态为 satisfied，无违规记录。
+
+状态简述：本机与关联 STA 链路质量优良，业务运行平稳。ap3 的扫描 RSSI（-71.96 dBm）相对 ap2 偏强，存在一定同频干扰潜在风险，但目前整体信道竞争与干扰水平尚在可控范围内，暂无紧急调参需求。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：本机发射功率（TX Power）为 10 dBm；BE 与 VI 队列退避参数 CWmin/CWmax/AIFSN 均设定为 7/15/2。
+
+感知指标：关联 STA 的接收信号强度（RSSI）为 -45.71 dBm；本机空口扫描到的邻居 AP 信号强度为：ap1 约 -80.99 dBm，ap3 约 -71.96 dBm。（注：当前轮次本地快照未直接输出信道利用率、TX Retries Ratio 及 Noise Floor 的具体监测值，以实际空口采样为准。）
+
+业务质量：当前承载高优先级的 live_stream（直播）业务；user 侧吞吐量为 4.06 Mbps，端到端延迟 9.49 ms，抖动 3.97 ms，丢包率为 0%。
+
+STA 反馈：关联 STA SLA 状态为 satisfied，各项 QoE 指标均在安全阈值内，无违规记录。
+
+状态简述：本机与关联 STA 链路质量优良，直播业务运行平稳。ap3 的扫描 RSSI（-71.96 dBm）相对 ap1 偏强，存在一定同频干扰潜在风险，但目前整体信道竞争与干扰水平尚在可控范围内，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：本机发射功率（TX Power）为 10 dBm；BE 队列退避参数 CWmin/CWmax/AIFSN 设定为 15/31/3，VI 队列设定为 7/15/2。
+
+感知指标：关联 STA 的接收信号强度（RSSI）为 -45.71 dBm；本机空口扫描到的邻居 AP 信号强度为：ap1 约 -71.96 dBm，ap2 约 -71.96 dBm。（注：当前轮次本地快照未直接输出信道利用率、TX Retries Ratio 及 Noise Floor 的具体监测值，以实际空口采样为准。）
+
+业务质量：当前承载中等优先级的 best_effort（普通业务）；user 侧吞吐量为 1.53 Mbps，端到端延迟 6.88 ms，抖动 5.22 ms，丢包率为 0%。
+
+STA 反馈：关联 STA SLA 状态为 satisfied，各项 QoE 指标均在安全阈值内，无违规记录。
+
+状态简述：本机与关联 STA 链路质量优良，普通业务运行平稳。ap1 和 ap2 的扫描 RSSI 均约为 -72 dBm，存在一定同频干扰潜在风险，但目前整体信道竞争与干扰水平尚在可控范围内，暂无紧急调参需求。
+
+[1m[96mAP1[0m:
+现状分析：当前三台 AP 关联 STA 的 SLA 状态均为 `satisfied`，端到端延迟与丢包率极低。空口测量显示 STA RSSI 为 -45.71 dBm，SINR 高达 48.29 dB，链路质量优良。邻居 AP 间干扰 RSSI 分布在 -72 ~ -81 dBm 区间，属弱干扰水平，无显著同频冲突或重传压力。
+
+策略选择：暂不调整（维持现状）。
+1. 干扰评估：当前 SINR 充裕，STA 接收信号强度远高于 -74 dBm 的安全阈值，不具备触发 Co-SR 降功率的必要条件。强行降参只会压缩覆盖边界，无实际收益。
+2. 竞争机制：各 AP 当前 BE 队列的 EDCA 参数已自然形成符合优先级的单调梯度（AP2[high]: 7/15/2 < AP3[medium]: 15/31/3 < AP1[low]: 31/63/7），且无拥塞或 QoS 降级迹象。无需重新分配退避窗口。
+
+参数方案：保持各 AP 现有 MAC 与 EDCA 参数不变，继续观察网络负载变化。此方案以最小干预原则维持当前高稳定性，避免无效调参引入的收敛震荡风险。
+
+```json
+{
+  "AP1": {
+    "strategy": "维持现状",
+    "CWmin": 31,
+    "CWmax": 63,
+    "AIFSN": 7
+  },
+  "AP2": {
+    "strategy": "维持现状",
+    "CWmin": 7,
+    "CWmax": 15,
+    "AIFSN": 2
+  },
+  "AP3": {
+    "strategy": "维持现状",
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  }
+}
+```
+
+[1m[92mAP2[0m:
+验算与分析：
+针对AP2的参数，提案建议维持现状（CWmin=7, CWmax=15, AIFSN=2）。结合本机实时状态与协议约束，结论如下：优先级单调性校验：本机业务优先级为 `high`（live_stream），提案参数与AP3(`medium`)、AP1(low)严格满足 IEEE 802.11 单调排序要求（CWmin: 7 ≤ 15 ≤ 31；AIFSN: 2 ≤ 3 ≤ 7），高优先级业务已获得更短的退避与仲裁间隔。
+2. QoE/SLA 与链路质量：关联STA RSSI为 -45.71 dBm，远高于安全阈值；端到端延迟约9.5ms，丢包率0%，SLA状态 satisfied。空口干扰RSSI处于弱/中等水平，无显著拥塞或重传压力，Co-SR降功率触发条件不成立。
+3. 策略评估：当前EDCA配置已自然贴合业务优先级梯度，且在稳定链路下运行良好。强行调整只会增加收敛震荡风险，无实际性能增益。
+
+表决结果：同意。维持现有参数是当前网络状态下兼顾QoS保障与系统稳定性的最优解。
+
+```json
+{"agreed": true, "reason": "提案维持AP2现有EDCA参数(CWmin=7/CWmax=15/AIFSN=2)，与AP3(medium)和AP1(low)严格满足优先级单调排序(7≤15≤31, 2≤3≤7)。本机STA RSSI(-45.71dBm)充裕，SLA satisfied且无拥塞/重传压力，Co-SR触发条件不成立。维持现状可避免无效调参带来的收敛震荡，符合最小干预与QoS保障原则。"}
+```
+
+[1m[93mAP3[0m:

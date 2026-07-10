@@ -73,7 +73,7 @@ class EdcaAccessWeightTests(unittest.TestCase):
 class ValidatorEdcaSelfHarmTests(unittest.TestCase):
     def _incident_decision(self):
         return {
-            "ap1": {"CWmin": 32, "CWmax": 1023, "AIFSN": 7},
+            "ap1": {"CWmin": 63, "CWmax": 1023, "AIFSN": 7},
             "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2},
             "ap3": {"CWmin": 15, "CWmax": 1023, "AIFSN": 3},
         }
@@ -118,6 +118,17 @@ class ValidatorEdcaSelfHarmTests(unittest.TestCase):
         }
         report = validator.validate_decision(states, decision, "co_edca")
         self.assertTrue(report["approved"], report["summary"])
+
+    def test_non_canonical_cw_value_rejected_before_apply(self):
+        states = _edca_states()
+        decision = {
+            "ap1": {"CWmin": 23, "CWmax": 63, "AIFSN": 7},
+            "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2},
+            "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3},
+        }
+        report = validator.validate_decision(states, decision, "co_edca")
+        self.assertFalse(report["approved"])
+        self.assertIn("不是可下发竞争窗口值", ";".join(report["per_ap"]["ap1"]["errors"]))
 
 
 def _sr_states():

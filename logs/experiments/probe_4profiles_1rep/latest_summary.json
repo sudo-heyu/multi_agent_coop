@@ -1,0 +1,41 @@
+{
+  "conditions": [
+    {
+      "profile": "basic",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -1.0,
+      "avg_wall_duration_s": 445.228
+    },
+    {
+      "profile": "none",
+      "memory": "off",
+      "n": 1,
+      "success_rate": 0,
+      "avg_turns": 18.0,
+      "avg_effect_score": -0.052803,
+      "avg_wall_duration_s": 219.89
+    },
+    {
+      "profile": "none",
+      "memory": "on",
+      "n": 1,
+      "success_rate": 1,
+      "avg_turns": 17.0,
+      "avg_effect_score": 0.090043,
+      "avg_wall_duration_s": 242.282
+    }
+  ],
+  "memory_gaps": [
+    {
+      "profile": "none",
+      "turn_reduction": 1.0,
+      "effect_gain": 0.142846
+    }
+  ],
+  "rows": 3,
+  "valid_rows": 3,
+  "infra_rows": 0
+}

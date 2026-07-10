@@ -1,0 +1,33 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=2 tool_profile=full memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=7f51d80d event_db=logs/experiments/probe_tool_profiles_highload_vi_fast_max2/db/full_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_024907_7f51d80d.jsonl
+
+[1m[96mAP1[0m:
+我是AP1。以下是我的实测状态：
+
+MAC参数：发射功率10 dBm，EDCA竞争参数CWmin=31、CWmax=63、AIFSN=7，BE和VI类别参数一致。
+
+信道与感知指标：关联STA RSSI为-45.71 dBm，信号强度良好。本机扫描到的邻居AP信号：AP2为-80.99 dBm，AP3为-71.96 dBm。
+
+业务质量：用户吞吐量0 Mbps，延迟0 ms，抖动0 ms，丢包率100%。
+
+STA反馈：关联STA（sta_ap1_user）严重违反SLA——吞吐量0.0 Mbps不满足≥0.5 Mbps要求，丢包率100%远超≤5%限制。
+
+状态简述：虽然STA信号质量良好（-45.71 dBm），但业务性能极差（100%丢包、零吞吐），存在严重SLA违约。邻居AP中AP3信号较强（-71.96 dBm），可能构成潜在干扰源。
+
+[1m[92mAP2[0m:
+我是 AP2，以下是我本机的实测状态：
+
+MAC 参数：TX Power 为 10 dBm；EDCA 参数方面，CWmin=7、CWmax=15、AIFSN=2（BE 和 VI 队列参数一致）。
+
+感知指标：本机扫描到邻居 AP 的信号强度为——ap1 约 -81 dBm，ap3 约 -72 dBm；己方关联 STA（sta_ap2_user）的 RSSI 为 -45.7 dBm，信号质量良好。噪声底噪未在状态中显式给出。
+
+业务质量：用户侧吞吐约 8.26 Mbps，端到端时延约 7.93 ms，抖动约 1.96 ms，丢包率为 0%。
+
+STA 反馈：当前关联的 1 台 STA 处于 SLA satisfied 状态，无违反项（SLA 要求：最大时延 ≤300 ms、最大丢包率 ≤5%、最小吞吐 ≥0.5 Mbps），实际各项指标均远优于阈值。
+
+简述：本节点当前业务运行稳定，STA 连接质量良好，无 SLA 违规。邻居干扰方面，ap1 信号较弱（-81 dBm），ap3 信号中等偏强（-72 dBm），整体信道负载情况需结合全局状态进一步评估。

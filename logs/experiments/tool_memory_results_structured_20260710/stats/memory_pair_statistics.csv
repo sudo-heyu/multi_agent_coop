@@ -1,0 +1,17 @@
+profile,metric,metric_label,unit,desired_direction,off_n,on_n,off_mean,on_mean,diff_on_minus_off,memory_advantage,advantage_ci95_low,advantage_ci95_high,bootstrap_p_two_sided_approx,cohens_d_advantage
+none,wall_duration_s,Average wall-clock duration,seconds,lower,10,10,152.779100,51.619100,-101.160000,101.160000,92.052298,112.023500,0.000000,8.447401
+none,effect_score,Average QoS effect score,score,higher,10,10,-0.054114,0.225418,0.279532,0.279532,0.130894,0.422149,0.000100,1.596026
+none,success_rate,Negotiation success rate,rate,higher,10,10,0.300000,0.800000,0.500000,0.500000,0.100000,0.900000,0.024600,1.102822
+none,turns,Average negotiation turns,turns,lower,10,10,7.700000,8.200000,0.500000,-0.500000,-0.900000,-0.200000,0.006400,-1.102822
+basic,wall_duration_s,Average wall-clock duration,seconds,lower,10,10,161.562900,62.994200,-98.568700,98.568700,34.986305,181.042290,0.001600,1.115653
+basic,effect_score,Average QoS effect score,score,higher,10,10,0.058202,0.126122,0.067921,0.067921,-0.113925,0.258502,0.478600,0.300303
+basic,success_rate,Negotiation success rate,rate,higher,10,10,0.700000,0.700000,0.000000,0.000000,-0.400000,0.400000,1.000000,0.000000
+basic,turns,Average negotiation turns,turns,lower,10,10,7.300000,8.300000,1.000000,-1.000000,-1.400000,-0.600000,0.000000,-2.070197
+full,wall_duration_s,Average wall-clock duration,seconds,lower,10,10,126.405900,41.864700,-84.541200,84.541200,74.369780,98.101622,0.000000,5.893388
+full,effect_score,Average QoS effect score,score,higher,10,10,0.112224,0.187459,0.075236,0.075236,-0.089126,0.230331,0.356500,0.390217
+full,success_rate,Negotiation success rate,rate,higher,10,10,0.700000,0.900000,0.200000,0.200000,-0.100000,0.500000,0.387600,0.489898
+full,turns,Average negotiation turns,turns,lower,10,10,7.300000,8.100000,0.800000,-0.800000,-1.100000,-0.500000,0.000000,-1.959592
+faulty,wall_duration_s,Average wall-clock duration,seconds,lower,10,10,108.024800,40.764300,-67.260500,67.260500,55.799335,77.809915,0.000000,5.048748
+faulty,effect_score,Average QoS effect score,score,higher,10,10,0.026067,0.183733,0.157666,0.157666,-0.062105,0.432992,0.205000,0.518517
+faulty,success_rate,Negotiation success rate,rate,higher,10,10,0.700000,0.800000,0.100000,0.100000,-0.300000,0.500000,0.793000,0.220564
+faulty,turns,Average negotiation turns,turns,lower,10,10,6.900000,8.200000,1.300000,-1.300000,-2.100000,-0.700000,0.000000,-1.560000

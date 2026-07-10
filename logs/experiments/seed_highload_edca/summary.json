@@ -1,0 +1,124 @@
+{
+  "run_id": "seed-highload-edca-d1c3ea7d",
+  "decision": {
+    "ap1": {
+      "CWmin": 15,
+      "CWmax": 31,
+      "AIFSN": 3,
+      "VI_CWmin": 7,
+      "VI_CWmax": 15,
+      "VI_AIFSN": 2
+    },
+    "ap2": {
+      "CWmin": 15,
+      "CWmax": 31,
+      "AIFSN": 3,
+      "VI_CWmin": 7,
+      "VI_CWmax": 15,
+      "VI_AIFSN": 2
+    },
+    "ap3": {
+      "CWmin": 15,
+      "CWmax": 31,
+      "AIFSN": 3,
+      "VI_CWmin": 7,
+      "VI_CWmax": 15,
+      "VI_AIFSN": 2
+    }
+  },
+  "qos": {
+    "approved": true,
+    "verdict": "improved",
+    "confidence": 0.75,
+    "deltas": {
+      "per_ap": {
+        "ap1": {
+          "weight": 0.6,
+          "score": 0.005597,
+          "metrics": {
+            "throughput_mbps_user": {
+              "before": 0.0,
+              "after": 0.0,
+              "delta": 0.0,
+              "score": 0.0
+            },
+            "latency_ms": {
+              "before": 0.0,
+              "after": 0.0,
+              "delta": 0.0,
+              "score": -0.0
+            },
+            "packet_loss_pct": {
+              "before": 100.056,
+              "after": 99.97204,
+              "delta": -0.08396,
+              "score": 0.016792
+            }
+          }
+        },
+        "ap2": {
+          "weight": 0.6,
+          "score": 0.159961,
+          "metrics": {
+            "throughput_mbps_user": {
+              "before": 8.152166,
+              "after": 8.165876,
+              "delta": 0.01371,
+              "score": 0.001682
+            },
+            "latency_ms": {
+              "before": 8.802898,
+              "after": 4.5933340000000005,
+              "delta": -4.209564,
+              "score": 0.478202
+            },
+            "packet_loss_pct": {
+              "before": 0.0,
+              "after": 0.0,
+              "delta": 0.0,
+              "score": -0.0
+            }
+          }
+        },
+        "ap3": {
+          "weight": 0.6,
+          "score": 0.822909,
+          "metrics": {
+            "throughput_mbps_user": {
+              "before": 5.661734000000001,
+              "after": 8.408064,
+              "delta": 2.74633,
+              "score": 0.485069
+            },
+            "latency_ms": {
+              "before": 483.2446,
+              "after": 7.897087999999999,
+              "delta": -475.347512,
+              "score": 0.983658
+            },
+            "packet_loss_pct": {
+              "before": 29.355740000000004,
+              "after": 16.035924,
+              "delta": -13.319816,
+              "score": 1.0
+            }
+          }
+        }
+      },
+      "score": 0.329489,
+      "performance_score": 0.329489,
+      "sla": {
+        "per_ap": {},
+        "all_satisfied": false,
+        "fairness_jain": 1.0
+      },
+      "coverage": 0.75
+    },
+    "reason": "seed_highload_edca_real_scan"
+  },
+  "episode": {
+    "episode_id": "880f23762da44876acd230a441681fa3",
+    "quality_score": 1.0,
+    "lifecycle": "trusted"
+  }
+}

@@ -1,0 +1,75 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=basic memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=cd5c089d event_db=logs/experiments/final_tool_memory_highload_fastvote_qospos_count5_10rep/db/basic_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_064333_cd5c089d.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是本机最新实测状态：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；当前 EDCA 参数在各 AC 上保持一致，CWmin=31、CWmax=63、AIFSN=7。
+感知指标：本机扫描到的邻居 AP2 RSSI 为 -80.99 dBm，邻居 AP3 RSSI 为 -71.96 dBm；己方关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm。（注：当前状态快照中未返回信道利用率、TX Retries Ratio 及 Noise Floor 数值，仅播报实际采集项。）
+业务质量：用户侧吞吐约 0.16 Mbps，端到端时延约 492 ms，丢包率约 48.46%，抖动约 2.21 ms。业务优先级为 medium，服务类型为 best_effort。
+状态简述与 STA 反馈：当前信道竞争激烈或受强干扰影响，本机 STA 的 SLA 全面违规，核心表现为吞吐量不足 0.5 Mbps、时延超 300 ms 且丢包率高达 48% 以上。整体传输效率极低，亟需多 AP 协同优化竞争机制或干扰门限以恢复基础服务质量。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机最新实测状态：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；当前 EDCA 参数在各 AC 上保持一致，CWmin=7、CWmax=15、AIFSN=2。
+感知指标：本机扫描到的邻居 AP1 RSSI 为 -80.99 dBm，邻居 AP3 RSSI 为 -71.96 dBm；己方关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm。（注：当前状态快照中未返回信道利用率、TX Retries Ratio 及 Noise Floor 数值，仅播报实际采集项。）
+业务质量：用户侧吞吐约 8.10 Mbps，端到端时延约 11.94 ms，丢包率 0%，抖动约 2.01 ms。业务优先级为 medium，服务类型为 best_effort。
+状态简述与 STA 反馈：当前信道竞争环境良好，邻居干扰信号偏弱（AP1 和 AP3 的 RSSI 均低于 -71 dBm），本机 STA 的 SLA 完全满足，吞吐量、时延和丢包均在阈值内，整体传输效率稳定。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是本机最新实测状态：
+MAC/EDCA 参数：发射功率（TX Power）为 10 dBm；当前 EDCA 参数在 BE 和 VI 接入类别上保持一致，CWmin=15、CWmax=31、AIFSN=3。
+感知指标：本机扫描到的邻居 AP1 RSSI 为 -71.96 dBm，邻居 AP2 RSSI 为 -71.96 dBm；己方关联 STA 的接收信号强度（STA RSSI）为 -45.71 dBm。
+业务质量：用户侧吞吐约 8.18 Mbps，端到端时延约 6.64 ms，丢包率约 28.01%，抖动约 1.95 ms。业务优先级为 medium，服务类型为 best_effort。
+状态简述与 STA 反馈：当前信道竞争激烈，本机 STA 的 SLA 出现丢包违规（丢包率 28.01% 远超 5% 阈值），尽管吞吐量和时延表现尚可，但高丢包率表明存在明显的信道竞争或干扰问题，亟需多 AP 协同优化以恢复基础服务质量。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.352893
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.352893；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[93mAP3[0m:
+{"agreed": true, "reason": "当前提案与高质量 improved 记忆案例完全一致，历史 quality=1.0, score=0.352893；本轮优先复用已验证动作以减少重复试错。"}
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=9 用时 44s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=degraded, score=-0.0631, confidence=0.3156
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.063118 confidence=0.3156

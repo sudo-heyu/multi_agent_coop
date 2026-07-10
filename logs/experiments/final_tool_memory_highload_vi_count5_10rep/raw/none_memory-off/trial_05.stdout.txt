@@ -1,0 +1,110 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=564914a5 event_db=logs/experiments/final_tool_memory_highload_vi_count5_10rep/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_034624_564914a5.jsonl
+
+[1m[96mAP1[0m:
+我是AP1。本机实测参数汇报如下：
+MAC与EDCA参数：TX Power为10 dBm，CWmin/CWmax为31/63，AIFSN为7。
+感知指标：己方关联STA的RSSI为-45.71 dBm；本机扫描到的邻居AP信号强度为ap2（-80.99 dBm）、ap3（-71.96 dBm）。当前快照未上报信道利用率、TX Retries Ratio及Noise Floor数值。
+业务质量：用户面吞吐约0.32 Mbps，端到端延迟约492.6 ms，丢包率高达98.04%，抖动约2.2 ms。
+SLA与QoE反馈：关联STA（sta_ap1_user）的SLA状态为violated。吞吐量、延迟与丢包三项核心指标均严重违约（吞吐<0.5 Mbps、延迟>300 ms、丢包>5%），业务体验已处于不可用状态。
+
+状态简述：当前业务质量因极高丢包与长延迟已完全跌破SLA底线，虽然缺乏信道利用率与重传率的实时数据，但较大的CW/AIFSN设置叠加ap3较强的邻区信号（-72 dBm），表明当前竞争窗口与干扰容忍度已无法支撑现有流量。建议后续协商中优先评估是否需要收紧EDCA退避参数或引入功率/干扰协调以恢复基础连通性。
+
+[1m[92mAP2[0m:
+我是 AP2。本机实测参数汇报如下：发射功率（TX Power）为 10 dBm；EDCA 竞争参数配置为 CWmin=7、CWmax=15、AIFSN=2（BE 与 VI 队列保持一致）。感知指标方面，己方关联 STA 的 RSSI 为 -45.71 dBm；本机扫描到的邻居 AP 信号强度分别为：AP1 约 -80.99 dBm，AP3 约 -71.96 dBm。当前状态快照中暂未包含信道利用率、TX Retries Ratio 及噪声底噪（Noise Floor）的监测值。业务质量方面，当前承载 best_effort 流量，优先级为 medium，实测用户侧吞吐 8.25 Mbps，端到端延迟 8.07 ms，抖动 1.97 ms，丢包率 0%。关联 STA（AC_VI 队列）的 SLA 状态为 satisfied，无违规项，QoE 反馈正常。
+
+整体状态简述：本节点当前信道竞争环境与外部干扰较弱（邻居信号均低于 -71 dBm），STA 链路质量优良且各项指标均满足 SLA 约束，整体运行平稳，暂无紧急调参需求。
+
+[1m[93mAP3[0m:
+我是AP3。本机实测参数汇报如下：
+MAC与EDCA参数：TX Power为10 dBm，CWmin/CWmax为15/31，AIFSN为3。
+感知指标：己方关联STA的RSSI为-45.71 dBm；本机扫描到的邻居AP信号强度为ap1（-71.96 dBm）、ap2（-71.96 dBm）。当前快照未上报信道利用率、TX Retries Ratio及Noise Floor数值。
+业务质量：用户面吞吐约6.24 Mbps，端到端延迟约476.1 ms，丢包率约26.05%，抖动约2.25 ms。
+SLA与QoE反馈：关联STA（sta_ap3_user）的SLA状态为violated。延迟与丢包两项核心指标均严重违约（延迟>300 ms、丢包>5%），业务体验已跌破SLA底线。
+
+状态简述：当前邻区干扰较强（ap1/ap2 RSSI均在-72 dBm左右），叠加高延迟与高丢包，导致SLA严重违约。建议后续协商中优先评估干扰协调或EDCA退避优化，以恢复基础连通性与服务质量。
+
+[1m[96mAP1[0m:
+提案阶段：AP1 发起 Co-EDCA 参数调整
+
+结论：本节点发起 Co-EDCA 提案，建议将三台 AP 的 EDCA 竞争参数统一收敛至标准 medium 优先级配置。
+
+现状分析：
+AP1 与 AP3 的 SLA 状态均为 `violated`，核心表现为极高丢包（AP1 98.04%、AP3 26.05%）与长延迟（AP1 492.6 ms、AP3 476.1 ms）。
+当前各 AP 的 traffic_priority 均为 `medium`，但 EDCA 参数存在显著分化：AP1 的 CWmin/CWmax/AIFSN 高达 31/63/7，AP3 为 15/31/3，AP2 为 7/15/2。在同等优先级下，AP1 的保守参数导致其 AIFS 等待时间与随机退避窗口过长，在共享信道竞争中处于绝对劣势，引发严重的“退避饥饿”与帧冲突累积，这是当前 SLA 违约的主导原因。邻居 RSSI（-72 ~ -81 dBm）虽存在一定 OBSS 干扰，但并非性能瓶颈的核心驱动。
+
+策略选择：
+选择 Co-EDCA 单一路径。依据实时证据，同类业务优先级下的参数不一致已破坏信道接入公平性。通过统一收紧至 IEEE 802.11e 推荐的 medium 优先级基准值，可快速消除 AP1/AP3 的退避劣势，恢复介质竞争效率。
+
+参数方案：
+将 AP1、AP2、AP3 的 EDCA 参数统一调整为：
+`CWmin`: 15
+`CWmax`: 31`AIFSN`: 3
+依据：该组参数符合 AC_VI/BE 队列的标准 medium 优先级配置。对 AP1 而言，CWmin 从 31 降至 15、AIFSN 从 7 降至 3，将直接削减约 50% 的退避期望时间与 60% 的 AIFS 等待时间，大幅提升首帧发送成功率；对 AP2 适度放宽竞争强度，以换取整体网络的公平性与 SLA 合规性。
+
+预期效果与权衡：
+预期改善：AP1/AP3 的信道竞争成功率显著提升，端到端延迟与丢包率预计快速回落至 SLA 阈值（延迟≤300 ms、丢包≤5%）以内。
+- 权衡：AP2 的竞争窗口略有增大，但在当前 best_effort 负载下影响可控；统一参数避免了同优先级节点间的非预期梯度，符合协议公平性原则。
+
+```json
+{
+  "AP1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  },
+  "AP2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  },
+  "AP3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步】梳理完毕。当前对话中仅存在 AP1 发起的提案#1（Co-EDCA 统一参数至 CWmin=15/CWmax=31/AIFSN=3），尚未出现任何反对或反提案记录。
+
+【第二步】验算与表态：
+结论：同意。
+
+针对本节点（AP2）的参数验算如下：
+现状对比：AP2 当前 traffic_priority 为 `medium`，EDCA 参数为 CWmin=7/CWmax=15/AIFSN=2，关联 STA 链路质量优良（RSSI -45.71 dBm），业务指标健康（吞吐 8.25 Mbps、延迟 8.07 ms、丢包 0%，SLA satisfied）。提案建议将 AP2 参数调整为 CWmin=15/CWmax=31/AIFSN=3。
+影响评估：三台 AP 优先级均为 medium，提案采用统一参数完全符合协议公平性要求，且满足同优先级参数单调性约束。对 AP2 而言，退避窗口与 AIFS 适度增大属于合理收敛，在当前 best_effort 负载与优质 STA 链路条件下，不会引发明显的吞吐下降或 SLA 违规。相反，该调整能有效抹平 AP1（原 31/63/7）与 AP3 的竞争劣势，快速缓解全网因参数分化导致的“退避饥饿”与高丢包问题。
+- 综合判断：提案以最小代价换取了网络整体 QoS 恢复，未触碰任何硬性约束，AP2 可接受此折中方案。
+
+```json
+{"agreed": true, "reason": "三端优先级同为 medium，提案统一参数符合公平性原则且满足单调性约束。AP2 当前链路质量优、负载低，CW/AIFSN 适度放宽不会导致 SLA 违约，同时能彻底解决 AP1/AP3 因保守参数引发的退避饥饿与高丢包问题，整体收益大于局部微调成本。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】梳理完毕。当前对话中仅存在 AP1 发起的提案#1（Co-EDCA 统一参数至 CWmin=15/CWmax=31/AIFSN=3），AP2 已明确表示同意，尚未出现反对或反提案。
+
+【第二步】验算与表态：
+结论：同意。
+
+针对本节点（AP3）的参数验算如下：
+现状对比：本节点当前 `traffic_priority 为 medium`，实测 EDCA 参数即为 CWmin=15、CWmax=31、AIFSN=3。提案要求本节点维持该参数不变，无任何直接调参成本或链路风险。影响评估：三台 AP 优先级同为 `medium`，提案采用统一参数完全符合 IEEE 802.11e 公平性原则与单调性约束。本次协商的核心价值在于修正 AP1 过度保守的竞争设置（原 31/63/7），使其退避窗口与 AIFS 回归标准水平。这将显著改善共享信道下的接入公平性，降低因“退避饥饿”引发的帧碰撞与重传累积，从而间接缩短整体排队时延，有望缓解本节点当前高丢包（26.05%）与长延迟（476.1 ms）导致的 SLA 违约。
+综合判断：提案对本节点零负担，且直击网络拥塞与竞争失衡的根源，符合多 AP 协作优化目标，予以同意。
+
+```json
+{"agreed": true, "reason": "本节点当前 EDCA 参数（CWmin=15/CWmax=31/AIFSN=3）与提案完全一致，无额外调参成本。全网同属 medium 优先级，统一参数满足公平性与单调性约束。修正 AP1 过度保守的设置将恢复信道竞争效率，降低整体冲突与延迟，有助于缓解本节点的高丢包与 SLA 违约问题，整体收益明确。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=8 用时 147s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=0.0264, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=0.026417 confidence=0.75

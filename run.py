@@ -93,6 +93,8 @@ def main() -> None:
                         help="场景标签（仅用于日志/记忆归组，不影响数据来源）")
     parser.add_argument("--server", default="http://localhost:5001")
     parser.add_argument("--max-steps", type=int, default=24)
+    parser.add_argument("--max-validation-retries", type=int, default=3,
+                        help="Validator/QoS 验收失败后的重新提案次数上限")
     parser.add_argument("--state-wait", type=float, default=None)
     parser.add_argument("--observation-wait", type=float, default=None)
     parser.add_argument("--ap-endpoints", default="")
@@ -107,6 +109,12 @@ def main() -> None:
     parser.add_argument("--context-recent-turns", type=int, default=6)
     parser.add_argument("--eval-windows", default="")
     parser.add_argument("--goal", default="")
+    parser.add_argument(
+        "--memory",
+        choices=["on", "off"],
+        default=os.environ.get("MULTIAP_MEMORY_MODE", "on"),
+        help="是否启用长期记忆召回/注入：on=启用；off=只保留本轮对话，不注入历史记忆",
+    )
     parser.add_argument(
         "--acceptance",
         choices=["validator", "qos"],
@@ -127,7 +135,7 @@ def main() -> None:
         default=os.environ.get("MULTIAP_TOOL_PROFILE", "full"),
         help=(
             "AP 可见工具能力档位：none/no_tools=完全无工具；basic=基础状态/反馈/验算；"
-            "rich/full=完整工具；diagnostic=隐藏答案型 SR 工具；"
+            "rich/full=完整工具；faulty=完整工具界面但返回错误结果；diagnostic=隐藏答案型 SR 工具；"
             "validator_only=只保留状态/反馈/候选验算；state_only=只保留状态和 STA 反馈；"
             "memory_challenge=粗粒度状态+弱验算，突出记忆作用"
         ),
@@ -144,6 +152,7 @@ def main() -> None:
     os.environ["MULTIAP_PPIO_BASE_URL"] = args.base_url
     os.environ["MULTIAP_STATE_SERVER"] = args.server
     os.environ["MULTIAP_TOOL_PROFILE"] = args.tool_profile
+    os.environ["MULTIAP_MEMORY_MODE"] = args.memory
     os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
 
@@ -179,7 +188,8 @@ def main() -> None:
     print(
         f"[run] runtime=ppio-stream model={args.model} "
         f"scene={args.scene} server={args.server} max_steps={args.max_steps} "
-        f"tool_profile={args.tool_profile} acceptance={args.acceptance}",
+        f"tool_profile={args.tool_profile} memory={args.memory} "
+        f"acceptance={args.acceptance}",
         flush=True,
     )
 
@@ -248,6 +258,7 @@ def main() -> None:
         mode=args.mode,
         resume=bool(resume_checkpoint),
     )
+    print(f"[Run] session_id={logger.session_id} event_db={os.environ.get('MULTIAP_EVENT_DB', str(DEFAULT_EVENT_DB))}")
     initial_ap_state = None
     if resume_checkpoint:
         logger.session_resume({
@@ -299,6 +310,7 @@ def main() -> None:
     t0 = time.time()
     try:
         result = orch.structured_relay(
+            max_validation_retries=args.max_validation_retries,
             max_turns=args.max_steps,
             on_event=None,
             on_event_start=_print_event_stream_start,

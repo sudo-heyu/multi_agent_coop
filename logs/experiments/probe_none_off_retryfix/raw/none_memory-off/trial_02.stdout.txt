@@ -1,0 +1,258 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=99cc7460 event_db=logs/experiments/probe_none_off_retryfix/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_204353_99cc7460.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。本机实测参数广播如下：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；BE 队列退避窗口设为 CWmin 31 / CWmax 63，AIFSN 为 7；AC_VI 队列退避窗口设为 CWmin 7 / CWmax 15，AIFSN 为 2。
+
+感知指标：本机扫描到的邻居 AP 信号强度为 ap2 ≈ -81.0 dBm、ap3 ≈ -72.0 dBm；我关联的 STA 接收信号强度（STA RSSI）为 -45.7 dBm。（注：当前状态快照中未上报信道利用率、TX Retries Ratio 及噪声底噪数值。）
+
+业务质量：当前承载低优先级大文件下载（bulk_download）业务，用户侧吞吐量约 1.02 Mbps，平均延迟约 6.2 ms，抖动约 5.7 ms，丢包率 0%。
+
+STA 反馈汇总：本机关联 1 台终端，SLA 状态为已满足（satisfied），无违规或告警记录。
+
+状态简述：当前链路质量稳定，STA 信号充足且各项 QoS 指标均优于 SLA 阈值；但 ap3 的 RSSI 达到 -72 dBm 左右，属中等偏强干扰水平，后续需留意其对空间复用或并发调度的潜在影响。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机实测参数汇报：
+MAC 与 EDCA 参数：发射功率（TX Power）为 10 dBm；竞争窗口与仲裁间隔配置为 CWmin=7、CWmax=15、AIFSN=2，当前承载业务优先级为 high（直播流）。
+信道与干扰指标：当前快照未直接提供信道利用率与 TX Retries Ratio 的具体数值，暂按系统基线记录。本机扫描到的邻居 AP 信号强度分别为：ap1 (-80.99 dBm)、ap3 (-71.96 dBm)，干扰距离评估处于中等偏弱水平。
+感知与业务质量：关联 STA 的接收信号（STA RSSI）为 -45.71 dBm，链路余量充足。实测吞吐约 3.998 Mbps，端到端延迟 9.84 ms，抖动 3.96 ms，丢包率 0%。
+STA 反馈：当前关联 1 台终端，SLA 状态为 satisfied，违规与警告计数均为 0。终端各项指标（延迟、抖动、吞吐、RSSI、SINR）均大幅优于 SLA 阈值，QoE 反馈稳定。
+
+状态简述：本节点当前运行平稳，STA 连接质量优异且 SLA 完全达标；邻居干扰处于可控范围，现有 EDCA 参数与发射功率未引发明显拥塞或竞争劣势，整体网络状态健康。
+
+[1m[93mAP3[0m:
+我是 AP3。本机实测参数广播如下：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；BE 队列退避窗口设为 CWmin 15 / CWmax 31，AIFSN 为 3；AC_VI 队列退避窗口设为 CWmin 7 / CWmax 15，AIFSN 为 2。
+
+感知指标：本机扫描到的邻居 AP 信号强度为 ap1 ≈ -72.0 dBm、ap2 ≈ -72.0 dBm；我关联的 STA 接收信号强度（STA RSSI）为 -45.7 dBm。（注：当前状态快照中未上报信道利用率、TX Retries Ratio 及噪声底噪数值。）
+
+业务质量：当前承载普通业务（best_effort），用户侧吞吐量约 1.52 Mbps，平均延迟约 5.46 ms，抖动约 4.91 ms，丢包率 0%。
+
+STA 反馈汇总：本机关联 1 台终端，SLA 状态为已满足（satisfied），无违规或告警记录。
+
+状态简述：当前链路质量稳定，STA 信号充足且各项 QoS 指标均优于 SLA 阈值；但 ap1 与 ap2 的 RSSI 均处于 -72 dBm 左右，属中等偏强干扰水平，后续需留意其对空间复用或并发调度的潜在影响。
+
+[1m[96mAP1[0m:
+我是 AP1。基于当前状态与广播记录，发起如下提案：
+
+现状分析
+三台 AP 互扰 RSSI 均在 -72 dBm 左右，属中等干扰水平。所有关联 STA 的接收信号强度均为 -45.7 dBm，链路余量充足（25 dB），且各业务 SLA 均已满足。当前三台 AP 发射功率均为 10 dBm，在 STA 余量充足的条件下，具备通过适度降功率降低 OBSS 干扰、提升空间复用潜力的空间。
+
+策略选择
+选择 Co-SR。理由：当前核心瓶颈为 AP 间的中等干扰，而 STA 侧信号质量远优于 SLA 阈值，降功率不会引发连接降级或 QoS 违规。优先采用 Co-SR 可在不改变现有 EDCA 竞争格局的前提下，直接压低互扰底噪，为后续可能的并发调度留出余量。
+
+参数方案
+TX Power：三台 AP 同步下调 2 dBm，由 10 dBm 降至 8 dBm（整数降幅，符合协议要求）。
+- OBSS_PD：统一设为 -72 dBm。经验证满足标准耦合约束 `tx ≤ 23(obss_pd + 82)`（8 ≤ 23 - 10 = 13），可确保 CCA 门限与发射功率匹配。
+并发组：三台 AP 均可纳入同一并发组运行。
+
+预期效果与权衡预期 OBSS 干扰电平下降约 2 dB，AP 间信道竞争冲突概率降低，空间复用成功率提升。
+- 权衡：STA 接收功率将相应下降约 2 dB（至 -47.7 dBm 左右），但仍远高于 -74 dBm 的安全下界及当前 SLA 要求，对吞吐与延迟无实质影响。
+
+```json
+{
+  "ap1": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -72
+  },
+  "ap2": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -72
+  },
+  "ap3": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -72
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2", "ap3"],
+    "non_concurrent_aps": []
+  }
+}
+```
+
+[1m[92mAP2[0m:
+针对 AP1 的 Co-SR 提案（#1），我作为 AP2 进行独立验算与评估：
+TX Power 约束：提案要求本机降至 8 dBm（降幅 2 dB，符合整数要求）。该值远高于协议硬性反对阈值（<5 dBm），且当前 10 dBm 发射功率在 STA 余量充足的条件下具备下调空间。
+STA RSSI 与 SLA：本机关联 STA 当前 RSSI 为 -45.71 dBm。降功率 2 dB 后预计降至约 -47.7 dBm，仍大幅优于 -75 dBm 的安全下界。当前 SLA 状态为 satisfied，各项 QoS 指标均达标，链路余量充足，降功率不会引发连接降级或业务波动。
+- OBSS_PD 与 CCA 耦合：统一设为 -72 dBm。经验证满足标准耦合约束 `tx ≤ 23(obss_pd + 82)`（即 8 ≤ 13），且与实测邻居干扰电平（≈-72 dBm）高度匹配，可正确设定 CCA 门限以支持空间复用接收。
+并发组与干扰权衡：三台 AP 互扰处于中等水平，全并发组（[ap1, ap2, ap3]）在同步降功率后具备可行性。预期 OBSS 干扰底噪下降约 2 dB，SINR 与信道竞争效率将得到改善，对 AP2 的高优先级直播流业务无实质负面影响。
+
+综合判断，该提案参数安全、所有硬性约束均满足，且能有效缓解当前 AP 间中等干扰，提升网络整体空间复用潜力。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 8 dBm（整数降幅），远高于 5 dBm 硬限制；STA RSSI 预计仅下降约 2 dB 至 -47.7 dBm 左右，仍大幅优于 -75 dBm 安全阈值且 SLA 完全达标；OBSS_PD -72 dBm 满足耦合约束并与实测干扰电平匹配，有利于空间复用。整体方案安全可行，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【结论】 同意该提案。
+
+【验算分析】
+针对本机（AP3）在提案#1中的参数进行独立核对：
+TX Power：提案要求从 10 dBm 降至 8 dBm，降幅为 2 dB（符合整数调整要求），且远高于协议硬性反对阈值（<5 dBm）。
+STA RSSI 与 SLA：本机关联 STA 当前 RSSI 为 -45.7 dBm。同步降功率 2 dB 后，预计 STA 接收功率降至约 -47.7 dBm，仍大幅优于 -75 dBm 的安全下界。当前 SLA 状态为 satisfied，链路余量充足，降功率不会引发连接降级或业务波动。
+- OBSS_PD 与 CCA 耦合：统一设为 -72 dBm。经验证满足标准耦合约束 `tx ≤ 23 - (obss_pd + 82)`（即 8 ≤ 23 - 10 = 13），且与本机扫描到的邻居干扰电平（≈-72 dBm）高度匹配，可正确设定 CCA 门限以支持空间复用接收。
+- 并发组与业务影响：三台 AP 互扰处于中等水平，全并发组在同步降功率后具备可行性。本机承载 best_effort 业务，当前吞吐与延迟指标良好，2 dB 功率下调在余量范围内，对整体网络空间复用潜力有正向贡献。
+
+综合判断，该提案参数安全、所有硬性约束均满足，且能有效缓解当前 AP 间中等干扰，提升网络整体性能。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 8 dBm（整数降幅），远高于 5 dBm 硬限制；STA RSSI 预计仅下降约 2 dB 至 -47.7 dBm 左右，仍大幅优于 -75 dBm 安全阈值且 SLA 完全达标；OBSS_PD -72 dBm 满足耦合约束并与实测干扰电平匹配，有利于空间复用。整体方案安全可行，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 8, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 8, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 8, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束
+
+[1m[96mAP1[0m:
+我是 AP1。针对上一轮 Co-SR 提案被 Validator 判定为“QoS 效果中性（score=0.0327）”的情况，本节点重新评估了降功率带来的干扰抑制收益与链路余量损耗之间的平衡。当前三台 AP 互扰 RSSI 均在 -72 dBm 左右，属中等干扰水平；所有关联 STA 的 RSSI 约为 -45.7 dBm，余量充足但并非无限。上一轮统一下调 2 dBm 对 OBSS 底噪的压制幅度有限，未能显著改善 SINR 或触发明确的空间复用增益，因此本次调整为更精细的 1 dB 降幅，并同步收紧 OBSS_PD 门限以提升 CCA 对弱干扰信号的检测灵敏度。
+
+策略选择
+继续采用 Co-SR。理由：网络核心瓶颈仍为 AP 间的中等互扰，且所有业务 SLA 均未违规。在 Validator 指出上一方案 QoS 增益不明显的情况下，降低降幅可保留更多 STA 接收余量，配合更严格的 OBSS_PD 门限，能在不牺牲链路质量的前提下提高信道空闲概率与空间复用成功率。
+
+参数方案
+- TX Power：三台 AP 同步下调 1 dBm，由 10 dBm 降至 9 dBm（整数降幅）。该值远高于 5 dBm 硬性反对阈值，STA 预计 RSSI 仅下降至约 -46.7 dBm，安全边界依然宽裕。
+- OBSS_PD：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 - (obss_pd + 82)`（即 9 ≤ 23 - 8 = 15）。将门限从 -72 收紧至 -74 dBm 可使 CCA 更早判定信道繁忙，减少因误判空闲导致的碰撞，从而提升实际空间复用效率。并发组：维持全 AP 并发 `[ap1, ap2, ap3]`。在整体发射电平微降且 CCA 门限优化的条件下，三节点具备并行传输条件。
+
+预期效果与权衡预期 OBSS 干扰基线下降约 1 dB，配合 OBSS_PD 收紧，CCA 虚警率降低，信道竞争冲突概率进一步下降。
+- 权衡：STA 接收功率微降 1 dB，对吞吐与延迟无实质影响；整体 QoS 评分预期由中性转为正向，兼顾高优先级直播流（AP2）与低优先级下载（AP1）的公平性。
+
+```json
+{
+  "ap1": {
+    "tx_power_dbm": 9,
+    "obss_pd_dbm": -74
+  },
+  "ap2": {
+    "tx_power_dbm": 9,
+    "obss_pd_dbm": -74
+  },
+  "ap3": {
+    "tx_power_dbm": 9,
+    "obss_pd_dbm": -74
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap2", "ap3"],
+    "non_concurrent_aps": []
+  }
+}
+```
+
+[1m[92mAP2[0m:
+针对 AP1 的 Co-SR 提案（#2），我作为 AP2 进行独立验算与评估：TX Power 约束：提案要求本机降至 9 dBm（降幅 1 dB，符合整数要求）。该值远高于协议硬性反对阈值（<5 dBm），且当前 10 dBm 发射功率在 STA 余量充足的条件下具备下调空间。
+STA RSSI 与 SLA：本机关联 STA 当前 RSSI 为 -45.71 dBm。降功率 1 dB 后预计降至约 -46.71 dBm，仍大幅优于 -75 dBm 的安全下界。当前 SLA 状态为 satisfied，高优先级直播流业务对链路稳定性要求较高，保留更多接收余量是合理选择。OBSS_PD 与 CCA 耦合：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 -(obss_pd+82)`（即 9 ≤ 23 - 8 = 15）。相较于上一轮 -72 dBm，收紧至 -74 dBm 可使 CCA 门限更灵敏，有效降低因误判信道空闲导致的碰撞概率，弥补了仅降 1 dB 功率带来的干扰抑制收益下降，有助于提升实际空间复用效率。
+- 并发组与业务影响：三台 AP 互扰处于中等水平，全并发组在微降功率与优化 CCA 门限的条件下具备可行性。整体方案在保障高优先级业务链路质量的同时，尝试通过参数微调改善信道竞争环境，风险可控。
+
+综合判断，该提案参数安全、所有硬性约束均满足，且在系统 Validator 指出上一方案 QoS 增益不足后做出了合理权衡（以收紧 OBSS_PD 补偿功率降幅）。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 9 dBm（整数降幅），远高于 5 dBm 硬限制；STA RSSI 预计仅下降约 1 dB 至 -46.71 dBm 左右，仍大幅优于 -75 dBm 安全阈值且 SLA 完全达标，有利于保障高优先级直播流链路稳定；OBSS_PD 收紧至 -74 dBm 满足耦合约束，可提升 CCA 灵敏度并降低虚警碰撞概率，弥补了 1 dB 功率降幅的干扰抑制损失。整体方案安全可行，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【结论】同意该提案。
+
+【第一步：历史提案与拒绝原因梳理】
+提案#1（TX 8 dBm / OBSS_PD -72 dBm）：三机同步降 2 dB。被 Validator 判定为“QoS 效果中性（score=0.0327）”，说明 2 dB 降功率对 OBSS 底噪压制有限，未能显著改善 SINR 或触发明确的空间复用增益。提案#2（TX 9 dBm / OBSS_PD -74 dBm）：针对#1的反馈进行迭代，将降幅收敛至 1 dB 以保留更多 STA 接收余量，同时收紧 OBSS_PD 门限以提升 CCA 灵敏度，试图在不牺牲链路质量的前提下提高信道空闲概率与空间复用成功率。
+
+【第二步：针对 AP3 的参数验算】
+- TX Power：提案要求本机降至 9 dBm（降幅 1 dB，符合整数调整要求），远高于协议硬性反对阈值（<5 dBm）。STA RSSI 与 SLA：本机关联 STA 当前 RSSI 为 -45.7 dBm。同步降功率 1 dB 后，预计 STA 接收功率降至约 -46.7 dBm，仍大幅优于 -75 dBm 的安全下界。当前 SLA 状态为 satisfied，best_effort 业务吞吐与延迟指标良好，降功率不会引发连接降级或业务波动。OBSS_PD 与 CCA 耦合：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 -(obss_pd+82)`（即 9 ≤ 15）。结合本机扫描到的邻居干扰电平（≈-72 dBm），收紧门限可使 CCA 更早判定信道繁忙，减少因误判空闲导致的碰撞，有效弥补了仅降 1 dB 功率带来的干扰抑制收益下降。
+- 并发组评估：三台 AP 互扰处于中等水平，全并发组在微降功率与优化 CCA 门限的条件下具备可行性。
+
+综合判断，该提案参数安全、所有硬性约束均满足，且针对 Validator 反馈做出了合理权衡。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 9 dBm（整数降幅 1 dB），远高于 5 dBm 硬限制；STA RSSI 预计仅下降约 1 dB 至 -46.7 dBm 左右，仍大幅优于 -75 dBm 安全阈值且 SLA 完全达标；OBSS_PD 收紧至 -74 dBm 满足耦合约束，可提升 CCA 灵敏度并降低虚警碰撞概率，有效回应了上一轮 Validator 关于 QoS 增益中性的反馈。整体方案安全可行，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 9, "obss_pd_dbm": -74}, "ap2": {"tx_power_dbm": 9, "obss_pd_dbm": -74}, "ap3": {"tx_power_dbm": 9, "obss_pd_dbm": -74}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束
+
+[1m[96mAP1[0m:
+我是 AP1。针对前两轮 Co-SR 提案被 Validator 判定为“QoS 效果中性”的情况，本节点重新评估了降功率策略的有效性。连续的全网同步降功率未能显著提升 SINR 或触发明确的空间复用增益，反而可能削弱了高优先级链路的接收余量。
+
+鉴于当前网络中 AP2 承载高优先级直播流（live_stream），对链路稳定性最为敏感，而 AP1 和 AP3 分别承载大文件下载与普通业务，STA 侧均有充足的 RSSI 余量（>25 dB），本轮调整为非对称 Co-SR 策略，重点保护直播流链路并针对性压制干扰源。
+
+策略选择
+选择 Co-SR（非对称功率调整）。理由：全量降功率已被证明 QoS 增益有限。通过仅下调 AP1 与 AP3 的发射功率，可在保留 AP2 直播流最佳接收条件的同时，有效降低其对 AP2 的 OBSS 干扰底噪。结合收紧 OBSS_PD 门限，提升 CCA 对弱干扰信号的检测灵敏度，从而在不牺牲关键业务的前提下优化信道环境。
+
+参数方案
+- TX Power：
+  - AP1 & AP3：由 10 dBm 下调至 8 dBm（整数降幅 2 dB）。两机关联 STA 当前 RSSI 约 -45.7 dBm，降功率后预计降至 -47.7 dBm，仍大幅优于 -75 dBm 安全下界及 SLA 阈值。
+  - AP2：保持 10 dBm 不变。确保高优先级直播流 STA 接收余量最大化，避免因功率下调引发任何潜在的链路波动。
+- OBSS_PD：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 - (obss_pd + 82)`（即 10 ≤ 15）。收紧门限可使 CCA 更早判定信道繁忙，减少因误判空闲导致的碰撞，弥补非对称降功率带来的干扰抑制差异。并发组：安排 AP1 与 AP3 进入并发组，AP2 独立运行（放入 `non_concurrent_aps`）。此拓扑可避免 AP1/AP3 降功率后的残余干扰与 AP2 产生强冲突，同时利用 AP1/AP3 之间的中等干扰特性进行空间复用。
+
+预期效果与权衡
+- 预期 AP2 的 OBSS 干扰电平显著下降，直播流延迟与抖动进一步收敛；AP1 与 AP3 在独立并发时段可获得更高的信道利用率。权衡：AP1 与 AP3 的 STA 接收功率微降 2 dB，但对 bulk_download 与 best_effort 业务无实质影响；整体 QoS 评分预期由中性转为正向，优先保障高优先级业务体验。
+
+```json
+{
+  "ap1": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -74
+  },
+  "ap2": {
+    "tx_power_dbm": 10,
+    "obss_pd_dbm": -74
+  },
+  "ap3": {
+    "tx_power_dbm": 8,
+    "obss_pd_dbm": -74
+  },
+  "_sr": {
+    "concurrent_group": ["ap1", "ap3"],
+    "non_concurrent_aps": ["ap2"]
+  }
+}
+```
+
+[1m[92mAP2[0m:
+【第一步：历史提案与拒绝原因梳理】提案#1（全机同步降至 8 dBm / OBSS_PD -72 dBm）：Validator 判定 QoS 效果中性（score=0.0327）。全网同降功率未能显著改善 SINR，空间复用增益未触发。
+提案#2（全机同步降至 9 dBm / OBSS_PD -74 dBm）：Validator 再次判定 QoS 效果中性（score=0.0320）。微调降幅与收紧门限仍不足以打破全并发下的干扰平衡，QoS 评分未见正向提升。
+- 提案#3（非对称调整：AP1/AP3 降至 8 dBm，AP2 保持 10 dBm / OBSS_PD -74 dBm）：将 AP2 移出并发组独立运行，重点保护高优先级直播流链路，同时允许 AP1/AP3 进行空间复用。此拓扑重构直接回应了前两轮 Validator 对“全并发无效”的反馈。
+
+【第二步：针对 AP2 的参数验算】
+- TX Power：提案要求本机保持 10 dBm 不变。该值完全保留了我关联 STA 的接收余量（当前约 -45.71 dBm），远高于安全下界，且符合高优先级直播流对链路稳定性的严苛要求。OBSS_PD 与 CCA 耦合：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 -(obss_pd+82)`（即 10 ≤ 15）。门限收紧有助于提升 CCA 对弱干扰的检测灵敏度，配合 AP2 独立运行的策略，可进一步降低信道碰撞概率。
+并发组策略权衡：本机被划入 `non_concurrent_aps`。虽然牺牲了理论上的全局最大并发数，但避免了在 AP1/AP3 尝试空间复用时产生强互扰，从根本上保障了高优先级业务的 SLA 稳定性。结合前两轮的验证结果，该非对称拓扑是打破 QoS 中性僵局的最优解。
+
+综合判断，提案#3 参数安全、硬性约束全部满足，且通过差异化功率与并发组划分有效规避了前两轮的全网同频干扰问题，优先保障了关键业务体验。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 保持 10 dBm 不变，充分保留高优先级直播流的链路余量；OBSS_PD -74 dBm 满足耦合约束并提升 CCA 灵敏度；被划入 non_concurrent_aps 虽放弃部分并发机会，但彻底规避了 AP1/AP3 复用时的强互扰风险，直接回应了前两轮 Validator 关于全并发 QoS 中性的反馈。方案兼顾 SLA 保障与网络整体效率，予以同意。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】历史提案与拒绝原因梳理
+提案#1（全机同步降至 8 dBm / OBSS_PD -72 dBm）：Validator 判定 QoS 效果中性（score=0.0327）。全网同降功率未能显著改善 SINR，空间复用增益未触发。
+- 提案#2（全机同步降至 9 dBm / OBSS_PD -74 dBm）：Validator 再次判定 QoS 效果中性（score=0.0320）。微调降幅与收紧门限仍不足以打破全并发下的干扰平衡，QoS 评分未见正向提升。
+提案#3（非对称调整：AP1/AP3 降至 8 dBm，AP2 保持 10 dBm / OBSS_PD -74 dBm）：将 AP2 移出并发组独立运行，重点保护高优先级直播流链路，同时允许 AP1/AP3 进行空间复用。此拓扑重构直接回应了前两轮 Validator 对“全并发无效”的反馈。
+
+【第二步】针对 AP3 的参数验算
+TX Power：提案要求本机降至 8 dBm（降幅 2 dB，符合整数调整要求），远高于协议硬性反对阈值（<5 dBm）。
+STA RSSI 与 SLA：本机关联 STA 当前 RSSI 为 -45.7 dBm。同步降功率 2 dB 后，预计 STA 接收功率降至约 -47.7 dBm，仍大幅优于 -75 dBm 的安全下界。当前 SLA 状态为 satisfied，best_effort 业务吞吐与延迟指标良好，降功率不会引发连接降级或业务波动。OBSS_PD 与 CCA 耦合：统一设为 -74 dBm。经验证满足标准耦合约束 `tx ≤ 23 -(obss_pd+82)`（即 8 ≤ 15）。结合本机扫描到的邻居干扰电平（≈-72 dBm），收紧门限可使 CCA 更早判定信道繁忙，减少因误判空闲导致的碰撞，有效弥补了降功率带来的干扰抑制差异。
+- 并发组评估：本机被划入 `concurrent_group` 与 AP1 共享信道，AP2 独立运行。该非对称拓扑避免了 AP2 高优先级业务受 AP1/AP3 复用时产生的强互扰，同时利用 AP1/AP3 之间的中等干扰特性进行空间复用，逻辑上合理且针对性强。
+
+综合判断，该提案参数安全、所有硬性约束均满足，且通过差异化功率与并发组划分有效规避了前两轮的全网同频干扰问题，优先保障了关键业务体验。予以同意。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 8 dBm（整数降幅 2 dB），远高于 5 dBm 硬限制；STA RSSI 预计仅下降约 2 dB 至 -47.7 dBm 左右，仍大幅优于 -75 dBm 安全阈值且 SLA 完全达标；OBSS_PD 收紧至 -74 dBm 满足耦合约束，可提升 CCA 灵敏度并降低虚警碰撞概率。非对称拓扑将 AP2 隔离以保护高优先级直播流，同时允许 AP1/AP3 空间复用，直接回应了前两轮 Validator 关于全并发无效的反馈。整体方案安全可行，予以同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 8, "obss_pd_dbm": -74}, "ap2": {"tx_power_dbm": 10, "obss_pd_dbm": -74}, "ap3": {"tx_power_dbm": 8, "obss_pd_dbm": -74}, "_sr": {"concurrent_group": ["ap1", "ap3"], "non_concurrent_aps": ["ap2"]}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=17 用时 234s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m {'ap1': {'tx_power_dbm': 8, 'obss_pd_dbm': -74}, 'ap2': {'tx_power_dbm': 10, 'obss_pd_dbm': -74}, 'ap3': {'tx_power_dbm': 8, 'obss_pd_dbm': -74}, '_sr': {'concurrent_group': ['ap1', 'ap3'], 'non_concurrent_aps': ['ap2']}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '99cc7460', 'strategy': 'co_sr', 'ap_id': 'ap1', 'params': {'tx_power_dbm': 8, 'obss_pd_dbm': -74}}, 'response': "{'obss_pd': -74.0, 'tx': 8.0}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '99cc7460', 'strategy': 'co_sr', 'ap_id': 'ap3', 'params': {'tx_power_dbm': 8, 'obss_pd_dbm': -74}}, 'response': "{'obss_pd': -74.0, 'tx': 8.0}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': '99cc7460', 'strategy': 'co_sr', 'ap_id': 'ap2', 'params': {'tx_power_dbm': 10, 'obss_pd_dbm': -74}}, 'response': "{'obss_pd': -74.0, 'tx': 10.0}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_sr，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.072237 confidence=0.3612

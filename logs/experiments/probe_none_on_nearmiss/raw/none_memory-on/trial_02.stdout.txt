@@ -1,0 +1,223 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=4 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=090148bc event_db=logs/experiments/probe_none_on_nearmiss/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260709_202301_090148bc.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实测参数播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。EDCA 竞争参数方面，BE 队列的 CWmin/CWmax/AIFSN 设置为 31/63/7，VI 队列设置为 7/15/2。
+
+干扰与感知指标：本机扫描到的邻居 AP2 RSSI 约为 -81 dBm，AP3 RSSI 约为 -72 dBm，干扰链路强度处于中等水平。己方关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm。
+
+业务质量：当前承载业务为 bulk_download（大文件下载），优先级标记为 low。实测吞吐约 1.02 Mbps，平均延迟约 7 ms，抖动约 5.9 ms，丢包率为 0%。STA 反馈 SLA 完全满足，无违规记录。
+
+状态简述：本机各项指标运行健康，STA 连接稳定且 QoE 达标；信道负载较低，邻居信号未形成强干扰，当前无需紧急调参。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实测参数播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。针对承载直播业务的 AC_VI 队列，竞争参数 CWmin/CWmax/AIFSN 设置为 7/15/2。
+
+干扰与感知指标：本机扫描到的邻居 AP1 RSSI 约为 -81 dBm，AP3 RSSI 约为 -72 dBm。己方关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm。
+
+业务质量：当前承载业务为 live_stream（直播），优先级标记为 high。实测用户侧吞吐约 4.08 Mbps，平均延迟约 9.7 ms，抖动约 4.0 ms，丢包率为 0%。
+
+STA 反馈：关联 STA 的 SLA 状态为 satisfied，无违规记录。
+
+状态简述：本机各项指标运行健康，STA 连接稳定且 QoE 达标；邻居信号处于中等水平，当前无需紧急调参。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实测参数播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm。针对 BE 队列，竞争参数 CWmin/CWmax/AIFSN 设置为 15/31/3；VI 队列设置为 7/15/2。
+
+干扰与感知指标：本机扫描到的邻居 AP1 RSSI 约为 -72 dBm，AP2 RSSI 约为 -72 dBm。己方关联 STA 的接收信号强度（STA RSSI）为 -45.7 dBm。
+
+业务质量：当前承载业务为 best_effort（普通业务），优先级标记为 medium。实测用户侧吞吐约 1.53 Mbps，平均延迟约 7.3 ms，抖动约 6.1 ms，丢包率为 0%。
+
+STA 反馈：关联 STA 的 SLA 状态为 satisfied，无违规记录。
+
+状态简述：本机各项指标运行健康，STA 连接稳定且 QoE 达标；邻居信号处于中等水平，信道负载较低，当前无需紧急调参。
+
+[1m[96mAP1[0m:
+我是 AP1。针对当前多 AP 协作优化，我发起以下 Co-EDCA 提案。
+
+现状分析与路径选择：
+当前三台 AP 承载业务优先级差异明确（AP2: high / AP3: medium / AP1: low），且所有关联 STA 的 SLA 均处于 satisfied 状态，SINR 充裕（~48 dB）。邻居 RSSI 处于中等水平（-72 ~ -81 dBm），未触发强干扰阈值，因此优先采用 Co-EDCA 进行信道竞争差异化调整，而非 Co-SR 功率压制。
+
+参数方案与依据：
+遵循 IEEE 802.11e 标准及优先级单调性约束（high ≤ medium ≤ low），对 BE 队列竞争参数进行标准化梯度分配：
+AP2 (high)：维持 `CWmin=7, CWmax=15, AIFSN=2`，确保直播业务获得最短退避与 AIFS 等待时间，保障实时性。
+- AP3 (medium)：设定 `CWmin=15, CWmax=31, AIFSN=3`，平衡普通业务吞吐与信道占用。AP1 (low)：设定 `CWmin=31, CWmax=63, AIFSN=7`，适度增加大文件下载业务的退避窗口，降低对高优先级链路的潜在碰撞概率。
+
+预期效果与权衡：
+该方案严格满足优先级排序约束，可在不牺牲 AP1 基础连通性的前提下，提升 AP2 高优先级业务的抢占成功率。由于当前 STA RSSI 极佳且无 SLA 违规，此微调旨在巩固 QoS 边界，避免未来突发流量下的优先级倒置或信道竞争失衡。
+
+```json
+{
+  "ap1": {"CWmin": 31, "CWmax": 63, "AIFSN": 7},
+  "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2},
+  "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}
+}
+```
+
+[1m[92mAP2[0m:
+阶段判断与验算结果
+
+1. 历史提案梳理：本轮多 AP 协作会话中，目前仅存在 AP1 发起的第一次 Co-EDCA 提案，尚无其他提案或拒绝记录。
+2. 针对 AP2 的参数验算：
+  优先级匹配：本机 `traffic_priority` 为 high（直播业务）。提案分配给 AP2 的 EDCA 参数为 `CWmin=7, CWmax=15, AIFSN=2`，与本机当前实测参数完全一致，能够持续保障高优先级业务的低退避与短 AIFS 抢占优势。
+   - 单调性校验：提案整体梯度严格遵循 IEEE 802.11e 优先级排序约束。CWmin 序列为 `7 (high) ≤ 15 (medium) ≤ 31 (low)`，AIFSN 序列为 `2 (high) ≤ 3 (medium) ≤ 7 (low)`，符合标准规范。
+   - QoE/SLA 影响：本机 STA RSSI 极佳（-45.7 dBm），当前吞吐、延迟、丢包均无 SLA 违规风险。该提案未引入任何功率压制或竞争劣势，对 AP2 的业务连续性零负面影响。
+
+最终表态
+
+基于上述验算，提案参数完全契合本机高优先级直播业务的实时性诉求，且全局 EDCA 梯度设计合理。我同意该提案。
+
+```json
+{"agreed": true, "reason": "提案中分配给 AP2 的参数（CWmin=7, CWmax=15, AIFSN=2）与本机当前参数完全一致，精准匹配 high 优先级的低退避与短 AIFS 需求；全局梯度严格遵循 high ≤ medium ≤ low 的单调性约束，未对本机 STA RSSI、SLA 或实时性造成任何不利影响，故表示同意。"}
+```
+
+[1m[93mAP3[0m:
+阶段判断与验算结果
+
+提案梳理：本轮会话目前仅存在 AP1 发起的第一次 Co-EDCA 提案，尚无其他提案或拒绝记录。针对 AP3 的参数验算：
+   - 优先级匹配：本机 `traffic_priority` 为 medium。提案分配给 AP3 的 EDCA 参数为 `CWmin=15, CWmax=31, AIFSN=3`，与本机当前实测参数完全一致，能够稳定维持普通业务的中等竞争强度。
+   - 单调性校验：提案整体梯度严格遵循 IEEE 802.11e 优先级排序约束。CWmin 序列为 `7 (high) ≤ 15 (medium) ≤ 31 (low)`，AIFSN 序列为 `2 (high) ≤ 3 (medium) ≤ 7 (low)`，符合标准规范。
+  QoE/SLA 影响：本机 STA RSSI 极佳（-45.7 dBm），当前吞吐、延迟、丢包均无 SLA 违规风险。该提案未引入任何竞争劣势，对 AP3 的业务连续性零负面影响。
+
+最终表态
+
+基于上述验算，提案参数完全契合本机 medium 优先级的业务诉求，且全局 EDCA 梯度设计合理。我同意该提案。
+
+```json
+{"agreed": true, "reason": "提案中分配给 AP3 的参数（CWmin=15, CWmax=31, AIFSN=3）与本机当前参数完全一致，精准匹配 medium 优先级的中等竞争需求；全局梯度严格遵循 high ≤ medium ≤ low 的单调性约束，未对本机 STA RSSI、SLA 或业务连续性造成任何不利影响，故表示同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 31, "CWmax": 63, "AIFSN": 7}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束
+
+[1m[96mAP1[0m:
+我是 AP1。针对上一轮验证未通过（score=0.0324, verdict=neutral）的情况，我重新评估后发起以下 Co-EDCA 修正提案。
+
+现状分析与问题定位：
+上一轮提案中，AP1 被分配了极端的退避参数（CWmin=31, CWmax=63, AIFSN=7）。在当前信道负载极低（TX Retries Ratio=0%，SINR~48dB）的环境下，这种过度压制并未带来明显的全局碰撞减少，反而限制了 AP1 自身的基础吞吐潜力，导致整体 QoS 收益极低（degraded）。
+
+策略选择：
+继续采用 Co-EDCA 路径，但转为温和差异化策略。鉴于当前 STA SLA 均满足且无突发拥塞，无需通过深度压制低优先级来换取高优先级增益。本轮将 AP1 的竞争参数回调至合理区间，在严格满足 `high ≤ medium ≤ low` 单调性的前提下，消除过度惩罚，恢复网络整体效率。
+
+参数方案与依据：
+AP2 (high)：维持 `CWmin=7, CWmax=15, AIFSN=2`。保障直播业务的最低退避与最短 AIFS，维持实时性优势。AP3 (medium)：维持 `CWmin=15, CWmax=31, AIFSN=3`。保持普通业务的中等竞争强度。AP1 (low)：调整为 `CWmin=15, CWmax=31, AIFSN=3`。将 AIFSN 从 7 降至 3，CWmin/CWmax 从 31/63 回调至 15/31。此举仍满足单调性约束（7 ≤ 15 ≤ 15），但显著缩短了 AP1 的等待时间与退避窗口，避免上一轮导致的性能瓶颈。
+
+预期效果与权衡：
+该方案去除了导致上一轮验证失败的极端参数，使 AP1 能够更高效地利用空闲信道资源。AP2 的高优先级抢占能力不受影响，AP3 保持平衡，整体网络吞吐利用率预计回升，QoS 评分将显著改善。
+
+```json
+{
+  "ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3},
+  "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2},
+  "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}
+}
+```
+
+[1m[92mAP2[0m:
+阶段判断与验算结果
+
+提案梳理：当前为 AP1 发起的第二轮 Co-EDCA 修正提案。首轮因 AP1 被分配极端退避参数（CWmin=31/AIFSN=7）导致全局 QoS 收益极低（verdict=neutral）。本轮 AP1 已将自身参数回调至 CWmin=15/CWmax=31/AIFSN=3，消除了过度惩罚，恢复了信道利用效率。
+2. 针对 AP2 的参数验算：
+优先级匹配：本机 traffic_priority 为 `high`（直播业务）。提案分配给 AP2 的参数仍为 `CWmin=7, CWmax=15, AIFSN=2`，与本机当前实测参数完全一致，持续保障高优先级业务的低退避与短 AIFS 抢占优势。
+  单调性校验：全局梯度调整为 `7 (high) ≤ 15 (medium) ≤ 15 (low)`，严格遵循 IEEE 802.11e 优先级排序约束，无优先级倒置风险。
+   - QoE/SLA 影响：本机 STA RSSI 极佳（-45.7 dBm），当前吞吐、延迟、丢包均无 SLA 违规。该方案在巩固本机高优先级权益的同时修复了全局性能瓶颈，对 AP2 业务连续性零负面影响。
+
+最终表态
+
+基于上述验算，修正后的提案已解决首轮验证失败的核心问题，且参数梯度设计合理、符合标准规范。该方案未对本机产生任何竞争劣势，我同意该提案。
+
+```json
+{"agreed": true, "reason": "修正提案将 AP1 参数回调至合理区间（CWmin=15/AIFSN=3），有效消除了首轮过度压制导致的 QoS 收益低下问题；分配给 AP2 的参数（CWmin=7, CWmax=15, AIFSN=2）与本机当前参数完全一致，精准匹配 high 优先级的实时性诉求。全局梯度严格遵循 high ≤ medium ≤ low 约束，未对本机 STA RSSI、SLA 或业务连续性造成不利影响，故表示同意。"}
+```
+
+[1m[93mAP3[0m:
+阶段判断与验算结果
+
+提案梳理：当前为 AP1 发起的第二轮 Co-EDCA 修正提案。首轮因 AP1 被分配极端退避参数（CWmin=31/AIFSN=7）导致全局 QoS 收益极低（verdict=neutral）。本轮 AP1 已将自身参数回调至 CWmin=15/CWmax=31/AIFSN=3，消除了过度惩罚，恢复了信道利用效率。
+2. 针对 AP3 的参数验算：
+优先级匹配：本机 traffic_priority 为 `medium`。提案分配给 AP3 的参数为 `CWmin=15, CWmax=31, AIFSN=3`，与本机当前实测参数完全一致，能够稳定维持普通业务的中等竞争强度。
+单调性校验：全局梯度调整为 `7 (high) ≤ 15 (medium) ≤ 15 (low)`，严格遵循 IEEE 802.11e 优先级排序约束，无优先级倒置风险。
+   - QoE/SLA 影响：本机 STA RSSI 极佳（-45.7 dBm），当前吞吐、延迟、丢包均无 SLA 违规。该方案在巩固本机高优先级权益的同时修复了全局性能瓶颈，对 AP3 业务连续性零负面影响。
+
+最终表态
+
+基于上述验算，修正后的提案已解决首轮验证失败的核心问题，且参数梯度设计合理、符合标准规范。该方案未对本机产生任何竞争劣势，我同意该提案。
+
+```json
+{"agreed": true, "reason": "修正提案将 AP1 参数回调至合理区间（CWmin=15/AIFSN=3），有效消除了首轮过度压制导致的 QoS 收益低下问题；分配给 AP3 的参数（CWmin=15, CWmax=31, AIFSN=3）与本机当前参数完全一致，精准匹配 medium 优先级的中等竞争需求。全局梯度严格遵循 high ≤ medium ≤ low 约束，未对本机 STA RSSI、SLA 或业务连续性造成不利影响，故表示同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3}}
+协商结束
+
+[1m[96mAP1[0m:
+我是 AP1。针对上一轮验证失败（决策后引入新的 STA SLA 违规: `sta_ap1_user`），我重新评估了参数映射关系与 SLA 边界，现发起修正提案。
+
+现状分析与问题定位：
+上一轮提案将 AP1 的 EDCA 参数统一调整为 `CWmin=15, CWmax=31, AIFSN=3`。由于本机关联 STA (`sta_ap1_user`) 实际运行于 AC_VI 队列，该调整直接导致 VI 流量的退避窗口扩大、AIFS 延长，MAC 层竞争加剧进而触发了 SLA 违规。当前信道负载极低（TX Retries Ratio=0%）、SINR 充裕（~48 dB），SLA 违规并非由外部干扰或拥塞引起，而是内部 EDCA 参数过度压制所致。
+
+策略选择：
+继续采用 Co-EDCA 路径，但本轮优先执行 SLA 刚性约束下的参数回退。为确保 AC_VI 业务的低延迟特性，AP1 必须恢复至初始的宽松竞争参数。为同时满足 IEEE 802.11e 的单调性约束（high ≤ medium ≤ low），AP3 的参数需同步下调至与 AP1 兼容的水平。
+
+参数方案与依据：
+AP2 (high)：维持 `CWmin=7, CWmax=15, AIFSN=2`。保障直播业务的实时抢占能力，维持现状。AP3 (medium)：调整为 `CWmin=7, CWmax=15, AIFSN=2`。下调至与 AP1 相同的宽松区间，既满足单调性（7 ≤ 7 ≤ 7），又避免 medium 优先级在低负载下过度占用信道。
+AP1 (low)：回调至 `CWmin=7, CWmax=15, AIFSN=2`。解除对 AC_VI 队列的额外退避惩罚，彻底消除 SLA 违规风险。
+
+预期效果与权衡：
+该方案通过暂时收敛差异化梯度，优先修复了 AP1 的 SLA 违规问题。虽然本轮三台 AP 的竞争参数趋于一致，但在当前 SINR 极高且无突发拥塞的环境下，统一采用 VI 级宽松参数足以维持全网高效传输。待 SLA 稳定后，可再结合多队列独立调度机制探索更精细的差异化策略。
+
+```json
+{"ap1": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}}
+```
+
+[1m[92mAP2[0m:
+阶段判断与验算结果提案梳理：当前为 AP1 发起的第三轮 Co-EDCA 修正提案。首轮因过度压制低优先级导致全局 QoS 收益极低（verdict=neutral）；次轮因错误下调 AP1 的 VI 队列参数触发 `sta_ap1_user` SLA 违规。本轮 AP1 将三台 AP 参数统一回调至最宽松的 `CWmin=7, CWmax=15, AIFSN=2`，以消除内部参数错配引发的 SLA 风险并打破协商僵局。
+2. 针对 AP2 的参数验算：
+优先级匹配：本机 traffic_priority 为 `high`（直播业务）。提案分配给 AP2 的参数为 `CWmin=7, CWmax=15, AIFSN=2`，与本机当前实测参数完全一致，持续保障高优先级业务的最低退避与最短 AIFS 抢占优势。
+  单调性校验：全局梯度调整为 `7 (high) = 7 (medium) = 7 (low)`，严格满足 IEEE 802.11e 的单调性约束（允许同级或相邻优先级参数相等），无优先级倒置风险。QoE/SLA 影响：当前信道负载极低（TX Retries Ratio=0%，SINR~48dB），在近乎空闲的信道下统一采用宽松参数不会引发碰撞竞争失衡，反而能彻底修复上一轮导致的 AP1 SLA 违规问题，避免多轮无效协商消耗网络资源。
+
+最终表态
+
+基于上述验算，修正后的提案通过收敛差异化梯度解决了前两轮验证失败的核心矛盾，且分配给 AP2 的参数完全契合本机 high 优先级的实时性诉求。在当前低负载环境下，统一宽松参数是恢复全网稳定性与打破协商死锁的最优折中。我同意该提案。
+
+```json
+{"agreed": true, "reason": "提案将三台 AP 参数统一回调至 CWmin=7/CWmax=15/AIFSN=2，严格满足 high ≤ medium ≤ low 的单调性约束；分配给 AP2 的参数与本机当前参数完全一致，精准匹配 high 优先级的低退避与短 AIFS 需求。该方案有效消除了前两轮因过度差异化及参数错配导致的 SLA 违规与 QoS 收益低下问题，在当前极低信道负载下可快速恢复全网稳定，故表示同意。"}
+```
+
+[1m[93mAP3[0m:
+阶段判断与验算结果
+
+1. 提案梳理：当前为 AP1 发起的第三轮 Co-EDCA 修正提案。首轮因过度压制低优先级导致全局 QoS 收益低下；次轮因未识别 AP1 实际运行于 AC_VI 队列而触发 `sta_ap1_user` SLA 违规。本轮提案将三台 AP 参数统一回调至最宽松的 `CWmin=7, CWmax=15, AIFSN=2`，以消除内部参数错配引发的风险并打破协商僵局。
+2. 针对 AP3 的参数验算：
+  优先级匹配：本机 `traffic_priority` 为 medium。提案分配给 AP3 的参数为 `CWmin=7, CWmax=15, AIFSN=2`，相比本机当前参数更为宽松，有利于提升普通业务的信道获取效率。
+单调性校验：全局梯度调整为 `7 (high) = 7 (medium) = 7 (low)`，严格满足 IEEE 802.11e 的单调性约束（允许同级或相邻优先级参数相等），无优先级倒置风险。QoE/SLA 影响：本机 STA RSSI 极佳（-45.7 dBm），当前吞吐、延迟、丢包均无 SLA 违规。该方案在修复前两轮核心矛盾的同时，通过统一宽松参数避免了过度差异化带来的副作用，符合当前极低信道负载下的最优折中。
+
+最终表态
+
+基于上述验算，修正后的提案已彻底解决前两轮验证失败的问题，且分配给 AP3 的参数完全契合本机 medium 优先级的业务诉求。在当前低负载环境下，收敛差异化梯度是恢复全网稳定性与打破协商死锁的最优解。我同意该提案。
+
+```json
+{"agreed": true, "reason": "提案将三台 AP 参数统一回调至 CWmin=7/CWmax=15/AIFSN=2，严格满足 high ≤ medium ≤ low 的单调性约束；分配给 AP3 的参数比本机当前参数更为宽松，精准匹配 medium 优先级的中等竞争需求，且不会引发任何 SLA 违规。该方案有效消除了前两轮因过度差异化及参数错配导致的性能瓶颈，在当前极低信道负载下可快速恢复全网稳定，故表示同意。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap2": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}, "ap3": {"CWmin": 7, "CWmax": 15, "AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=18 用时 194s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_edca）：QoS 效果验收未通过：verdict=neutral, score=0.0395, confidence=0.7500
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=neutral score=0.039494 confidence=0.75

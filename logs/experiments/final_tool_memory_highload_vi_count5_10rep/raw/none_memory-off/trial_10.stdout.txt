@@ -1,0 +1,90 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=off acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=370718fc event_db=logs/experiments/final_tool_memory_highload_vi_count5_10rep/db/none_memory-off.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_035956_370718fc.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。当前实测参数如下：
+MAC 参数：发射功率（TX Power）为 10 dBm；EDCA 退避参数 CWmin/CWmax/AIFSN 均为 31/63/7（BE 与 VI 队列配置一致）。
+信道指标：本轮快照中未上报信道利用率与 TX Retries Ratio。
+感知指标：关联 STA 接收信号强度（STA RSSI）为 -45.71 dBm；本机扫描到的邻居 AP 信号强度分别为 AP2: -81.0 dBm、AP3: -72.0 dBm。噪声底噪（Noise Floor）未在当前快照中提供。
+业务质量：用户侧吞吐量 0 Mbps，延迟 0 ms，丢包率高达 98.04%。
+STA 反馈：本节点关联 1 台终端（sta_ap1_user），业务类型 best_effort，优先级 medium。该终端 SLA 状态为 violated，核心原因为吞吐量不达标（实际 0.0 < 阈值 0.5 Mbps）且丢包率严重超标（98.04% > 5%）。
+
+状态简述：当前 EDCA 退避窗口偏大，但业务已出现严重丢包与零吞吐，SLA 明确违约；邻居 AP3 信号相对较强（约 -72 dBm），存在潜在同频干扰环境，整体处于待优化状态。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是本机实测状态汇报：
+
+【MAC与竞争参数】TX Power 设定为 10 dBm；EDCA 参数中 CWmin=7、CWmax=15、AIFSN=2，BE与VI队列配置一致。
+【信道指标】当前快照未提供信道利用率与 TX Retries Ratio 的具体数值，暂按基线水平运行。
+【感知指标】本机扫描到的邻居 AP RSSI 为：ap1 约 -81.0 dBm，ap3 约 -72.0 dBm。己方关联 STA 的 RSSI 为 -45.7 dBm。噪声底噪(Noise Floor)本次未上报。
+【业务质量】用户侧吞吐(iperf/user)约为 8.07 Mbps，平均延迟 10.20 ms，抖动 2.00 ms，丢包率 0%。
+【STA反馈】当前关联 1 个 STA，业务优先级 medium，SLA 状态为 satisfied，无延迟/丢包/吞吐量违规，终端反馈良好。
+
+状态简述：本节点链路质量稳定，STA 信号强且 SLA 完全达标；ap3 的相对较强信号(-72 dBm)提示存在一定邻区干扰潜力，但当前重传与拥塞未见异常，整体业务运行平稳。如需优化空间复用或竞争机制，可结合全局状态进一步评估。
+
+[1m[93mAP3[0m:
+我是 AP3。当前实测参数如下：
+MAC 参数：发射功率（TX Power）为 10 dBm；EDCA 退避参数 CWmin/CWmax/AIFSN 均为 15/31/3。
+信道指标：本轮快照中未上报信道利用率与 TX Retries Ratio。
+感知指标：关联 STA 接收信号强度（STA RSSI）为 -45.71 dBm；本机扫描到的邻居 AP 信号强度分别为 AP1: -71.96 dBm、AP2: -71.96 dBm。噪声底噪（Noise Floor）未在当前快照中提供。
+业务质量：用户侧吞吐量 5.76 Mbps，延迟 486.46 ms，丢包率 8.12%。
+STA 反馈：本节点关联 1 台终端（sta_ap3_user），业务类型 best_effort，优先级 medium。该终端 SLA 状态为 violated，核心原因为延迟严重超标（实际 486.46 ms > 阈值 300 ms）且丢包率偏高（8.12% > 5%）。
+
+状态简述：当前 EDCA 参数相对保守，但业务已出现明显的延迟与丢包违约；邻居 AP1 和 AP2 信号强度相当且较强（约 -72 dBm），存在潜在的同频干扰环境，整体处于待优化状态。
+
+[1m[96mAP1[0m:
+基于当前状态，我提议采用 Co-SR 路径进行参数调整。
+
+现状分析：AP1 丢包率高达 98.04% 且吞吐为 0，AP3 延迟达 486 ms 且丢包 8.12%，两者 SLA 均已违约。感知数据显示 AP1 与 AP3 互收信号强度约为 -72 dBm，属于强干扰链路；AP2 相对较远（-81 dBm）。当前三机 TX Power 均为 10 dBm，在共享介质下产生严重 OBSS 干扰，导致信道竞争失败与重传堆积。所有节点 `traffic_priority` 均为 medium，无需通过 Co-EDCA 强制划分梯度。
+
+策略选择：优先执行 Co-SR 降功率。己方 STA RSSI 为 -45.7 dBm，链路余量充足，适度降低发射功率可有效压制邻区干扰、提升 SINR，且不会触发覆盖不足风险。
+
+参数方案：建议将 AP1、AP2、AP3 的 TX Power 统一调整为 7 dBm（降幅 3 dB，符合整数约束）。配套设置 OBSS_PD 门限为 -72 dBm，严格满足协议耦合公式 `tx(7) ≤ 23 - (-72+82) = 13`。降功率后预计可显著缓解 AP1/AP3 间的同频碰撞，恢复 AP1 基础吞吐并降低 AP3 的排队时延。三机在降功率后可进入安全并发窗口。
+
+```json
+{
+  "ap1": {"tx_power_dbm": 7, "obss_pd_dbm": -72},
+  "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72},
+  "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -72},
+  "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}
+}
+```
+
+请 AP2、AP3 对本案进行验算与投票。
+
+[1m[92mAP2[0m:
+结论先行：同意该提案。
+
+验算分析（针对 AP2）：
+1. 功率与协议约束：TX Power 由 10 dBm 降至 7 dBm，降幅 3 dB（整数），严格满足硬约束（未低于 5 dBm）。配套 OBSS_PD 设为 -72 dBm，符合 `tx(7) ≤ 23 - (-72+82) = 13` 的协议耦合窗口。覆盖与 SLA 评估：本机关联 STA RSSI 为 -45.7 dBm，链路余量充裕。降功率 3 dB 后预期 STA 接收电平仍远高于 -75 dBm 安全底线，不会导致覆盖断裂或 SLA 违约。
+3. 全局协同收益：AP1 与 AP3 均出现严重 SLA 违约（丢包 98%/延迟 486ms），且三机互收信号强度集中在 -72~-81 dBm，同频碰撞概率高。全节点统一降功率可有效压制 OBSS 干扰、提升 SINR 并缓解重传堆积。本节点当前业务平稳，接受此折中方案有利于快速恢复全网基础吞吐，符合多 AP 协作优化目标。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 7 dBm（降幅 3 dB，整数合规），未触发 <5 dBm 硬约束；STA RSSI -45.7 dBm 余量充足，降功率不影响覆盖与 SLA；OBSS_PD -72 dBm 符合耦合公式。全节点降功率可有效压制 -72~-81 dBm 区间的强邻区干扰，帮助 AP1/AP3 恢复 SLA，本节点接受该折中以换取全局信道质量提升。"}
+```
+
+[1m[93mAP3[0m:
+结论先行：同意该提案。
+
+验算分析（针对 AP3）：
+1. 功率与协议约束：TX Power 由 10 dBm 降至 7 dBm，降幅 3 dB（严格整数合规），未触发 `<5 dBm` 硬约束。配套 OBSS_PD 设为 -72 dBm，满足协议耦合窗口 `tx(7) ≤ 23(-72+82) = 13`。
+2. 覆盖与 SLA 评估：本机关联 STA RSSI 为 -45.71 dBm，降功率 3 dB 后预期接收电平约 -48.71 dBm，远高于 -75 dBm 安全底线，CCA 余量充足，不会引发覆盖断裂或吞吐量骤降。
+干扰缓解收益：本机当前延迟高达 486 ms、丢包率 8.12%，核心诱因是邻区强干扰（AP1/AP2 RSSI 均约 -72 dBm）引发的信道碰撞与重传堆积。全节点统一降至 7 dBm 可有效压制 OBSS 干扰、提升 SINR，直接降低 MAC 层退避等待时间与重传概率，有助于快速恢复本机 SLA。
+
+```json
+{"agreed": true, "reason": "TX Power 降至 7 dBm（降幅 3 dB，整数合规），未触发 <5 dBm 硬约束；STA RSSI -45.71 dBm 降 3 dB 后仍远高于 -75 dBm 安全线，覆盖与 CCA 余量充足；OBSS_PD -72 dBm 符合耦合公式。当前高延迟(486ms)与丢包(8.12%)主要由邻区强干扰(-72dBm)导致，全节点降功率可显著压制 OBSS 碰撞、提升 SINR，直接改善本机排队时延与重传指标，方案安全且有效。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap2": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "ap3": {"tx_power_dbm": 7, "obss_pd_dbm": -72}, "_sr": {"concurrent_group": ["ap1", "ap2", "ap3"], "non_concurrent_aps": []}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[91mmax_retries_exceeded[0m turns=8 用时 143s
+[1m[34m[策略][0m co_sr
+[1m[34m[最终决策][0m None
+[1m[35mValidator[0m [1m[91m未通过[0m — 验证失败（策略=co_sr）：QoS 效果验收未通过：verdict=degraded, score=-0.1218, confidence=0.6090
+[1m[35mQoS[0m [1m[91m未通过[0m — verdict=degraded score=-0.121809 confidence=0.609

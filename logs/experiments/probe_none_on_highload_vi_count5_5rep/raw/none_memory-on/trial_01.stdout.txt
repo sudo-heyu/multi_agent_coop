@@ -1,0 +1,117 @@
+[run] runtime=ppio-stream model=qwen/qwen3.6-35b-a3b scene=sr server=http://127.0.0.1:5001 max_steps=8 tool_profile=none memory=on acceptance=qos
+执行推送端点：{'ap1': 'http://localhost:5003', 'ap2': 'http://localhost:5003', 'ap3': 'http://localhost:5003'}
+[State] 复用常驻 state server http://127.0.0.1:5001
+[Runtime] 使用 PPIO stream runtime（不依赖 OpenClaw gateway）
+[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）
+[Run] session_id=abdd8fda event_db=logs/experiments/probe_none_on_highload_vi_count5_5rep/db/none_memory-on.sqlite3
+[Trace] 连续遥测落盘：logs/state/telemetry_trace_20260710_032750_abdd8fda.jsonl
+
+[1m[96mAP1[0m:
+我是 AP1。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm，BE/VI 队列的竞争窗口 CWmin/CWmax 及 AIFSN 均维持在 31/63/7。
+
+感知指标：本端关联 STA 的 RSSI 为 -45.71 dBm，本地接入链路质量良好；本机扫描测得的邻居 AP 信号强度分别为：AP2 (-81.0 dBm)、AP3 (-72.0 dBm)，整体空间干扰处于中等偏弱水平。当前状态未上报信道利用率、TX Retries Ratio 及噪声底噪（Noise Floor）具体数值。
+
+业务质量：user 侧吞吐量为 0 Mbps，端到端延迟为 0 ms，丢包率高达 100%。
+
+STA QoE/SLA 反馈：关联 STA（sta_ap1_user）处于严重违规状态。该 STA 承载 medium 优先级的 best_effort 业务，当前吞吐量（0.0 Mbps）远低于 0.5 Mbps 的 SLA 下限，且丢包率（100%）大幅突破 5% 的安全阈值，导致业务完全中断。
+
+状态简述：本节点当前面临严重的业务阻断问题。尽管本地 STA 信号强度充足且邻居干扰电平不高，但数据面已完全失效，亟需通过多 AP 协作优化排查根因并恢复基础连通性。
+
+[1m[92mAP2[0m:
+我是 AP2。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm；BE 队列的竞争窗口 CWmin/CWmax 及 AIFSN 分别为 7/15/2。
+
+感知指标：本端关联 STA 的 RSSI 为 -45.71 dBm，本地接入链路质量良好；本机扫描测得的邻居 AP 信号强度分别为：AP1 (-81.0 dBm)、AP3 (-72.0 dBm)，整体空间干扰处于中等偏弱水平。当前状态未上报信道利用率、TX Retries Ratio 及噪声底噪（Noise Floor）具体数值。
+
+业务质量：user 侧吞吐量为 8.15 Mbps，端到端延迟为 11.76 ms，丢包率为 0%。
+
+STA QoE/SLA 反馈：关联 STA（sta_ap2_user）承载 medium 优先级的 best_effort 业务，当前吞吐量、延迟及丢包率均满足 SLA 要求，状态正常。
+
+状态简述：本节点运行平稳，STA 连接质量良好且业务指标符合预期，邻居干扰电平不高。
+
+[1m[93mAP3[0m:
+我是 AP3。以下是我的实时状态播报：
+
+MAC 与 EDCA 参数：当前发射功率（TX Power）为 10 dBm，BE/VI 队列的竞争窗口 CWmin/CWmax 及 AIFSN 均维持在 15/31/3。
+
+感知指标：本端关联 STA 的 RSSI 为 -45.71 dBm，本地接入链路质量良好；本机扫描测得的邻居 AP 信号强度分别为：AP1 (-71.96 dBm)、AP2 (-71.96 dBm)，整体空间干扰处于中等偏弱水平。当前状态未上报信道利用率、TX Retries Ratio 及噪声底噪（Noise Floor）具体数值。
+
+业务质量：user 侧吞吐量为 6.24 Mbps，端到端延迟为 484.70 ms，丢包率为 20.17%。
+
+STA QoE/SLA 反馈：关联 STA（sta_ap3_user）承载 medium 优先级的 best_effort 业务，当前状态处于严重违规。延迟（484.70 ms）远超 300 ms 上限，且丢包率（20.17%）大幅突破 5% 的安全阈值。
+
+状态简述：本节点面临严重的业务质量问题。尽管本地 STA 信号强度充足且邻居干扰电平不高，但高延迟和高丢包表明网络存在异常，亟需排查根因并优化。
+
+[1m[96mAP1[0m:
+【记忆锚定提案】召回到高质量 improved 历史案例，本轮直接复用该已验证动作以减少重复试错。
+quality=1.0, score=0.329489
+```json
+{
+  "ap1": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap2": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  },
+  "ap3": {
+    "CWmin": 15,
+    "CWmax": 31,
+    "AIFSN": 3,
+    "VI_CWmin": 7,
+    "VI_CWmax": 15,
+    "VI_AIFSN": 2
+  }
+}
+```
+
+[1m[92mAP2[0m:
+第一步：提案回顾
+本轮为会话内首次提案，由 AP1 发起。提案引用历史高质量经验，主张三台 AP 统一将 BE 队列 EDCA 参数调整为 CWmin=15, CWmax=31, AIFSN=3（同步包含 VI 队列参数）。此前无拒绝或反提案记录。
+
+第二步：针对 AP2 参数的验算与推理
+1. 优先级一致性校验：广播数据显示，AP1、AP2、AP3 的 `traffic_priority` 均为 medium。根据协议核心原则，同优先级节点之间无顺序约束，不应为了展示策略能力而强行制造参数梯度或统一值。提案缺乏 QoS 差异化驱动依据。
+2. 本机 SLA 与性能代价：AP2 关联 STA RSSI 为 -45.71 dBm，接入链路质量优秀。当前 EDCA 参数（CWmin/CWmax/AIFSN = 7/15/2）已稳定支撑 user 侧吞吐 8.15 Mbps、延迟 11.76 ms、丢包 0%，完全满足 SLA。提案要求将 AP2 参数放宽至 15/31/3，将显著增加随机退避时间与 AIFS 等待时长，直接削弱本节点信道竞争成功率，导致性能非必要降级。
+3. 异常根因匹配度：AP1 呈现 0 Mbps 吞吐与 100% 丢包，AP3 呈现 484.70 ms 超高延迟与 20.17% 丢包。此类极端数据面失效通常源于物理层链路中断、严重同频干扰或上层路由异常，而非 MAC 层竞争窗口设置问题。在此类故障面前调整 EDCA 参数不仅无法根治，还会误伤运行平稳的 AP2。协商收敛性：结合本地长期记忆，同类“全量统一拉平”策略在优先级一致且干扰中等偏弱（RSSI -72~-81 dBm）的场景下，历史改善置信度有限。协商已显现重复试错倾向。
+
+结论
+提案虽在 IEEE 802.11 数值范围上合规，但违背了“同优先级不强求统一/梯度”的协作原则，且会实质性损害 AP2 既有的优良 SLA 表现，同时缺乏对 AP1/AP3 底层异常的针对性。鉴于无更优替代路径且需避免无效轮转，选择弃权以推进系统收口。
+
+```json
+{"agreed": "abstain", "reason": "三节点 traffic_priority 均为 medium，按规范无需强制拉平或构建梯度。AP2 当前 EDCA 参数(7/15/2)配合优异 STA RSSI(-45.71dBm)已完美满足 SLA(吞吐8.15Mbps/延迟11.76ms/零丢包)。提案要求将 AP2 参数放宽至 15/31/3 会直接削弱本机竞争效率，造成不必要性能降级。此外，AP1 的 100% 丢包与 AP3 的 484ms 高延迟疑似物理层或链路层异常，非 EDCA 调参可解。综合考量本机 SLA 受损风险与策略针对性不足，且协商存在重复倾向，故弃权。"}
+```
+
+[1m[93mAP3[0m:
+【第一步】提案与反馈梳理
+本轮为会话内首次提案，由 AP1 发起，尚无正式拒绝记录。AP2 已发表弃权意见，核心原因为：① 三节点 traffic_priority 均为 `medium`，按规范无需强制拉平或构建梯度；② AP2 自身 SLA 表现优异，调参会造成不必要性能降级；③ AP1 的 100% 丢包与 AP3 的 484ms 高延迟疑似物理层或链路层异常，非 EDCA 调参可解；④ 协商已显现重复试错倾向，为避免无效轮转选择弃权。
+
+【第二步】针对 AP3 参数的验算与推理参数一致性校验：提案要求 AP3 的 BE 队列维持 `CWmin=15, CWmax=31, AIFSN=3`，这与本机当前实测参数完全一致，提案对本机 BE 竞争机制无实质改动。提案中补充的 VI 队列参数(7/15/2)对本机当前承载的 `best_effort` 业务无直接增益。
+2. SLA 违规根因匹配：本机关联 STA 呈现 484.70 ms 超高延迟与 20.17% 丢包，严重突破 SLA 阈值。在 STA RSSI(-45.71 dBm) 充足且邻居干扰中等偏弱的环境下，此类极端数据面失效高度指向物理层链路中断、深层拥塞或上层路由异常，而非 MAC 层竞争窗口设置不当。在此类故障面前，EDCA 参数调整既无法触及根因，盲目增大退避窗口还可能进一步拉长传输时延。
+优先级与协作原则：全网节点优先级同为 `medium`，缺乏驱动 Co-EDCA 差异化的 QoS 依据。提案采用“全量统一拉平”策略违背了“同优先级不强求统一”的协作原则，且已被 AP2 验证为缺乏针对性。
+4. 决策结论：本机参数未被实质性修改，策略对缓解本机高延迟/高丢包无效，且协商已进入重复循环。遵循克制与协作原则，为避免系统陷入无效轮转，选择弃权以推进收口。
+
+```json
+{"agreed": "abstain", "reason": "提案对 AP3 的 BE 参数(CWmin/CWmax/AIFSN=15/31/3)无实质改动。本机面临 484.70ms 延迟与 20.17% 丢包的严重 SLA 违规，根因疑似物理层或拥塞异常，非 EDCA 调参可解；维持或调整退避窗口均无法根治，且可能加剧延迟。三节点 traffic_priority 均为 medium，按规范无需强制拉平策略。结合 AP2 弃权意见及协商重复倾向，为避免无效轮转，选择弃权。"}
+```
+
+[1m[96mAP1[0m:
+{"ap1": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap2": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}, "ap3": {"CWmin": 15, "CWmax": 31, "AIFSN": 3, "VI_CWmin": 7, "VI_CWmax": 15, "VI_AIFSN": 2}}
+协商结束[90m------------------------------------------------------------------------[0m
+[1m[34m[结果][0m outcome=[1m[92msuccess[0m turns=8 用时 92s
+[1m[34m[策略][0m co_edca
+[1m[34m[最终决策][0m {'ap1': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap2': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}, 'ap3': {'CWmin': 15, 'CWmax': 31, 'AIFSN': 3, 'VI_CWmin': 7, 'VI_CWmax': 15, 'VI_AIFSN': 2}}
+[1m[34m[Executor][0m {'ap1': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'abdd8fda', 'strategy': 'co_edca', 'ap_id': 'ap1', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap3': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'abdd8fda', 'strategy': 'co_edca', 'ap_id': 'ap3', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}, 'ap2': {'ok': True, 'url': 'http://localhost:5003', 'payload': {'session_id': 'abdd8fda', 'strategy': 'co_edca', 'ap_id': 'ap2', 'params': {'CWmin': 4, 'CWmax': 5, 'AIFSN': 3, 'VI_CWmin': 3, 'VI_CWmax': 4, 'VI_AIFSN': 2}}, 'response': "{'aifsn': 3, 'cwmax': 31, 'cwmin': 15, 'vi_aifsn': 2, 'vi_cwmax': 15, 'vi_cwmin': 7}"}}
+[1m[35mValidator[0m [1m[92m通过[0m — 验证通过（策略=co_edca，所有 AP 参数合规）
+[1m[35mQoS[0m [1m[92m通过[0m — verdict=improved score=0.263215 confidence=0.75
