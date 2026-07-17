@@ -1,12 +1,11 @@
 """
-OpenClaw AP agent + 确定性阶段编排入口。
+纯 OpenClaw 架构入口 —— coordinator 触发阶段级快速协商。
 
 用法：
-  python run_openclaw.py --mode ns3 --scene sr      # ns-3 仿真（需 ns3_bridge 在跑）
-  python run_openclaw.py --mode real --ap-endpoints ap1=...
+  python run_openclaw.py --data-source ns3 --max-steps 20
+  python run_openclaw.py --data-source real --server http://localhost:5001
 
-前置：openclaw 已装、PPIO_API_KEY 已配置、已执行过 `bash openclaw/setup.sh`。
-mock 已从运行时移除，仅保留为测试夹具（tests/mock_scenes.py、tests/mock_feeder.py）。
+前置：openclaw 已装、ollama 运行、已执行过 `bash openclaw/setup.sh`。
 """
 import argparse
 import glob
@@ -23,16 +22,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "openclaw" / "mcp"))
 
-from openclaw.scenes import SCENE_NAMES, _parse_executor_endpoints
+from openclaw.scenes import _parse_executor_endpoints
+from state_server.ns3_bridge import _normalize as _normalize_ns3_record
+from state_server.ns3_bridge import _parse_line as _parse_ns3_line
+from state_server.ns3_bridge import _post as _post_ns3_state
+from state_server.ns3_bridge import _records_from_obj as _ns3_records_from_obj
+from state_server.ns3_scenario_matrix import BUSINESS_PROFILES, TOPOLOGIES, get_case
 from src.logger import SessionLogger
-from src.logger import DEFAULT_EVENT_DB
-from src.persistence import EventStore, build_checkpoint
 from src.console_style import (
     format_ap_name, strip_md, divider, section, status_label,
     status_ok, status_fail, dim, tool_prefix, tool_name,
 )
 from openclaw.mcp.tool_console import _format_tool_console
-from openclaw.mcp import tool_policy
 import orchestration as orch
 
 
@@ -43,6 +44,233 @@ OPENCLAW_BIN = (
 )
 OPENCLAW_PROFILE = os.environ.get("MULTIAP_PROFILE", "multiap")
 _STREAM_AT_LINE_START = True
+
+
+class Ns3LiveController:
+    """Own one ns-3 live process and bridge real TELEMETRY/APPLY traffic."""
+
+    def __init__(
+        self,
+        *,
+        root: str,
+        server: str,
+        scenario: str,
+        business_profile: str,
+        sim_time: float,
+        report_interval: float,
+        extra_args: list[str] | None = None,
+        include_case_extra_args: bool = True,
+    ) -> None:
+        self.root = Path(root).expanduser()
+        self.server = server.rstrip("/")
+        self.scenario = scenario
+        self.business_profile = business_profile
+        self.sim_time = sim_time
+        self.report_interval = report_interval
+        self.extra_args = extra_args or []
+        self.include_case_extra_args = include_case_extra_args
+        self.proc: subprocess.Popen | None = None
+        self._stop = threading.Event()
+        self._stdout_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        self._posted = 0
+        self._failed = 0
+
+    def start(self) -> None:
+        if not self.root.exists():
+            print(f"[错误] ns-3 根目录不存在：{self.root}")
+            sys.exit(1)
+        if self.include_case_extra_args:
+            case = get_case(self.scenario, self.business_profile)
+            args = case.ns3_args(
+                sim_time=self.sim_time,
+                report_interval=self.report_interval,
+                live=True,
+            )
+            expected = case.expected_strategy
+            reason = case.reason
+        else:
+            args = [
+                "--live=1",
+                f"--scenario={self.scenario}",
+                f"--businessProfile={self.business_profile}",
+                f"--simTime={self.sim_time:g}",
+                f"--reportInterval={self.report_interval:g}",
+            ]
+            expected = "direct"
+            reason = "direct ns-3 scan uses scenario-local parameters"
+        args.extend(self.extra_args)
+        scratch = "scratch/multiap_coop/multiap_coop " + " ".join(args)
+        cmd = ["./ns3", "run", scratch]
+        print(f"[ns3] 启动托管 live 仿真：{' '.join(cmd)}")
+        print(f"[ns3] 预期策略：{expected}；{reason}")
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                cwd=self.root,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as exc:
+            print(f"[错误] 无法启动 ns-3：{exc}")
+            sys.exit(1)
+        self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._pump_stderr, daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+
+    def _pump_stdout(self) -> None:
+        assert self.proc is not None and self.proc.stdout is not None
+        import requests
+
+        session = requests.Session()
+        session.trust_env = False
+        for raw in self.proc.stdout:
+            if self._stop.is_set():
+                break
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                obj = _parse_ns3_line(line)
+            except json.JSONDecodeError as exc:
+                self._failed += 1
+                print(f"[ns3] 忽略非法 JSON 输出：{exc}", file=sys.stderr)
+                continue
+            if obj is None:
+                continue
+            if not isinstance(obj, dict):
+                self._failed += 1
+                continue
+            records = _ns3_records_from_obj(obj)
+            if not records:
+                self._failed += 1
+                continue
+            for record in records:
+                payload = _normalize_ns3_record(record)
+                if _post_ns3_state(session, self.server, payload):
+                    self._posted += 1
+                else:
+                    self._failed += 1
+
+    def _pump_stderr(self) -> None:
+        assert self.proc is not None and self.proc.stderr is not None
+        for raw in self.proc.stderr:
+            if self._stop.is_set():
+                break
+            line = raw.rstrip()
+            if line:
+                print(f"[ns3] {line}")
+
+    def wait_until_ready(self, timeout_s: float) -> bool:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if self.proc is not None and self.proc.poll() is not None:
+                return False
+            if self._posted >= 3:
+                return True
+            time.sleep(0.1)
+        return self._posted >= 3
+
+    def apply_decision(self, decision: dict, strategy: str, session_id: str = "") -> dict[str, dict]:
+        if self.proc is None or self.proc.poll() is not None or self.proc.stdin is None:
+            return {
+                "ns3": {
+                    "ok": False,
+                    "url": "ns3://stdin",
+                    "payload": {"strategy": strategy, "decision": decision},
+                    "response": "ns-3 live process is not running",
+                }
+            }
+        if strategy not in ("co_sr", "co_edca"):
+            return {
+                "ns3": {
+                    "ok": False,
+                    "url": "ns3://stdin",
+                    "payload": {"strategy": strategy, "decision": decision},
+                    "response": "unsupported strategy for ns-3 APPLY",
+                }
+            }
+
+        results: dict[str, dict] = {}
+        for ap_id in ("ap1", "ap2", "ap3"):
+            params = decision.get(ap_id) or decision.get(ap_id.upper()) or {}
+            if not isinstance(params, dict):
+                params = {}
+            if strategy == "co_sr":
+                if "tx_power_dbm" not in params:
+                    results[ap_id] = {
+                        "ok": False,
+                        "url": "ns3://stdin",
+                        "payload": {"ap_id": ap_id, "strategy": strategy, "params": params},
+                        "response": "missing tx_power_dbm",
+                    }
+                    continue
+                command = f"APPLY {ap_id} tx={float(params['tx_power_dbm']):g}"
+            else:
+                missing = [k for k in ("CWmin", "CWmax", "AIFSN") if k not in params]
+                if missing:
+                    results[ap_id] = {
+                        "ok": False,
+                        "url": "ns3://stdin",
+                        "payload": {"ap_id": ap_id, "strategy": strategy, "params": params},
+                        "response": f"missing EDCA params {missing}",
+                    }
+                    continue
+                parts = [
+                    f"APPLY {ap_id}",
+                    f"cwmin={int(params['CWmin'])}",
+                    f"cwmax={int(params['CWmax'])}",
+                    f"aifsn={int(params['AIFSN'])}",
+                ]
+                for src, dst in (
+                    ("VI_CWmin", "vi_cwmin"),
+                    ("VI_CWmax", "vi_cwmax"),
+                    ("VI_AIFSN", "vi_aifsn"),
+                    ("vi_cwmin", "vi_cwmin"),
+                    ("vi_cwmax", "vi_cwmax"),
+                    ("vi_aifsn", "vi_aifsn"),
+                ):
+                    if src in params:
+                        parts.append(f"{dst}={int(params[src])}")
+                command = " ".join(parts)
+            try:
+                self.proc.stdin.write(command + "\n")
+                self.proc.stdin.flush()
+                results[ap_id] = {
+                    "ok": True,
+                    "url": "ns3://stdin",
+                    "payload": {
+                        "session_id": session_id,
+                        "ap_id": ap_id,
+                        "strategy": strategy,
+                        "params": params,
+                        "command": command,
+                    },
+                    "response": "queued to ns-3 stdin",
+                }
+            except OSError as exc:
+                results[ap_id] = {
+                    "ok": False,
+                    "url": "ns3://stdin",
+                    "payload": {"ap_id": ap_id, "strategy": strategy, "params": params},
+                    "response": str(exc),
+                }
+        return results
+
+    def stop(self) -> None:
+        self._stop.set()
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def _stream_write(text: str) -> None:
@@ -84,23 +312,6 @@ def _print_tool(name, args, result, dur_ms):
         _stream_write(prefix + line + "\n")
 
 
-def _print_proposal_precheck(proposer, proposal_num, strategy, result):
-    if result.get("approved"):
-        return
-    summary = strip_md(str(result.get("summary") or "提案预检未通过")).strip()
-    errors = result.get("global_errors") or []
-    with _STREAM_PRINT_LOCK:
-        prefix = "" if _STREAM_AT_LINE_START else "\n"
-        _stream_write(
-            prefix
-            + f"{status_label('Validator')} {status_fail('提案预检未通过')} "
-            + f"proposal#{proposal_num} {str(proposer).upper()} {strategy or 'unknown'}"
-            + f" — {summary}\n"
-        )
-        for error in errors[:3]:
-            _stream_write(f"  {status_fail('[FAIL]')} {strip_md(str(error)).strip()}\n")
-
-
 # ── coordinator 路径的实时对话流式输出（tail 会话 JSONL）──────────────────────
 # coordinator 子进程在 MCP 工具里写 JSONL；父进程 tail 这个文件，把广播/提案/投票/
 # 验证事件实时打到终端，使默认路径也能“边跑边看对话”（粒度=每个 AP 发言完成即显示）。
@@ -123,20 +334,17 @@ def _port_open(port: int) -> bool:
         return False
 
 
-def _require_state_server(url: str, mode: str) -> dict:
-    """强制复用常驻 state server，并校验数据源策略与运行模式一致。
+def _require_state_server(url: str) -> None:
+    """强制复用常驻 state server（serve.sh 起，仅接收 ns3/ap）。
     不在线则报错提示先 `bash openclaw/serve.sh start`，不再临时起。"""
     import requests
     try:
-        r = requests.get(f"{url}/health", timeout=2)
+        sess = requests.Session()
+        sess.trust_env = False
+        r = sess.get(f"{url}/health", timeout=2)
         if r.status_code == 200:
-            health = r.json()
-            if mode == "real" and health.get("allow_mock_source"):
-                print("[错误] real 模式要求 state server 拒收 mock/generated 数据。")
-                print("请执行：MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart")
-                sys.exit(1)
             print(f"[State] 复用常驻 state server {url}")
-            return health
+            return
     except Exception:
         pass
     print(f"[错误] state server 未在线：{url}")
@@ -173,13 +381,8 @@ def _http_event_sink(url: str):
     return _sink
 
 
-def _wait_state_ready(
-    server: str,
-    timeout_s: float = 1.0,
-    *,
-    required_source: str | None = None,
-) -> dict:
-    """等待三台 AP 数据齐全、新鲜，real 模式还要求 source=ap。"""
+def _wait_state_ready(server: str, timeout_s: float = 1.0) -> None:
+    """Wait until state server has a fresh row for every AP."""
     import requests
 
     deadline = time.time() + max(0.0, timeout_s)
@@ -192,64 +395,62 @@ def _wait_state_ready(
                 isinstance(data.get(ap), dict)
                 and data[ap].get("data") is not None
                 and not data[ap].get("stale")
-                and (
-                    required_source is None
-                    or str(data[ap]["data"].get("source", "ap")).lower() == required_source
-                )
                 for ap in ("ap1", "ap2", "ap3")
             ):
-                return data
+                return
         except Exception:
             pass
         if time.time() >= deadline:
-            source_hint = f" 且 source={required_source}" if required_source else ""
-            raise RuntimeError(
-                f"等待 AP 状态超时（{timeout_s:g}s）：要求 ap1/ap2/ap3 数据齐全、未过期{source_hint}"
-            )
+            return
         time.sleep(0.05)
 
 
-def _resume_state_compatible(stored: dict, latest_response: dict) -> tuple[bool, str]:
-    """Reject resume when topology, policy identity, or applied parameters changed."""
-    latest_raw = {
-        ap: (latest_response.get(ap) or {}).get("data") or {}
-        for ap in ("ap1", "ap2", "ap3")
-    }
-    latest = orch.apply_profile(latest_raw)
-    fields = ("tx_power_dbm", "cwmin", "cwmax", "aifsn", "traffic_priority")
-    for ap in ("ap1", "ap2", "ap3"):
-        if ap not in stored or ap not in latest:
-            return False, f"{ap} 状态缺失"
-        for field in fields:
-            if stored[ap].get(field) != latest[ap].get(field):
-                return False, (
-                    f"{ap}.{field} 已变化: checkpoint={stored[ap].get(field)!r}, "
-                    f"latest={latest[ap].get(field)!r}"
-                )
-        old_neighbors = set((stored[ap].get("neighbor_rssi_dbm") or {}).keys())
-        new_neighbors = set((latest[ap].get("neighbor_rssi_dbm") or {}).keys())
-        if old_neighbors != new_neighbors:
-            return False, f"{ap} 邻居拓扑已变化"
-    return True, "compatible"
+def _fetch_required_initial_state(server: str, data_source: str) -> dict:
+    """Read current telemetry and ensure it comes from ns-3 or real APs."""
+    import requests
+
+    expected_source = "ap" if data_source == "real" else "ns3"
+    try:
+        data = requests.get(f"{server.rstrip('/')}/state", timeout=2).json()
+    except Exception as exc:
+        print(f"[错误] 无法读取 state server 状态：{exc}")
+        sys.exit(1)
+
+    missing = []
+    stale = []
+    wrong_source = []
+    initial = {}
+    for ap_id in ("ap1", "ap2", "ap3"):
+        row = data.get(ap_id) or {}
+        payload = row.get("data")
+        if not isinstance(payload, dict):
+            missing.append(ap_id)
+            continue
+        if row.get("stale"):
+            stale.append(ap_id)
+        source = str(payload.get("source", "ap")).strip().lower()
+        if source != expected_source:
+            wrong_source.append(f"{ap_id}:{source or '<empty>'}")
+        initial[ap_id] = payload
+
+    if missing or stale or wrong_source:
+        print("[错误] 当前状态不能作为实验输入。")
+        if missing:
+            print(f"  缺少 AP 状态：{missing}")
+        if stale:
+            print(f"  状态已过期：{stale}")
+        if wrong_source:
+            print(f"  数据源不匹配，期望 source={expected_source!r}：{wrong_source}")
+        if data_source == "ns3":
+            print("请先启动 ns-3 bridge，让三台 AP 以 source='ns3' 持续 POST /state。")
+        else:
+            print("请先启动真实 AP reporter，让三台 AP 以 source='ap' 持续 POST /state。")
+        sys.exit(1)
+    return initial
 
 
 def _plot_pid_file() -> Path:
     return Path.home() / f".openclaw-{OPENCLAW_PROFILE}" / "run" / "plot.pid"
-
-
-def _validate_real_endpoints(endpoints: dict[str, str] | None) -> None:
-    """真实模式必须为三台 AP 全量配置执行端点。"""
-    expected = {"ap1", "ap2", "ap3"}
-    actual = {str(ap).lower() for ap in (endpoints or {})}
-    if actual != expected:
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
-        details = []
-        if missing:
-            details.append(f"缺少 {','.join(missing)}")
-        if extra:
-            details.append(f"未知 {','.join(extra)}")
-        raise ValueError("real 模式执行端点必须恰好覆盖 ap1/ap2/ap3" + (f"（{'；'.join(details)}）" if details else ""))
 
 
 def _plot_daemon_alive() -> bool:
@@ -314,200 +515,94 @@ def _drain_session_log(fh) -> bool:
 
 
 def main():
-    # 重定向/管道运行时保持行缓冲，避免结果和 [Outcome] 行长时间压在块缓冲里。
-    try:
-        sys.stdout.reconfigure(line_buffering=True)
-    except (AttributeError, ValueError):
-        pass
-    ap = argparse.ArgumentParser(description="多 AP 协商（OpenClaw AP agent / 确定性阶段接力）")
-    ap.add_argument("--mode", choices=["real", "ns3"], required=True,
-                    help="real 等待香蕉派 reporter（source=ap）；ns3 等待 ns3_bridge（source=ns3）。"
-                         "两种模式都只消费外部持续上报，不生成数据")
-    ap.add_argument("--scene", choices=sorted(SCENE_NAMES), default="sr",
-                    help="场景标签（仅用于日志/记忆归组，不影响数据来源）")
+    ap = argparse.ArgumentParser(description="多 AP 协商（纯 OpenClaw / 进程内阶段接力）")
+    ap.add_argument("--data-source", choices=["ns3", "real"], default="ns3",
+                    help="实验数据来源：ns3=ns-3 仿真上报；real=真实 AP 上报")
     ap.add_argument("--server", default="http://localhost:5001")
     ap.add_argument("--max-steps", type=int, default=24)
-    ap.add_argument("--state-wait", type=float, default=None,
-                    help="等待三台 AP 新鲜状态的最长秒数（默认 90）")
-    ap.add_argument("--max-validation-retries", type=int, default=3,
-                    help="Validator/QoS 验收失败后的重新提案次数上限")
+    ap.add_argument("--ns3-external", action="store_true",
+                    help="ns3 数据源下不启动托管 ns-3；改为要求外部 ns-3/bridge 已在线")
+    ap.add_argument("--ns3-root", default="/Users/heyu/Developer/ns-3.47",
+                    help="ns-3 根目录（默认: /Users/heyu/Developer/ns-3.47）")
+    ap.add_argument("--ns3-scenario", choices=TOPOLOGIES, default="line",
+                    help="托管 ns-3 拓扑场景")
+    ap.add_argument("--ns3-business-profile", choices=BUSINESS_PROFILES, default="live_bulk",
+                    help="托管 ns-3 业务画像")
+    ap.add_argument("--ns3-sim-time", type=float, default=300.0,
+                    help="托管 ns-3 live 仿真时长秒数")
+    ap.add_argument("--ns3-report-interval", type=float, default=1.0,
+                    help="托管 ns-3 TELEMETRY 采样间隔秒数")
+    ap.add_argument("--ns3-extra-arg", action="append", default=[],
+                    help="追加传给 ns-3 scratch 的参数，例如 --ns3-extra-arg=--seed=2")
     ap.add_argument("--use-coordinator", action="store_true",
                     help="走旧的 coordinator LLM 触发路径（默认已停用，仅兼容/对比用，"
                          "会多 ~60s 冷启动+2 次 LLM 调用）")
-    ap.add_argument("--observation-wait", type=float, default=None,
-                    help="最终 Validator/QoS 验收读取观测状态前等待秒数")
+    ap.add_argument("--observation-wait", type=float, default=0.0,
+                    help="最终 Validator 读取观测状态前等待秒数")
     ap.add_argument("--ap-endpoints", default="",
                     help="协商成功后推送决策的执行服务地址，格式 ap1=host:port,ap2=...")
     ap.add_argument("--ap-config", default="",
-                    help="从显式指定的 JSON 文件读取执行服务地址；默认不自动读取")
+                    help="从 JSON 文件读取执行服务地址；默认自动读取 ap_endpoints.json")
     ap.add_argument("--no-dashboard", action="store_true",
-                    help="不要求或推送到常驻 Dashboard")
+                    help="不启动可视化 Dashboard")
     ap.add_argument("--dashboard-port", type=int, default=5050)
     ap.add_argument("--no-academic-plot", action="store_true",
-                    help="不检查或复用常驻 Matplotlib 学术曲线窗口")
+                    help="不弹出 Matplotlib 学术曲线窗口")
     ap.add_argument("--plot-window", type=float, default=25.0)
     ap.add_argument("--plot-interval", type=float, default=1.0)
     ap.add_argument("--require-qwen80b", action="store_true",
                     help="强制要求 multiap profile 默认模型为 qwen80binstruct")
-    ap.add_argument("--allow-ollama", action="store_true",
-                    help="显式允许 multiap profile 使用本地 Ollama 模型；默认拒绝 ollama/... primary")
     ap.add_argument("--exit-after-run", action="store_true",
-                    help="兼容选项：real/ns3 模式协商结束后本就直接退出，评估窗口由常驻 harvester 结算")
-    ap.add_argument("--resume-run", default="",
-                    help="从 SQLite 中指定 run_id 的安全 negotiation checkpoint 恢复")
-    ap.add_argument("--context-budget-chars", type=int, default=14000,
-                    help="每个 AP 回合可注入的会话上下文字符预算（最小 2000）")
-    ap.add_argument("--context-recent-turns", type=int, default=6,
-                    help="上下文中优先保留原文的最近发言数（最小 2）")
-    ap.add_argument("--eval-windows", default="",
-                    help="决策生效后的效果评估窗口秒数，逗号分隔（如 60,300,900）；"
-                         "默认 ns3=10,30 / real=60,300,900；传 off 关闭")
-    ap.add_argument("--goal", default="",
-                    help="迭代模块：把本次协商登记为指定 goal_id 的下一次 attempt"
-                         "（目标经 memory_admin.py goal create 创建）")
-    ap.add_argument(
-        "--memory",
-        choices=["on", "off"],
-        default=os.environ.get("MULTIAP_MEMORY_MODE", "on"),
-        help="是否启用长期记忆召回/注入：on=启用；off=只保留本轮对话，不注入历史记忆",
-    )
-    ap.add_argument("--acceptance", choices=["validator", "qos"],
-                    default=os.environ.get("MULTIAP_ACCEPTANCE", "validator"),
-                    help="验收模式：validator=参数合法即成功；qos=下发后观测 QoS 必须 improved")
-    ap.add_argument(
-        "--tool-profile",
-        choices=list(tool_policy.PROFILES),
-        default=os.environ.get("MULTIAP_TOOL_PROFILE", "full"),
-        help=(
-            "AP 可见工具能力档位：none/no_tools=完全无工具；basic=基础状态/反馈/验算；"
-            "rich/full=完整工具；faulty=完整工具界面但返回错误结果；diagnostic=隐藏答案型 SR 工具；"
-            "validator_only=只保留状态/反馈/候选验算；state_only=只保留状态和 STA 反馈；"
-            "memory_challenge=粗粒度状态+弱验算，突出记忆作用"
-        ),
-    )
+                    help=argparse.SUPPRESS)
     args = ap.parse_args()
-    if args.context_budget_chars < 2000:
-        ap.error("--context-budget-chars 不能小于 2000")
-    if args.context_recent_turns < 2:
-        ap.error("--context-recent-turns 不能小于 2")
-    os.environ["MULTIAP_CONTEXT_BUDGET_CHARS"] = str(args.context_budget_chars)
-    os.environ["MULTIAP_CONTEXT_RECENT_TURNS"] = str(args.context_recent_turns)
-    os.environ["MULTIAP_TOOL_PROFILE"] = args.tool_profile
-    os.environ["MULTIAP_MEMORY_MODE"] = args.memory
 
-    goal = None
-    if args.goal:
-        if args.use_coordinator:
-            ap.error("--goal 当前只支持默认 structured_relay 路径")
-        store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-        try:
-            goal = store.get_goal(args.goal)
-        finally:
-            store.close()
-        if goal is None:
-            ap.error(f"未找到 goal_id: {args.goal}")
-        if goal["status"] != "active":
-            ap.error(f"目标状态为 {goal['status']}（{goal.get('status_reason') or '无原因'}），"
-                     "只有 active 目标可继续迭代")
-
-    resume_checkpoint = None
-    if args.resume_run:
-        if args.use_coordinator:
-            ap.error("--resume-run 当前只支持默认 structured_relay 路径")
-        store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-        try:
-            resume_checkpoint = build_checkpoint(store, args.resume_run)
-        finally:
-            store.close()
-        if resume_checkpoint is None:
-            ap.error(f"未找到 run_id: {args.resume_run}")
-        if not resume_checkpoint.can_resume:
-            ap.error(f"run 不可安全恢复: {resume_checkpoint.resume_reason}")
-        if resume_checkpoint.run.mode:
-            if resume_checkpoint.run.mode not in {"real", "ns3"}:
-                ap.error(f"checkpoint 的运行模式 {resume_checkpoint.run.mode!r} 已不受支持"
-                         "（mock 已从运行时移除），请启动新协商")
-            args.mode = resume_checkpoint.run.mode
-        if resume_checkpoint.run.scene:
-            args.scene = resume_checkpoint.run.scene
+    if args.data_source == "ns3" and not args.ns3_external and args.use_coordinator:
+        print("[错误] 托管 ns-3 闭环需要 direct structured_relay，不能使用 --use-coordinator。")
+        print("请去掉 --use-coordinator；外部自管 ns-3/bridge 才可使用 --ns3-external。")
+        sys.exit(1)
 
     os.environ["NO_PROXY"] = _merge_no_proxy(os.environ.get("NO_PROXY"))
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
-    allow_ollama = _ollama_allowed_from_env() or args.allow_ollama
-    if args.allow_ollama:
-        os.environ["MULTIAP_ALLOW_OLLAMA"] = "1"
-    _require_openclaw_config(
-        require_qwen80b=args.require_qwen80b,
-        allow_ollama=allow_ollama,
-    )
-
-    try:
-        eval_windows = _resolve_eval_windows(args.eval_windows, args.mode)
-    except ValueError as exc:
-        ap.error(f"--eval-windows 非法: {exc}")
-
-    os.environ["MULTIAP_SCENE"] = args.scene
-    observation_wait = (
-        args.observation_wait
-        if args.observation_wait is not None
-        else (_default_qos_acceptance_wait(args.mode) if args.acceptance == "qos" else 0.0)
-    )
 
     print(
-        f"[run_openclaw] scene={args.scene} server={args.server} "
-        f"max_steps={args.max_steps} tool_profile={args.tool_profile} "
-        f"memory={args.memory} acceptance={args.acceptance}",
+        f"[run_openclaw] data_source={args.data_source} server={args.server} "
+        f"max_steps={args.max_steps}",
         flush=True,
     )
 
+    ns3_controller = None
     executor_endpoints = _load_executor_endpoints(args.ap_config, args.ap_endpoints)
-    if args.mode == "real":
-        try:
-            _validate_real_endpoints(executor_endpoints)
-        except ValueError as exc:
-            ap.error(str(exc))
     if executor_endpoints:
         print(f"执行推送端点：{executor_endpoints}")
+    elif args.data_source == "ns3" and not args.ns3_external:
+        print("执行推送：托管 ns-3 stdin APPLY")
     else:
         print("执行推送：未配置（协商结果仅输出到控制台）")
 
     logger = None
     # 强制常驻：核心服务由 serve.sh 起好；不在线则报错提示先 `serve.sh start`，不再临时起。
-    _require_state_server(args.server, args.mode)
+    _require_state_server(args.server)
     _require_gateway(args.use_coordinator)
 
-    if args.mode == "real":
-        print("[State] real 模式：等待三台 AP reporter 真值（source=ap）")
-    else:
-        print("[State] ns3 模式：等待 ns-3 bridge 上报（source=ns3）")
-    wait_s = args.state_wait if args.state_wait is not None else 90.0
-    required_source = {"real": "ap", "ns3": "ns3"}.get(args.mode)
-    try:
-        ready_state = _wait_state_ready(
-            args.server,
-            wait_s,
-            required_source=required_source,
+    if args.data_source == "ns3" and not args.ns3_external:
+        ns3_controller = Ns3LiveController(
+            root=args.ns3_root,
+            server=args.server,
+            scenario=args.ns3_scenario,
+            business_profile=args.ns3_business_profile,
+            sim_time=args.ns3_sim_time,
+            report_interval=args.ns3_report_interval,
+            extra_args=args.ns3_extra_arg,
         )
-    except RuntimeError as exc:
-        print(f"[错误] {exc}")
-        if args.mode == "real":
-            print("请确认三台香蕉派 reporter 均在持续上报，且 source=ap。")
-        elif args.mode == "ns3":
-            print("请确认 state_server/ns3_bridge.py 正在运行，且 source=ns3。")
-        sys.exit(1)
-    if resume_checkpoint:
-        compatible, reason = _resume_state_compatible(
-            (resume_checkpoint.projection or {}).get("ap_state") or {},
-            ready_state,
-        )
-        if not compatible:
-            print(f"[错误] checkpoint 与当前网络状态不兼容：{reason}")
-            print("请启动新协商，不要恢复旧 run。")
+        ns3_controller.start()
+        if not ns3_controller.wait_until_ready(timeout_s=max(30.0, args.ns3_report_interval * 10.0)):
+            print("[错误] 托管 ns-3 未能及时产生三台 AP 的 TELEMETRY。")
+            ns3_controller.stop()
             sys.exit(1)
 
-    # 懒收割：上一轮协商登记的效果评估窗口若已到期，趁 state server 在线先结算，
-    # 让本轮提案检索到带真实效果结论的案例。
-    _harvest_due_evaluations(args.server)
+    _wait_state_ready(args.server, timeout_s=max(1.0, args.ns3_report_interval * 2.0))
+    initial_state = _fetch_required_initial_state(args.server, args.data_source)
+    profiled_initial_state = orch.apply_profile(initial_state)
 
     # Dashboard：强制复用常驻服务（serve.sh），事件经 HTTP /push 推给它。
     push_live = None
@@ -527,102 +622,52 @@ def main():
             print("[Academic Plot] 常驻窗口未在线（如需曲线：bash openclaw/serve.sh start 已含 plot）")
 
     orch.STATE_SERVER = args.server
+    effective_observation_wait = args.observation_wait
+    if ns3_controller is not None and effective_observation_wait <= 0:
+        effective_observation_wait = max(3.0, args.ns3_report_interval * 2.5)
+        print(f"[ns3] Validator 观测等待 {effective_observation_wait:g}s（等待 APPLY 后真实遥测）")
+
     t0 = time.time()
-    if not args.use_coordinator:
-        # 默认：进程内直接跑阶段接力，绕过 coordinator（省 ~60s 冷启动+2 次 LLM 调用）。
-        # coordinator 对协商逻辑无贡献，发言顺序固定在 structured_relay 内，详见 README。
-        logger = SessionLogger(
-            session_id=args.resume_run or None,
-            verbose=False,
-            event_sink=push_live,
-            mode=args.mode,
-            resume=bool(resume_checkpoint),
-        )
-        print(f"[Run] session_id={logger.session_id} event_db={os.environ.get('MULTIAP_EVENT_DB', str(DEFAULT_EVENT_DB))}")
-        initial_ap_state = None
-        if resume_checkpoint:
-            logger.session_resume({
-                "boundary": resume_checkpoint.boundary,
-                "projection_version": 1,
-            })
-        else:
-            # initial 快照/episodic 特征/评估基线都取自真实上报（ready_state 的 data 载荷）。
-            initial_ap_state = {
-                ap: ready_state[ap]["data"] for ap in ("ap1", "ap2", "ap3")
-            }
+    try:
+        if not args.use_coordinator:
+            # 默认：进程内直接跑阶段接力，绕过 coordinator（省 ~60s 冷启动+2 次 LLM 调用）。
+            # coordinator 对协商逻辑无贡献，发言顺序固定在 structured_relay 内，详见 README。
+            logger = SessionLogger(verbose=False, event_sink=push_live)
             logger.session_start(
-                model="openclaw-direct", scene=args.scene, ap_state=initial_ap_state
+                model="openclaw-direct",
+                scene=(
+                    f"ns3:{args.ns3_scenario}/{args.ns3_business_profile}"
+                    if ns3_controller is not None else args.data_source
+                ),
+                ap_state=profiled_initial_state,
             )
-        # 参数时间线：让 state server 把本 run 期间收到的每一帧上报连续落盘
-        # （协商中 + 决策生效后评估期都在范围内）；进程任何退出路径都停止 trace。
-        trace_path = _start_run_trace(args.server, str(logger.session_id))
-        logger.record_telemetry_trace("start", trace_path)
-        if trace_path:
-            print(f"[Trace] 连续遥测落盘：{trace_path}")
-            import atexit
-            atexit.register(_stop_run_trace, args.server)
-        resume_projection = None
-        if resume_checkpoint:
-            resume_projection = {
-                **(resume_checkpoint.projection or {}),
-                "boundary": resume_checkpoint.boundary,
-            }
-        goal_context = None
-        if goal is not None:
-            # I1：本次协商 run 登记为目标的下一次 attempt（恢复路径幂等复用）；
-            # I3：attempt 携带上次归因，作为目标上下文注入本轮提案。
-            from src.memory.goals import build_goal_context, register_attempt
-            goal_store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-            try:
-                attempt = register_attempt(goal_store, goal["goal_id"], str(logger.session_id))
-                if attempt is not None:
-                    goal_context = build_goal_context(goal_store, goal, attempt)
-            finally:
-                goal_store.close()
-            if attempt is not None:
-                print(f"[Goal] 目标 {goal['metric']}：attempt #{attempt['sequence']}"
-                      f"（预算 {goal['budget_attempts']} 次）")
-        try:
             result = orch.structured_relay(
-                max_validation_retries=args.max_validation_retries,
                 max_turns=args.max_steps,
                 on_event=None,
                 on_event_start=_print_event_stream_start,
                 on_event_chunk=_print_event_stream_chunk,
                 on_tool=_print_tool,
                 logger=logger,
-                observation_state_getter=lambda: orch.get_all_states(args.server),
-                observation_wait_seconds=observation_wait,
+                observation_state_getter=lambda: orch.apply_profile(orch.get_all_states(args.server)),
+                observation_wait_seconds=effective_observation_wait,
                 executor_endpoints=executor_endpoints,
-                resume_projection=resume_projection,
-                evaluation_windows=eval_windows,
-                initial_state=initial_ap_state,
-                goal_context=goal_context,
-                on_proposal_precheck=_print_proposal_precheck,
-                acceptance=args.acceptance,
+                decision_applier=(
+                    ns3_controller.apply_decision if ns3_controller is not None else None
+                ),
+                initial_state=initial_state,
             )
-        except BaseException as exc:
-            # 失败原因落盘（此前只在终端滚屏里）；run 保持 incomplete 可恢复。
-            import traceback as _tb
-            try:
-                logger.session_failed(
-                    f"{type(exc).__name__}: {exc}",
-                    traceback_text=_tb.format_exc(),
-                )
-                logger.close()
-            except Exception:
-                pass
-            raise
-    else:
-        result = _run_via_coordinator(
-            args.max_steps,
-            mode=args.mode,
-            scene=args.scene,
-            server=args.server,
-            observation_wait=observation_wait,
-            executor_endpoints=executor_endpoints,
-            eval_windows=eval_windows,
-        )
+        else:
+            _require_openclaw_config(require_qwen80b=args.require_qwen80b)
+            result = _run_via_coordinator(
+                args.max_steps,
+                scene=args.data_source,
+                server=args.server,
+                observation_wait=effective_observation_wait,
+                executor_endpoints=executor_endpoints,
+            )
+    finally:
+        if ns3_controller is not None:
+            ns3_controller.stop()
     dur = time.time() - t0
 
     print(divider())
@@ -639,136 +684,15 @@ def main():
     if v:
         flag = status_ok("通过") if v["approved"] else status_fail("未通过")
         print(f"{status_label('Validator')} {flag} — {v['summary']}")
-        qos = v.get("qos_acceptance") if isinstance(v, dict) else None
-        if isinstance(qos, dict):
-            qflag = status_ok("通过") if qos.get("approved") else status_fail("未通过")
-            score = (qos.get("deltas") or {}).get("score")
-            print(
-                f"{status_label('QoS')} {qflag} — verdict={qos.get('verdict')} "
-                f"score={score} confidence={qos.get('confidence')}"
-            )
     else:
         print(f"{status_label('Validator')} {dim('无可验收决策（协商未收敛或未解析出决策 JSON）')}")
 
-    run_id = logger.session_id if logger is not None else None
-    if goal is not None and run_id:
-        from src.memory.goals import record_attempt_result
-        goal_store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-        try:
-            attempt = record_attempt_result(
-                goal_store, str(run_id), outcome=result["outcome"],
-            )
-        finally:
-            goal_store.close()
-        if attempt is not None:
-            print(f"[Goal] attempt #{attempt['sequence']} 状态={attempt['status']}；"
-                  "目标进度在评估窗口结算后回填")
-    pending_eval = bool(eval_windows) and result["outcome"] == "success" and run_id
-    if pending_eval:
-        print(f"[Outcome] 效果评估窗口已登记（{eval_windows}s）；"
-              "到期后由常驻 harvester / 下次 run_openclaw 自动收割，或手动执行 "
-              f".venv/bin/python memory_admin.py evaluate --server {args.server}")
     # state server / dashboard / plot 均为 serve.sh 常驻服务，不由本进程管理，退出不动它们。
 
 
-def _resolve_eval_windows(spec: str, mode: str) -> tuple[float, ...] | None:
-    """解析评估窗口：CLI > 环境变量 > 按模式默认；off 关闭。"""
-    from src.memory import DEFAULT_WINDOWS, parse_windows
-    spec = (spec or os.environ.get("MULTIAP_EVAL_WINDOWS", "")).strip()
-    if spec.lower() == "off":
-        return None
-    if spec:
-        return parse_windows(spec)
-    return DEFAULT_WINDOWS[mode]
-
-
-def _default_qos_acceptance_wait(mode: str) -> float:
-    raw = os.environ.get("MULTIAP_QOS_ACCEPTANCE_WAIT", "").strip()
-    if raw:
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            pass
-    return 10.0 if mode == "ns3" else 60.0
-
-
-def _event_store_enabled() -> bool:
-    return os.environ.get("MULTIAP_EVENT_STORE", "1").lower() not in {
-        "0", "false", "no", "off"
-    }
-
-
-def _harvest_due_evaluations(server: str, run_id: str | None = None) -> list[dict]:
-    """结算到期评估窗口 + 放弃逾期太久的窗口；失败保持 pending 可重试，绝不阻塞协商。"""
-    if not _event_store_enabled():
-        return []
-    from src.memory import harvest_evaluations, induce_rules
-    store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-    try:
-        # 评估比较用全量原始遥测（含 iperf 吞吐/延迟/丢包），不套 agent 字段白名单。
-        outcome = harvest_evaluations(
-            store,
-            lambda: orch.get_all_states(server),
-            run_id=run_id,
-        )
-        # 有新反馈就刷新 L5 规律，让本轮提案读到最新统计归纳。
-        if outcome.get("collected"):
-            induce_rules(store)
-    finally:
-        store.close()
-    if outcome.get("error"):
-        print(f"[Outcome] 到期评估结算失败（保持 pending，稍后重试）：{outcome['error']}")
-    verdict_map = {
-        "improved": status_ok("实际改善"), "degraded": status_fail("实际恶化"),
-        "neutral": "无明显变化", "inconclusive": dim("数据不足"),
-    }
-    for item in outcome.get("collected", []):
-        deltas = item.get("deltas") or {}
-        print(f"[Outcome] run={item['run_id']} 窗口{item['window_label']} → "
-              f"{verdict_map.get(item['verdict'], item['verdict'])} "
-              f"(得分={deltas.get('score')} 置信度={item['confidence']})")
-    for item in outcome.get("abandoned", []):
-        print(f"[Outcome] run={item['run_id']} 窗口{item['window_label']} → "
-              f"{status_fail('已放弃')}（逾期未收割）")
-    return outcome.get("collected", [])
-
-
-def _has_pending_evaluations(run_id: str) -> bool:
-    if not _event_store_enabled():
-        return False
-    store = EventStore(os.environ.get("MULTIAP_EVENT_DB", str(DEFAULT_EVENT_DB)))
-    try:
-        return bool(store.list_evaluations(run_id, status="pending"))
-    finally:
-        store.close()
-
-
-def _start_run_trace(server: str, run_id: str) -> str | None:
-    """开启 state server 连续遥测 trace（按 run 关联文件名）；失败不阻塞协商。"""
-    import requests
-    try:
-        r = requests.post(
-            f"{server.rstrip('/')}/trace/start",
-            json={"session_id": run_id}, timeout=2,
-        )
-        if r.status_code == 200:
-            return (r.json() or {}).get("path")
-    except Exception:
-        pass
-    return None
-
-
-def _stop_run_trace(server: str) -> None:
-    import requests
-    try:
-        requests.post(f"{server.rstrip('/')}/trace/stop", timeout=2)
-    except Exception:
-        pass
-
-
 def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, str] | None:
-    # 必须显式给端点才推送：mock/演示默认无端点→跳过下发，避免对不可达的真实 AP
-    # 反复 8s 超时。真实 AP 模式用 --ap-endpoints 或 --ap-config config/ap_endpoints.json。
+    # 必须显式给端点才推送，避免对不可达的 AP 反复 8s 超时。
+    # 真实 AP 模式用 --ap-endpoints 或 --ap-config ap_endpoints.json。
     if config_arg:
         config_path = Path(config_arg)
         if not config_path.exists():
@@ -787,27 +711,20 @@ def _load_executor_endpoints(config_arg: str, endpoints_arg: str) -> dict[str, s
 def _run_via_coordinator(
     max_steps: int,
     *,
-    mode: str,
     scene: str,
     server: str,
     observation_wait: float,
     executor_endpoints: dict[str, str] | None,
-    eval_windows: tuple[float, ...] | None = None,
 ) -> dict:
     env = dict(os.environ)
-    if _ollama_allowed_from_env(env):
-        env.setdefault("OLLAMA_API_KEY", "ollama-local")
+    env.setdefault("OLLAMA_API_KEY", "ollama-local")
     env["NO_PROXY"] = _merge_no_proxy(env.get("NO_PROXY"))
     env["no_proxy"] = env["NO_PROXY"]
     env["MULTIAP_STATE_SERVER"] = server
     env["MULTIAP_SESSION_LOG"] = "1"
     env["MULTIAP_SCENE"] = scene
-    env["MULTIAP_MODE"] = mode
     env["MULTIAP_MODEL"] = env.get("MULTIAP_MODEL", "openclaw")
     env["MULTIAP_OBSERVATION_WAIT"] = str(observation_wait)
-    env["MULTIAP_EVAL_WINDOWS"] = (
-        ",".join(f"{w:g}" for w in eval_windows) if eval_windows else "off"
-    )
     if executor_endpoints:
         env["MULTIAP_EXECUTOR_ENDPOINTS"] = json.dumps(executor_endpoints, ensure_ascii=False)
     session_key = f"agent:coordinator:multiap-{scene}-{int(time.time())}"
@@ -877,39 +794,7 @@ def _merge_no_proxy(current: str | None) -> str:
     return ",".join(values)
 
 
-def _truthy_env(value: str | None) -> bool:
-    return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
-
-
-def _model_ref_uses_ollama(model_ref: str | None) -> bool:
-    return str(model_ref or "").strip().lower().startswith("ollama/")
-
-
-def _ollama_allowed_from_env(env: dict[str, str] | None = None) -> bool:
-    source = env if env is not None else os.environ
-    return (
-        _truthy_env(source.get("MULTIAP_ALLOW_OLLAMA"))
-        or _model_ref_uses_ollama(source.get("MULTIAP_MODEL_REF"))
-    )
-
-
-def _resolve_config_model_ref(primary: str | None, models: dict) -> str:
-    primary = str(primary or "").strip()
-    if not primary:
-        return ""
-    if "/" in primary:
-        return primary
-    for ref, spec in (models or {}).items():
-        if isinstance(spec, dict) and spec.get("alias") == primary:
-            return str(ref)
-    return primary
-
-
-def _require_openclaw_config(
-    require_qwen80b: bool = False,
-    *,
-    allow_ollama: bool = False,
-) -> None:
+def _require_openclaw_config(require_qwen80b: bool = False) -> None:
     if not Path(OPENCLAW_BIN).exists():
         print(f"[错误] 未找到 OpenClaw 可执行文件：{OPENCLAW_BIN}")
         print("请先安装 OpenClaw，或通过 OPENCLAW_BIN 指定路径。")
@@ -922,53 +807,34 @@ def _require_openclaw_config(
         print("请先运行：bash openclaw/setup.sh")
         sys.exit(1)
 
-    defaults = data.get("agents", {}).get("defaults", {})
-    primary = (defaults.get("model") or {}).get("primary")
-    models = defaults.get("models") or {}
-    resolved_primary = _resolve_config_model_ref(primary, models)
-    providers = data.get("models", {}).get("providers", {})
-    ppio_provider = providers.get("ppio") if isinstance(providers, dict) else None
-    ppio_key = ""
-    if isinstance(ppio_provider, dict):
-        ppio_key = str(ppio_provider.get("apiKey") or "").strip()
-
-    primary_is_ollama = _model_ref_uses_ollama(resolved_primary)
-    if primary_is_ollama and not allow_ollama:
-        print("[错误] 当前 multiap profile 默认模型是本地 Ollama，但运行入口默认禁止使用 Ollama。")
-        print(f"当前 primary={primary!r}（解析为 {resolved_primary!r}）。")
-        print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
-        print("如确实要使用本地 Ollama，请显式加 --allow-ollama，或设置 MULTIAP_ALLOW_OLLAMA=1。")
+    expected_mcp = (Path(__file__).resolve().parent / "openclaw" / "mcp" / "multiap_mcp.py").resolve()
+    mcp_conf = (((data.get("mcp") or {}).get("servers") or {}).get("multiap-tools") or {})
+    mcp_args = mcp_conf.get("args") or []
+    configured_mcp = Path(mcp_args[0]).expanduser().resolve() if mcp_args else None
+    if configured_mcp != expected_mcp:
+        print("[错误] OpenClaw multiap profile 的 MCP 工具未指向当前项目。")
+        print(f"  当前配置：{configured_mcp or '<missing>'}")
+        print(f"  期望配置：{expected_mcp}")
+        print("请运行：bash openclaw/setup.sh，然后 bash openclaw/serve.sh restart")
         sys.exit(1)
-
-    if not primary_is_ollama:
-        if not resolved_primary:
-            print("[错误] 当前 multiap profile 未配置默认回复模型。")
-            print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
-            sys.exit(1)
-        if not resolved_primary.startswith("ppio/"):
-            print("[错误] 当前 multiap profile 默认回复模型不是 PPIO API。")
-            print(f"当前 primary={primary!r}（解析为 {resolved_primary!r}）。")
-            print("请配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
-            sys.exit(1)
-        if not ppio_key:
-            print("[错误] 当前 multiap profile 缺少 PPIO provider/apiKey。")
-            print("请在环境变量或 .env 中配置 PPIO_API_KEY 后运行：bash openclaw/setup.sh")
-            sys.exit(1)
 
     if not require_qwen80b:
         return
 
+    defaults = data.get("agents", {}).get("defaults", {})
+    primary = (defaults.get("model") or {}).get("primary")
+    models = defaults.get("models") or {}
     alias_refs = {
         ref for ref, spec in models.items()
         if isinstance(spec, dict) and spec.get("alias") == "qwen80binstruct"
     }
-    ppio_models = (ppio_provider or {}).get("models", []) if isinstance(ppio_provider, dict) else []
+    ppio_models = data.get("models", {}).get("providers", {}).get("ppio", {}).get("models", [])
     has_ppio_80b = any(
         isinstance(m, dict)
         and (m.get("name") == "qwen80binstruct" or "80b" in str(m.get("id", "")).lower())
         for m in ppio_models
     )
-    primary_ok = primary == "qwen80binstruct" or resolved_primary in alias_refs
+    primary_ok = primary == "qwen80binstruct" or primary in alias_refs
     if not primary_ok or not has_ppio_80b:
         print("[错误] 当前 multiap profile 未配置为 qwen80binstruct 默认模型。")
         print(f"当前 primary={primary!r}，qwen80binstruct refs={sorted(alias_refs)!r}")

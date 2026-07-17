@@ -19,7 +19,7 @@
 
 **返回字段说明**：
 - `ok`：是否成功获取最新状态
-- `source`：状态来源，真实 AP 模式通常为 `state_getter`，mock 模式为 `current_snapshot`
+- `source`：状态来源，ns-3 实验为 `ns3`，真实 AP 为 `ap`
 - `ap_states`：最新的 `ap1` / `ap2` / `ap3` 全局状态
 
 ---

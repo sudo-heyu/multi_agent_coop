@@ -5,9 +5,6 @@ DGX Spark 协商完成后，通过 POST /apply 主动推送最终决策；
 本服务接收决策、应用参数、返回执行结果。
 
 用法：
-  # mock 模式（本地测试，不执行真实 iw 命令）
-  python state_server/executor.py --ap-id ap1 --mock
-
   # 真实模式（香蕉派上运行）
   python state_server/executor.py --ap-id ap1 --iface wlan0
 
@@ -30,7 +27,6 @@ app = Flask(__name__)
 # 由命令行参数填充
 _AP_ID: str = ""
 _IFACE: str = "wlan0"
-_MOCK:  bool = False
 
 # 最近一次执行记录，供 GET /status 查询
 _last_result: dict = {}
@@ -78,19 +74,27 @@ def _apply_edca(iface: str, ecwmin: int, ecwmax: int, aifsn: int) -> tuple[bool,
     return ok, out
 
 
-def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
+def apply_params(strategy: str, params: dict, iface: str) -> dict:
     """
     根据协商策略应用对应参数，返回执行结果摘要。
     """
+    if strategy not in ("co_sr", "co_edca"):
+        return {
+            "ok": False,
+            "details": {
+                "strategy": {
+                    "ok": False,
+                    "error": f"unsupported strategy {strategy!r}; only co_sr/co_edca are allowed",
+                }
+            },
+        }
+
     results: dict[str, dict] = {}
 
     if strategy == "co_sr":
         dbm = params.get("tx_power_dbm")
         if dbm is None:
             results["tx_power"] = {"ok": False, "error": "params 中缺少 tx_power_dbm"}
-        elif mock:
-            print(f"[mock] iw dev {iface} set txpower fixed {int(dbm * 100)} (={dbm} dBm)")
-            results["tx_power"] = {"ok": True, "value_dbm": dbm, "mock": True}
         else:
             ok, out = _apply_tx_power(iface, dbm)
             results["tx_power"] = {"ok": ok, "value_dbm": dbm, "output": out}
@@ -101,10 +105,6 @@ def apply_params(strategy: str, params: dict, iface: str, mock: bool) -> dict:
         aifsn = params.get("AIFSN") or params.get("aifsn")
         if any(v is None for v in (cwmin, cwmax, aifsn)):
             results["edca"] = {"ok": False, "error": "params 中缺少 CWmin/CWmax/AIFSN"}
-        elif mock:
-            # cwmin/cwmax 已是指数 n（发送端换算），直接下发。
-            print(f"[mock] hostapd_cli set_edca_params 0 {aifsn} {cwmin} {cwmax} 0")
-            results["edca"] = {"ok": True, "CWmin": cwmin, "CWmax": cwmax, "AIFSN": aifsn, "mock": True}
         else:
             ok, out = _apply_edca(iface, int(cwmin), int(cwmax), int(aifsn))
             results["edca"] = {"ok": ok, "CWmin": cwmin, "CWmax": cwmax, "AIFSN": aifsn, "output": out}
@@ -138,7 +138,7 @@ def apply():
     print(f"\n[executor] 收到决策推送 session={session_id} strategy={strategy}")
     print(f"params: {params}")
 
-    result = apply_params(strategy, params, _IFACE, _MOCK)
+    result = apply_params(strategy, params, _IFACE)
     result["ap_id"]      = _AP_ID
     result["session_id"] = session_id
     result["applied_at"] = datetime.now(timezone.utc).isoformat()
@@ -160,7 +160,7 @@ def status():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"ok": True, "ap_id": _AP_ID, "iface": _IFACE, "mock": _MOCK}), 200
+    return jsonify({"ok": True, "ap_id": _AP_ID, "iface": _IFACE}), 200
 
 
 # ------------------------------------------------------------------
@@ -168,7 +168,7 @@ def health():
 # ------------------------------------------------------------------
 
 def main():
-    global _AP_ID, _IFACE, _MOCK
+    global _AP_ID, _IFACE
 
     parser = argparse.ArgumentParser(description="AP 参数执行服务（香蕉派侧）")
     parser.add_argument("--ap-id", required=True, choices=["ap1", "ap2", "ap3"],
@@ -177,16 +177,12 @@ def main():
                         help="无线接口名称（默认 wlan0）")
     parser.add_argument("--port", type=int, default=5002,
                         help="监听端口（默认 5002）")
-    parser.add_argument("--mock", action="store_true",
-                        help="mock 模式：打印命令但不实际执行")
     args = parser.parse_args()
 
     _AP_ID = args.ap_id
     _IFACE = args.iface
-    _MOCK  = args.mock
 
-    mode = "mock" if _MOCK else f"iface={_IFACE}"
-    print(f"AP 执行服务启动 — ap_id={_AP_ID}  port={args.port}  {mode}")
+    print(f"AP 执行服务启动 — ap_id={_AP_ID}  port={args.port}  iface={_IFACE}")
     app.run(host="0.0.0.0", port=args.port, debug=False)
 
 

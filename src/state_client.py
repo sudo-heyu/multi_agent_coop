@@ -1,7 +1,8 @@
 """
 State server client for AP runtime metrics.
 
-The returned data is compatible with the AP_STATE mock shape used by run.py.
+The returned data comes from ns-3 telemetry (source="ns3") or real AP telemetry
+(source="ap").
 """
 import requests
 

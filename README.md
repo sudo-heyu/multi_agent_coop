@@ -1,8 +1,8 @@
-# Multi-AP 协商系统（PPIO Stream / OpenClaw Agent + 确定性 Python 编排）
+# Multi-AP 协商系统（纯 OpenClaw 架构）
 
 多台 Wi-Fi AP 通过 LLM Agent 自主协商，协调发射功率（Co-SR）和 MAC 退避参数（Co-EDCA），提升整体网络性能。
 
-**架构**：默认入口 `run.py` 使用 PPIO streaming API 直接驱动 `ap1 / ap2 / ap3` 三个 AP 回合；对照入口 `run_openclaw.py` 保留 OpenClaw Agent/gateway 路径。两者都在进程内调用同一个 `structured_relay` 完成确定性的阶段轮转，共用 AP 工作区、记忆/反思/迭代、工具、Validator、状态读取、执行下发和 Outcome 评估。`coordinator` agent 仅保留为 `run_openclaw.py --use-coordinator` 兼容路径，不参与默认运行。
+**架构**：托管层与编排入口均由 **OpenClaw** 运行——`coordinator / ap1 / ap2 / ap3` 是各自独立 workspace/session 的 OpenClaw agent；确定性计算/验算/状态/下发逻辑以 **MCP 工具**暴露给 agent 调用。
 
 **拓扑**：DGX Spark（运行 OpenClaw + 模型 provider + 状态服务器）+ 3 台香蕉派 AP。
 
@@ -12,216 +12,138 @@
 
 > 全部用项目 `.venv`（Python 3.11）；系统 python3 是 3.9、缺 `mcp` 包会失败。
 
-### 终端输入规则（先看）
-
-1. **推荐一行一条命令**。不要在 `.venv/bin/python` 后直接回车；否则会进入 Python 交互模式，提示符会变成 `>>>`。
-2. 如果已经看到 `>>>`，先输入 `exit()` 回车，或按 `Ctrl-D`，回到 `(base) ... %` 之后再执行命令。
-3. 路径不能拆开，例如 `/Users/heyu/Developer/ns-3.47` 必须连续写，不能分成 `/Users/heyu/` 和 `Developer/ns-3.47` 两行。
-4. 多行命令只有在每一行末尾放 `\` 才合法，且 `\` 后面不能有空格或其它字符。复制困难时优先用下面的“短命令版”。
-
 **0. 依赖（一次性）**
-
 ```bash
 pip install -r requirements.txt          # flask requests python-dotenv matplotlib mcp
 npm install -g openclaw                   # OpenClaw CLI
-# 默认回复模型：PPIO API（在 .env 写 PPIO_API_KEY=...）；未显式 opt-in 时禁止本地 Ollama
+# 模型二选一：PPIO 云端 qwen80binstruct（默认，在 .env 写 PPIO_API_KEY=...）/ 本机 ollama pull qwen3:14b
 ```
 
-**1. 一次性配置隔离 profile**（必须用 .venv 的 python；不影响用户默认 profile）
-
+**1. 一次性配置隔离 profile**（默认自动使用项目 `.venv`；不影响用户默认 profile）
 ```bash
-MULTIAP_PY="$PWD/.venv/bin/python" OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash openclaw/setup.sh
+OPENCLAW_BIN=/opt/homebrew/bin/openclaw bash openclaw/setup.sh
 # 写 ~/.openclaw-multiap/openclaw.json + 注册 MCP multiap-tools，末尾 config validate 通过即成功
 ```
 
-默认 profile 只写入 PPIO provider，且 `run_openclaw.py` 会拒绝 `ollama/...` 主模型。确实要对比本地 Ollama 时必须显式配置并显式运行：
+**2. ns-3 模式运行**（仿真实验数据必须由 ns-3 上报）
+
+> 先 `bash openclaw/serve.sh start` 拉起常驻服务（state server + gateway + Dashboard + 曲线窗），再跑 `run_openclaw.py`。默认 ns-3 路径会托管 live 仿真：读取 ns-3 `TELEMETRY`、写入 state server，并把最终决策通过 ns-3 stdin `APPLY` 写回仿真。状态服务器只接受 `source=ns3` 或 `source=ap`。
 
 ```bash
-MULTIAP_ALLOW_OLLAMA=1 MULTIAP_MODEL_REF=ollama/qwen3:14b \
-  MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh
-.venv/bin/python run_openclaw.py --mode ns3 --scene edca --allow-ollama
+# ① 常驻服务
+bash openclaw/serve.sh start
+
+# ② 触发协商；默认启动 /Users/heyu/Developer/ns-3.47 的 live ns-3 并写回 APPLY
+.venv/bin/python run_openclaw.py --data-source ns3 \
+  --ns3-scenario line --ns3-business-profile live_bulk \
+  --no-academic-plot --no-dashboard --max-steps 24
 ```
 
-**2. ns-3 仿真模式运行**（无需真实 AP；`--scene` 仅为日志/记忆归组标签）
+外部 ns-3/日志转发模式只用于调试：`--ns3-external` 配合 `state_server/ns3_bridge.py`。该模式仍要求输入来自真实 ns-3 输出，bridge 不生成、不扰动 QoS；但 stdin 写回只在默认托管 live ns-3 路径中自动完成。
 
-> 🚦 **mock 运行时模式已移除（2026-07）**：数据来源只有两种——ns-3 仿真（`--mode ns3`）或真实香蕉派（`--mode real`），`--mode` 必须显式指定。mock 场景与喂数器降级为测试夹具（`tests/mock_scenes.py`、`tests/mock_feeder.py`），仅供确定性单元测试使用。
-
-> 先 `bash openclaw/serve.sh start` 拉起常驻服务（state server + Dashboard + 曲线窗；OpenClaw 路径还会复用 gateway），再启动 ns-3 桥，最后触发协商。详见下方「后台常驻服务」。
-
-**短命令版（推荐，最不容易输错）**
-
-终端 1：启动常驻服务。
-
-```bash
-bash openclaw/serve.sh restart
-```
-
-终端 2：启动 ns-3 bridge。这个命令会使用默认值：`--ns3-dir /Users/heyu/Developer/ns-3.47`、`--state-server http://localhost:5001`、`--scenario line`、`--port 5003`。
-
-```bash
-.venv/bin/python state_server/ns3_bridge.py
-```
-
-看到 `[live] 实时模式启动` 后，这个终端保持运行，不要关闭。
-
-如果看到 `Address already in use` 或 `端口 5003 已被占用`，说明已有旧 bridge 占着端口。先查 PID：
-
-```bash
-lsof -nP -iTCP:5003 -sTCP:LISTEN
-```
-
-如果确认是旧的 `python` / `ns3_bridge.py` 进程，停止它：
-
-```bash
-kill <PID>
-```
-
-然后重新执行：
-
-```bash
-.venv/bin/python state_server/ns3_bridge.py
-```
-
-终端 3：启动协商。`config/ap_endpoints.json` 已经把 ap1/ap2/ap3 都指向 `http://localhost:5003`，所以不用手写长串 `--ap-endpoints`。
-
-```bash
-.venv/bin/python run.py --mode ns3 --scene sr --ap-config config/ap_endpoints.json
-```
-
-**需要改 ns-3 拓扑时**
-
-直线拓扑是默认值；三角拓扑才需要显式写：
-
-```bash
-.venv/bin/python state_server/ns3_bridge.py --scenario triangle
-```
-
-**需要对照 OpenClaw 路径时**
-
-```bash
-.venv/bin/python run_openclaw.py --mode ns3 --scene sr --ap-config config/ap_endpoints.json
-```
-
-**长命令版（仅在需要显式覆盖参数时使用）**
-
-```bash
-.venv/bin/python state_server/ns3_bridge.py \
-  --ns3-dir /Users/heyu/Developer/ns-3.47 \
-  --state-server http://localhost:5001 \
-  --scenario line \
-  --port 5003
-```
-
-```bash
-.venv/bin/python run.py --mode ns3 --scene sr \
-  --ap-endpoints ap1=localhost:5003,ap2=localhost:5003,ap3=localhost:5003
-```
-
-`run.py` 与 `run_openclaw.py` 并行存在：前者默认使用 PPIO streaming chat/completions 直接驱动 AP 回合；后者保留 OpenClaw agent/gateway 路径。两者共用 `structured_relay` 会话编排、AP 工作区、短期/长期记忆、反思/迭代、工具实现、Validator、Executor、Dashboard 事件和 Outcome 评估。
-
-> 🚦 **coordinator 已默认停用（2026-06）**：两个入口都默认**进程内直接跑阶段接力**（`structured_relay`），
+> 🚦 **coordinator 已默认停用（2026-06）**：`run_openclaw.py` 现在默认**进程内直接跑阶段接力**（`structured_relay`），
 > 不再启动 coordinator LLM agent。原因：coordinator 对协商**零功能贡献**——发言顺序（广播 ap1→ap2→ap3、
 > ap1 提案、ap2/ap3 投票、ap1 收口决策、反对即接管）全部固定在 `orchestration.py` 的 `structured_relay` 里，
 > coordinator 只是用 `--local` 冷启动一个 LLM 去调一次 `run_fast_negotiation` 并回显结果，平白多出
-> **~60s（冷启动 ~13s + 2 次 LLM 调用）**。需要回到旧 coordinator 路径做对比时使用 `run_openclaw.py --use-coordinator`（见下方 §3）。
+> **~60s（冷启动 ~13s + 2 次 LLM 调用）**。需要回到旧路径做对比时加 `--use-coordinator`（见下方 §3）。
 
 **3. （旧路径，已停用）直接触发 coordinator**（仅做对比/调试用；默认路径无需此步）
-
 ```bash
 # 经薄启动器回退到 coordinator 路径：
-.venv/bin/python run_openclaw.py --mode ns3 --scene edca --use-coordinator
+.venv/bin/python run_openclaw.py --data-source ns3 --use-coordinator
 # 或不经启动器手动触发 coordinator：
-NO_PROXY=localhost,127.0.0.1,::1 openclaw --profile multiap agent --local --agent coordinator \
+OLLAMA_API_KEY=ollama-local NO_PROXY=localhost,127.0.0.1,::1 \
+  openclaw --profile multiap agent --local --agent coordinator \
   -m "开始协商，请直接调用 run_fast_negotiation 控制总耗时" --json
 ```
 
 **4. 真实 AP 模式**
-
 ```bash
-# DGX：以真实数据策略启动常驻服务（state server 拒收 mock/generated）
-MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
-
-# 各香蕉派：启动 reporter 和 executor（ap-id/地址按机器修改）
-.venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001
-.venv/bin/python state_server/executor.py --ap-id ap1 --port 5002
-
-# DGX：触发协商并明确配置执行端点
-.venv/bin/python run.py --mode real --server http://localhost:5001 \
+.venv/bin/python state_server/server.py                                               # ① 状态服务器（启动一次）
+.venv/bin/python state_server/reporter.py --ap-id ap1 --server http://<DGX_IP>:5001    # ② 各香蕉派上报（ap1/ap2/ap3）
+.venv/bin/python run_openclaw.py --data-source real --server http://localhost:5001 \
   --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002        # ③ 触发并下发决策
-#  或 --ap-config config/ap_endpoints.json（须显式指定；不再自动读取，避免误推到不可达 AP 而 8s 超时）
+#  或 --ap-config ap_endpoints.json（须显式指定；不再自动读取）
 ```
-
-`--mode real` 等待 ap1/ap2/ap3 均有未过期的 `source=ap` 状态，并强制要求三个 executor 端点；`--mode ns3` 等待 `source=ns3`。两种模式都不生成数据。若 state server 允许 mock 数据源，real 模式启动器会拒绝继续并提示按真实策略重启服务。
 
 **测试**
-
 ```bash
-.venv/bin/python -m unittest discover -s tests          # 当前确定性套件 277/277
+.venv/bin/python -m unittest discover -s tests          # 确定性套件 16/16
 ```
 
-常用开关：`--mode {real,ns3}`（必填） · `--scene {sr,edca}`（仅标签） · `--state-wait <秒>` · `--no-academic-plot` · `--no-dashboard` · `--observation-wait <秒>` · `--ap-config config/ap_endpoints.json`。
-OpenClaw 对照入口额外支持：`--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--allow-ollama`（仅显式本地模型对比）。
-两个入口内部都会设置 `NO_PROXY`；只有 `run_openclaw.py` 显式 `--allow-ollama` / `MULTIAP_ALLOW_OLLAMA=1` 时才会给子进程补 `OLLAMA_API_KEY=ollama-local`。
+常用开关：`--data-source {ns3,real}` · `--ns3-scenario {line,triangle,asym}` · `--ns3-business-profile {live_bulk,mixed_qoe,deadline_backup,uniform}` · `--ns3-external` · `--no-academic-plot` · `--no-dashboard` · `--use-coordinator`（回退到旧 coordinator 触发路径，仅对比用） · `--require-qwen80b` · `--observation-wait <秒>`。
+`run_openclaw.py` 内部已自动设 `OLLAMA_API_KEY` / `NO_PROXY`，第 2、4 节无需手动加；仅第 3 节直调 `openclaw` 时需要带上。
 
 ### 后台常驻服务（一条命令全开，协商零临时启动）
 
-OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server；state server / Dashboard / 曲线窗若每次临时起也有启动开销。`serve.sh` 把**所有可常驻的服务绑成一条命令**。`run.py` 复用 state server / Dashboard / 曲线窗；`run_openclaw.py` 还会复用 OpenClaw gateway。OpenClaw 已为 `multiap` profile 注册 launchd 网关服务 `ai.openclaw.multiap`（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。
+OpenClaw 的 `agent --local` 每个回合都冷启动一份 runtime + MCP server；state server / Dashboard / 曲线窗若每次临时起也有启动开销。`serve.sh` 把**所有可常驻的服务绑成一条命令**，`run_openclaw.py` 强制复用它们——协商时零临时服务启动。OpenClaw 已为 `multiap` profile 注册 launchd 网关服务 `ai.openclaw.multiap`（端口 18789，`RunAtLoad + KeepAlive`，开机自启/崩溃自拉起，本身就是长期服务）。
 
 ```bash
-bash openclaw/serve.sh start     # state server 以真实数据策略启动（拒收 mock/generated；ns3 来源直接放行）
-bash openclaw/serve.sh status    # 查看五者状态（state / gateway / dashboard / harvester / plot）
-bash openclaw/serve.sh stop      # 停曲线/State/Dashboard/harvester；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
+bash openclaw/serve.sh start     # 一条命令全开：state server(5001) + gateway(18789) + Dashboard(5050) + 学术曲线窗
+bash openclaw/serve.sh status    # 查看四者状态
+bash openclaw/serve.sh stop      # 停曲线/State/Dashboard；gateway 由 launchd 托管不强停（如需停用 launchctl bootout）
 bash openclaw/serve.sh restart   # 改过 setup.sh/MCP 注册/配置后重载 gateway（否则缓存旧 MCP 连接，AP 调工具报 "tool isn't available"）
 ```
 
-- **先 `serve.sh start` 再跑协商入口**：`run.py` 启动时要求 state server 在线；默认启用 Dashboard 时也要求 Dashboard 在线。`run_openclaw.py` 额外要求 gateway 在线，保证 AP 回合走热 gateway。`--no-dashboard` 可主动跳过 Dashboard；`run_openclaw.py --use-coordinator` 路径走 `--local`，不检测 gateway。
+- **先 `serve.sh start` 再跑 `run_openclaw.py`**：默认路径（`structured_relay`）启动时强制检测 state server / gateway / Dashboard 在线，任一不在线即报错提示先 `serve.sh start`，不再临时起兜底——保证协商走热 gateway、Dashboard 实时可见。`--no-dashboard` 可主动跳过 Dashboard；`--use-coordinator` 路径走 `--local`，不检测 gateway。
 - gateway 端口取自 profile 配置 `gateway.port`（默认 18789）；`serve.sh` 优先复用 launchd 服务，缺失时才 nohup 兜底，**不另起竞争 gateway、不碰其它 profile**。`drive_ap` 运行时若 gateway 连接失败会回退 `--local`（保底）。
-- **学术曲线窗（matplotlib）也常驻**：`serve.sh start` 起一个常驻窗口，协商入口检测到即复用（省每次 matplotlib 冷启动 ~2-3s），未在线则跳过提示。无桌面/SSH 环境自动跳过；`--no-academic-plot` 可主动关。
-- **Dashboard 实时对话流**：常驻 Dashboard 是独立进程，协商入口把会话事件经 HTTP `POST /push` 推给它，再由 SSE 广播到浏览器——不再依赖进程内 `push_event`，常驻 Dashboard 也能看到实时对话/投票/决策（终端不再有 `Serving Flask app` 噪声）。
-- **Outcome 收割器常驻**：`serve.sh start` 拉起 `state_server/outcome_harvester.py`，每 `MULTIAP_HARVEST_INTERVAL`（默认 30s）结算到期的效果评估窗口、放弃逾期太久的窗口——real 模式长评估窗口（可达 15 分钟）不再依赖下次协商即可自动结算，是记忆效果反馈在真实部署下可靠的前提。
-- state server 一律以真实数据策略启动（不带 `--allow-mock`，该 flag 仅供测试进程内使用）。数据新鲜度由 ns-3 桥或香蕉派 reporter 维持。
+- **学术曲线窗（matplotlib）也常驻**：`serve.sh start` 起一个常驻窗口，`run_openclaw.py` 检测到即复用（省每次 matplotlib 冷启动 ~2-3s），未在线则跳过提示。无桌面/SSH 环境自动跳过；`--no-academic-plot` 可主动关。
+- **Dashboard 实时对话流**：常驻 Dashboard 是独立进程，`run_openclaw.py` 把会话事件经 HTTP `POST /push` 推给它，再由 SSE 广播到浏览器——不再依赖进程内 `push_event`，常驻 Dashboard 也能看到实时对话/投票/决策（终端不再有 `Serving Flask app` 噪声）。
+- `serve.sh` 起的是裸 state server，只接受 `source=ns3` 或 `source=ap`。数据新鲜度由托管 ns-3 live、外部 ns-3 bridge 或香蕉派 reporter 维持。
 - **提速预期**：省掉每回合 runtime/provider/MCP 冷启动 + 各服务临时启动；**不缩短模型推理本身**（每回合 ~13s 不变），整体收益取决于冷启动占比。
 
 ---
 
 ## 架构总览
 
-```text
-run_openclaw.py（默认入口）
-  └─ structured_relay（Python 确定性阶段机制）
-       ├─ OpenClaw gateway → ap1 / ap2 / ap3
-       │                         └─ multiap-tools MCP → src/tools + state server
-       ├─ src/validator.py
-       ├─ SessionLogger → JSONL / Dashboard
-       └─ 可选 executor /apply
-
---use-coordinator 兼容入口
-  └─ coordinator agent → run_fast_negotiation MCP → 同一个 structured_relay
+```
+┌──────────────────────────────────────────────────────────────┐
+│ OpenClaw（隔离 profile: multiap，~/.openclaw-multiap/）        │
+│                                                              │
+│  托管层 agents：ap1 / ap2 / ap3（coordinator 默认停用）       │
+│    模型：PPIO qwen80binstruct（默认）/ ollama qwen3:14b（回退）│
+│                                                              │
+│  入口（默认）：run_openclaw.py 进程内直接调 structured_relay  │
+│    └─ 固定顺序驱动 ap1/ap2/ap3，免 coordinator 冷启动开销      │
+│  coordinator（LLM，已停用，--use-coordinator 回退）           │
+│    └─ 旧路径：调 MCP run_fast_negotiation 一次性推进协议       │
+│                                                              │
+│  MCP 工具服务 multiap-tools（openclaw/mcp/multiap_mcp.py）：   │
+│    get_latest_ap_states / analyze_sr_interference /          │
+│    compute_sr_feasible_ranges / select_sr_concurrent_groups /│
+│    evaluate_sr_candidate / rank_sr_candidates /              │
+│    validate_edca_proposal（AP 可调用）                        │
+│    run_fast_negotiation                                      │
+│      （仅 coordinator，AP 经 per-agent tools.deny 禁用）       │
+└──────────────────────────────────────────────────────────────┘
+        │ MCP stdio                       │ openclaw agent --local
+        ▼                                 ▼
+  src/tools{sr,edca} · validator ·   state_server（Flask）
+  profile · state_client            ← ns3_bridge / reporter
 ```
 
 编排「机制层」（阶段指令、驱动 AP、计票、反提案接管、Validator 重试与终止）实现在
-`openclaw/mcp/orchestration.py` 的 `structured_relay`。默认由 `run_openclaw.py` 直接调用；仅兼容 coordinator 路径通过 MCP 工具 `run_fast_negotiation` 间接调用。
+`openclaw/mcp/orchestration.py` 的 `structured_relay`，由 `run_fast_negotiation` 工具内部调用。
 
 ---
 
-## 两个仿真场景
+## 实验数据源
 
-| 场景    | `--scene` | 触发条件                 | 协商路径               |
-| ------- | ----------- | ------------------------ | ---------------------- |
-| Co-SR   | `sr`      | 邻居 RSSI 偏强（强干扰） | 降低发射功率           |
-| Co-EDCA | `edca`    | 邻居弱、优先级/QoS 分化  | 调整 CWmin/CWmax/AIFSN |
+系统只保留两类数据源：
 
-路径由提案 AP 基于实时状态与工具验算自主选择，不按 AP 编号或固定业务身份预设。
-`--scene` 仅作日志/记忆归组标签（标签定义见 `openclaw/scenes.py` 的 `SCENE_NAMES`）；
-当前只保留 `sr` 与 `edca`。若实时证据同时出现干扰和 EDCA 竞争问题，编排层会选择主导问题先处理，不再生成联合策略。
-对应的合成初始状态数据已降级为测试夹具，见 `tests/mock_scenes.py`。
+| 来源 | `--data-source` | `/state` source | 用途 |
+|------|-----------------|-----------------|------|
+| ns-3 | `ns3` | `ns3` | 仿真实验、tool 分级对比 |
+| 真实 AP | `real` | `ap` | 香蕉派实测 |
+
+协商路径由提案 AP 基于实时状态与工具验算自主选择，不按 AP 编号或固定业务身份预设。
 
 ---
 
 ## 协商流程（四阶段，由 `structured_relay` 编排）
 
 ```
-阶段 1 广播   ap1/ap2/ap3 并发生成回复，再按 ap1→ap2→ap3 顺序记录和展示
+阶段 1 广播   ap1→ap2→ap3 依次播报自身实测数据（只报己方数据 + 本机扫描的邻居 RSSI）
     ↓
 阶段 2 提案   首轮固定由 ap1 发起、自主选路；提案前必须 get_latest_ap_states，
               Co-SR 先 analyze_sr_interference→select_sr_concurrent_groups，提交前自检
@@ -231,22 +153,22 @@ run_openclaw.py（默认入口）
     ↓
 （如未通过）  Validator 未过则写回原因，从 ap1 重提案，最多 3 轮
     ↓
-阶段 4 决策   系统直接采用已获通过的提案 JSON（不再调用 LLM）→ Validator 验算 → 通过则下发
+阶段 4 决策   提案方输出最终 JSON → 确定性 Validator 验算 → 通过则下发执行
 ```
 
 终止保证：重投上限 `MAX_VOTE_ROUNDS=3`、验证重试 3、单轮最大发言 30，不收敛时干净退出。
 
 ### Agent 可调用的 MCP 工具
 
-| 工具名                          | 阶段              | 作用                                             |
-| ------------------------------- | ----------------- | ------------------------------------------------ |
-| `get_latest_ap_states`        | 提案 / 投票       | 获取全部 AP 最新参数状态；提案或投票前必须先调用 |
-| `analyze_sr_interference`     | Co-SR 提案        | 分析强/中等干扰链路、主要干扰源和受害 AP         |
-| `compute_sr_feasible_ranges`  | Co-SR 提案        | 计算每个 AP 的 TX Power 可行区间                 |
-| `select_sr_concurrent_groups` | Co-SR 提案        | 选择空间复用并发组并给出组内推荐功率             |
-| `evaluate_sr_candidate`       | Co-SR 提案 / 投票 | 评估候选功率是否满足 CCA/SINR/STA-RSSI 约束      |
-| `rank_sr_candidates`          | Co-SR 提案        | 对多个候选功率方案按目标排序                     |
-| `validate_edca_proposal`      | 提案 / 投票       | 验算 EDCA 参数合法性、优先级单调性与拥塞匹配度   |
+| 工具名 | 阶段 | 作用 |
+|--------|------|------|
+| `get_latest_ap_states` | 提案 / 投票 | 获取全部 AP 最新参数状态；提案或投票前必须先调用 |
+| `analyze_sr_interference` | Co-SR 提案 | 分析强/中等干扰链路、主要干扰源和受害 AP |
+| `compute_sr_feasible_ranges` | Co-SR 提案 | 计算每个 AP 的 TX Power 可行区间 |
+| `select_sr_concurrent_groups` | Co-SR 提案 | 选择空间复用并发组并给出组内推荐功率 |
+| `evaluate_sr_candidate` | Co-SR 提案 / 投票 | 评估候选功率是否满足 CCA/SINR/STA-RSSI 约束 |
+| `rank_sr_candidates` | Co-SR 提案 | 对多个候选功率方案按目标排序 |
+| `validate_edca_proposal` | 提案 / 投票 | 验算 EDCA 参数合法性、优先级单调性与拥塞匹配度 |
 
 coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotiation`。
 工具实现见 `openclaw/mcp/multiap_mcp.py`，复用 `src/tools/`、`src/validator.py` 等保留的确定性 Python。
@@ -257,55 +179,31 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 
 ```
 .
-├── run_openclaw.py               # 主入口：准备场景 → 复用 serve.sh 常驻服务 → 进程内直跑 structured_relay；--goal 进入目标驱动迭代
-├── memory_admin.py               # 管理 CLI：run/案例/评估/规律/隔离区/矛盾账本/goal 查询与维护
-├── config/
-│   └── ap_endpoints.json         # 真实 AP 执行端点配置（--ap-config 显式传入）
-├── scripts/                      # 独立运维/实验脚本（不依赖 src，可单独拷到现场）
-│   ├── push_edca.py              # 手动向香蕉派下发 EDCA 参数
-│   ├── push_txpower.py           # 手动向香蕉派下发 TxPower
-│   ├── log_throughput.py         # 轮询 state server 记录用户吞吐 CSV
-│   └── start_server.sh           # 只拉 state server 的调试脚本（日常用 serve.sh）
-├── openclaw/                     # 智能体运行时
-│   ├── setup.sh                  # 配置隔离 profile multiap（providers + agent + 工具限制 + MCP 注册）
-│   ├── serve.sh                  # 常驻服务生命周期：state/gateway/Dashboard/学术曲线/harvester
-│   ├── scenes.py                 # 场景标签 + 配套服务启动器
+├── run_openclaw.py               # 薄启动器：读取 ns-3/真实遥测 → 复用常驻服务 → 进程内直跑 structured_relay
+├── openclaw/
+│   ├── setup.sh                  # 配置隔离 profile multiap（providers + 4 agent + 工具限制 + MCP 注册）
+│   ├── scenes.py                 # 通用执行端点解析 helper
 │   ├── mcp/
-│   │   ├── multiap_mcp.py        # stdio MCP 工具服务（计算/验算/状态/编排/下发工具）
+│   │   ├── multiap_mcp.py        # stdio MCP 工具服务（暴露计算/验算/状态/编排/下发工具）
 │   │   ├── orchestration.py      # 编排机制层：四阶段 structured_relay、驱动 AP、计票、反提案
 │   │   ├── proposal_utils.py     # 提案/JSON/策略推断纯函数
-│   │   └── tool_console.py       # 工具调用富文本 formatter
-│   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS/MEMORY.md
-├── state_server/                 # 遥测与执行面
+│   │   └── tool_console.py       # 工具调用富文本 formatter（阶段接力工具展示）
+│   └── workspaces/<agent>/       # 各 agent 的 IDENTITY/SOUL/AGENTS/TOOLS.md
+├── state_server/
 │   ├── server.py                 # Flask 状态服务器（AP 上报 / MCP 工具读取）
+│   ├── ns3_bridge.py             # ns-3 遥测 JSONL → state server
 │   ├── reporter.py               # AP 状态上报脚本（部署在香蕉派）
 │   ├── executor.py               # 执行端点：接收决策并下发到硬件
-│   ├── ns3_bridge.py             # ns-3 实时桥：仿真遥测入 server + /apply 写回仿真
-│   ├── outcome_harvester.py      # 常驻评估窗口收割器
 │   └── academic_plot.py          # Matplotlib 学术曲线窗口
-├── src/                          # 确定性领域核心（被 MCP 工具与运行时复用）
-│   ├── tools/{sr,edca}.py        # Co-SR / Co-EDCA 计算与约束验算（含 per-AC EDCA）
+├── src/                          # 保留的确定性基础设施/工具（被 MCP 工具复用）
+│   ├── tools/{sr,edca}.py        # Co-SR / Co-EDCA 计算与约束验算
 │   ├── validator.py              # 确定性 Validator：物理约束最终验算
 │   ├── profile.py                # 状态规范化 + 字段白名单
 │   ├── state_client.py           # 读取状态服务器（含过期检查）
-│   ├── logger.py                 # 结构化 JSONL + SQLite 双写日志
-│   ├── console_style.py          # 彩色终端输出
-│   ├── persistence/              # L1 Event Store（SQLite schema 迁移 / 恢复 checkpoint）
-│   └── memory/                   # 记忆体系（L2–L6 + 反思 + 迭代）
-│       ├── session_memory.py     #   L2 会话记忆：确定性增量摘要
-│       ├── episodic.py           #   L3 案例记忆：物化 + 拓扑隔离相似检索
-│       ├── outcome.py            #   L4 效果评估：多窗口比对 + 质量回写
-│       ├── semantic.py           #   L5 语义规律：跨案例归纳（达标链加成）
-│       ├── consolidation.py      #   L6 整理：容量/过期归档 + 冲突标记
-│       ├── reflection.py         #   反思：信任模型/召回门控/矛盾账本/校准
-│       ├── goals.py              #   迭代：Goal/attempt 链/归因/停机准则
-│       ├── rollback.py           #   回滚建议执行（审批后走幂等通道）
-│       ├── workspace.py          #   agent 工作区记忆文件渲染与注入
-│       ├── observability.py      #   memory_health 聚合
-│       └── llm_backend.py        #   可选 LLM 叙事（确定性降级）
-├── dashboard/                    # Flask + SSE 实时协商 Dashboard（含 /memory 健康面板）
-├── tests/                        # unittest 套件（含 I5 迭代基准 test_goal_benchmark.py）
-├── logs/                         # JSONL + agent_memory.sqlite3 持久事件存储（gitignore）
+│   ├── logger.py                 # 结构化 JSONL 日志
+│   └── console_style.py          # 彩色终端输出
+├── dashboard/                    # Flask + SSE 实时协商对话 Dashboard
+├── logs/                         # 每次运行生成一个 session_*.jsonl
 └── docs/                         # 设计文档（docs/openclaw/ 为 OpenClaw 自身参考文档）
 ```
 
@@ -314,49 +212,18 @@ coordinator 专用（AP 经 per-agent `tools.deny` 禁用）：`run_fast_negotia
 ## 日志
 
 每次运行在 `logs/` 生成一个 JSONL 文件，每行一个事件
-（`session_start` / `phase_start` / `agent_speak` / `mcp_tool_call`（AP 经 MCP 的工具调用，
-含全量参数与结果）/ `proposal_params` / `vote` / `round_result` / `final_decision` /
-`validation_result` / `executor_apply` / `agent_turn_retry` / `session_failed`（崩溃原因与
-调用栈，run 保持可恢复）/ `session_end`），供 Dashboard 可视化或离线分析。
-SQLite 写失败会降级为只写 JSONL 并在行内标记 `store_write_failed`，日志层异常不打断协商。
-
-**参数变化全程保留**：每次协商自动形成一条可回放的参数时间线——协商前初始快照、
-每个提案/反提案的结构化候选参数（`proposal_params` 事件）、最终决策、逐 AP 执行下发、
-生效后观测快照、各评估窗口观测，全部双写 SQLite 与 `logs/state/state_trace_*.jsonl`；
-协商开始时还会自动开启 state server 连续遥测 trace（`logs/state/telemetry_trace_*.jsonl`，
-文件名含 run_id，覆盖协商中与生效后评估期的每一帧上报，进程退出自动停止）。用
-`.venv/bin/python memory_admin.py timeline <run_id>` 查看合并时间线（带逐步参数 diff；
-提案/决策为目标参数空间，遥测为观测空间，两空间单位约定不同、各自成链比较）。
-
-同一事件还会双写到 `logs/agent_memory.sqlite3`，按 run 保存有序事件和状态快照。可用
-`.venv/bin/python memory_admin.py incomplete` 查看异常中断运行，或用
-`.venv/bin/python memory_admin.py show <run_id>` 回放。executor 下发已使用持久化 action journal 和幂等 key：成功动作不会重复发送，明确失败最多尝试两次，网络不确定结果会阻塞恢复，必须核对 AP `/status` 后执行 `memory_admin.py resolve-action`。记忆模块完整说明见 `docs/memory-module.md`，演进历史见 `docs/memory-architecture.md`。
-
-异常退出且 checkpoint 安全时，可执行 `.venv/bin/python run_openclaw.py --resume-run <run_id>`。恢复会跳过已完成的广播、提案和投票，只继续未完成边界；若 AP 参数、业务优先级或邻居拓扑已变化，启动器拒绝恢复并要求创建新协商。
-
-长会话使用持久化 Session Memory：早期 transcript 被确定性压缩为带 speaker/kind/turn 的摘要，最近发言保留原文，每个 AP 回合默认限制为 14000 字符。可通过 `--context-budget-chars` 和 `--context-recent-turns` 调整；原始事件和完整 transcript 仍保存在 SQLite/JSONL，不因上下文压缩丢失。
-
-每次 run 结束会自动生成 Episodic Memory，保存初始环境、领域特征、决策、Validator、执行结果和观测指标。下一次同拓扑协商会检索最多 3 个高质量相似案例注入提案提示，但历史参数不能绕过最新状态读取和工具验算。可用 `memory_admin.py episodes` 和 `memory_admin.py similar <run_id>` 查询。
-
-决策生效后还会登记多时间窗口的 Outcome 评估（`--eval-windows`，默认 ns3=10,30s / real=60,300,900s）：到期时与协商前基线比较吞吐/延迟/丢包，按业务优先级加权判定 `improved / degraded / neutral / inconclusive`，并把结论回写案例质量——实际恶化的案例质量封顶 0.2，不会再被当作高质量参考注入提案，同时生成恢复协商前参数的回滚建议。回滚默认只建议不执行，管理员显式审批后经幂等通道下发：`memory_admin.py rollback <run_id>`（dry-run）、加 `--ap-endpoints ... --confirm` 执行。收割不阻塞进程：常驻 harvester 定期结算、逾期太久的窗口标 abandoned，也可 `memory_admin.py evaluate --server <url>` 手动补收；`memory_admin.py evaluations <run_id>` 查看窗口结论与回滚建议。
-
-带真实反馈的案例进一步归纳为 **Semantic Memory（L5）语义规律**：同拓扑/场景/策略的多个有定论案例，统计出"倾向改善/恶化"的规律（带证据 run_id、支持数、一致性、置信度和典型做法），下次同拓扑提案时注入高置信规律（比单案例更可靠），仍强制按最新状态重新验算。规律随后台 harvester 收到新反馈自动重新归纳；`memory_admin.py rules [--induce]` 查看/归纳。
-
-**Consolidation（L6）后台整理**防止记忆无限膨胀、旧规律误导：带维护锁定期做容量淘汰（每拓扑保留质量最高的 top-N）、过期归档（老且低质案例软删）、规律冲突检测（证据分歧大的规律标 conflicted 不再注入）。归档/冲突均软删不物理删除，保留审计链；随 harvester 自动触发，或 `memory_admin.py consolidate` 手动执行。
-
-评估还做了**因果强化**：多窗口持续同向才算可信效果，方向摇摆的窗口会压低置信度、不触发回滚（`memory_admin.py calibrate` 查看阈值校准诊断）。记忆整体状态可观测：`memory_admin.py health` 或常驻 Dashboard 的 `http://localhost:5050/memory` 面板，一眼看清案例质量分布、评估积压、规律冲突等健康信号。记忆模块完整设计见 `docs/memory-module.md`。
+（`session_start` / `phase_start` / `agent_speak` / `tool_call` / `vote` / `round_result` /
+`final_decision` / `validation_result` / `executor_apply` / `session_end`），供 Dashboard 可视化或离线分析。
 
 ---
 
 ## 物理约束（Validator 检查项）
 
 **Co-SR**
-
 - `TX Power` ∈ [1, 23] dBm，功率调整量相对协商前为整数 dB
 - CCA（邻居接收信号）/ SINR / 降功率后 STA RSSI 约束（由计算工具保证）
 
 **Co-EDCA**
-
 - `CWmin` ∈ [3, 1023]，`CWmax` ∈ [7, 1023]，`AIFSN` ∈ [1, 15]，`CWmax > CWmin`
 - 优先级单调性：`high.CWmin ≤ medium ≤ low`（AIFSN 同理）
 
@@ -366,6 +233,5 @@ SQLite 写失败会降级为只写 JSONL 并在行内标记 `store_write_failed`
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
-# 覆盖：三场景结构等价、反提案修复轮、MCP 提案回填、状态服务器、Dashboard、学术曲线、
-#      事件存储迁移、幂等执行、Session/Episodic Memory、Outcome 评估与回滚建议
+# 覆盖：三场景结构等价、反提案修复轮、MCP 提案回填、状态服务器、Dashboard、学术曲线
 ```

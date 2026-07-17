@@ -3,12 +3,12 @@
 push_txpower.py — 直接向香蕉派下发 TxPower 决策
 
 用法：
-  python scripts/push_txpower.py 16 16 16                 # 位置参数：ap1 ap2 ap3
-  python scripts/push_txpower.py 18                       # 只下发 ap1，其余跳过
-  python scripts/push_txpower.py 18 15 20                 # 分别指定
-  python scripts/push_txpower.py                          # 使用默认功率（全部 20 dBm）
-  python scripts/push_txpower.py 16 16 16 --dry-run       # 只打印 payload，不发请求
-  python scripts/push_txpower.py --all 17                 # 三个 AP 统一设置
+  python push_txpower.py 16 16 16                 # 位置参数：ap1 ap2 ap3
+  python push_txpower.py 18                       # 只下发 ap1，其余跳过
+  python push_txpower.py 18 15 20                 # 分别指定
+  python push_txpower.py                          # 使用默认功率（全部 20 dBm）
+  python push_txpower.py 16 16 16 --dry-run       # 只打印 payload，不发请求
+  python push_txpower.py --all 17                 # 三个 AP 统一设置
 """
 
 import argparse
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--all", type=float, metavar="DBM", dest="all_ap",
                    help="三个 AP 统一设置相同功率")
     p.add_argument("--strategy", default="co_sr",
-                   choices=["co_sr", "co_edca"],
+                   choices=["co_sr"],
                    help="策略标签（默认: co_sr）")
     p.add_argument("--session-id", default=None,
                    help="会话 ID（默认自动生成）")

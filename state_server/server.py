@@ -18,7 +18,7 @@ VALID_AP_IDS = {"ap1", "ap2", "ap3"}
 STALE_THRESHOLD_SECONDS = 60
 HISTORY_MAXLEN = 120  # 保留最近 120 条，约 20 分钟（10s/条）
 GENERATED_SOURCES = {"mock", "generated", "synthetic", "simulated", "simulation", "random"}
-ALLOW_MOCK_SOURCE = False
+ACCEPTED_SOURCES = {"ap", "ns3"}
 DEFAULT_BUSINESS_TYPE = "未声明业务类型"
 
 # 内存存储：{ap_id: {"data": {...}, "timestamp": datetime}}
@@ -121,7 +121,7 @@ _INDEX_HTML = """
       <th>业务类型</th><th>业务优先级</th>
       <th>TX Power(dBm)</th><th>CWmin</th><th>CWmax</th><th>AIFSN</th>
       <th>信道利用率</th><th>重传率</th><th>STA RSSI(dBm)</th><th>噪声底(dBm)</th>
-      <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>Jitter(ms)</th><th>丢包(%)</th>
+      <th>吞吐iperf(Mbps)</th><th>吞吐user(Mbps)</th><th>AC(i/u)</th><th>延迟(ms)</th><th>丢包(%)</th>
       <th>邻居 RSSI(dBm)</th><th>最后上报</th>
     </tr>
     {% for ap_id in ap_ids %}
@@ -152,7 +152,6 @@ _INDEX_HTML = """
       <td>{{ e.data.throughput_mbps_user }}</td>
       <td>{{ e.data.get('ac_iperf', '—') }} / {{ e.data.get('ac_user', '—') }}</td>
       <td>{{ e.data.latency_ms }}</td>
-      <td>{{ e.data.get('jitter_ms', '—') }}</td>
       <td>{{ e.data.packet_loss_pct }}</td>
       <td>{{ e.data.neighbor_rssi_dbm }}</td>
       <td style="font-size:11px">{{ e.timestamp[:19] if e.timestamp else '—' }}</td>
@@ -182,10 +181,6 @@ _INDEX_HTML = """
     <div class="chart-box">
       <h3>延迟 (ms)</h3>
       <canvas id="chart-latency"></canvas>
-    </div>
-    <div class="chart-box">
-      <h3>Jitter (ms)</h3>
-      <canvas id="chart-jitter"></canvas>
     </div>
     <div class="chart-box">
       <h3>丢包率 (%)</h3>
@@ -222,7 +217,6 @@ const CHART_SPECS = [
   { key: "throughput_mbps_user",  chart: "throughput_user",  canvas: "chart-throughput-user",  label: "Mbps" },
   { key: "throughput_mbps_total", chart: "throughput_total", canvas: "chart-throughput-total", label: "Mbps" },
   { key: "latency_ms",      chart: "latency",    canvas: "chart-latency",    label: "ms" },
-  { key: "jitter_ms",       chart: "jitter",     canvas: "chart-jitter",     label: "ms" },
   { key: "packet_loss_pct", chart: "loss",       canvas: "chart-loss",       label: "%" },
   { key: "tx_power_dbm",    chart: "txpower",    canvas: "chart-txpower",    label: "dBm" },
   { key: "cwmin",           chart: "cwmin",      canvas: "chart-cwmin",      label: "CWmin" },
@@ -392,11 +386,11 @@ def post_state():
         return jsonify({"error": f"unknown ap_id: {ap_id!r}"}), 400
 
     source = str(body.get("source", "ap")).strip().lower()
-    if source in GENERATED_SOURCES and not ALLOW_MOCK_SOURCE:
+    if source in GENERATED_SOURCES or source not in ACCEPTED_SOURCES:
         return jsonify({
             "error": (
-                f"generated data source {source!r} is not accepted by this server; "
-                "start with --allow-mock only for local mock tests"
+                f"data source {source!r} is not accepted; "
+                "use source='ns3' for ns-3 experiments or source='ap' for real AP telemetry"
             )
         }), 400
 
@@ -419,27 +413,11 @@ def post_state():
             "throughput_mbps_user":  data.get("throughput_mbps_user"),
             "throughput_mbps_total": _throughput_total(data),
             "latency_ms":      data.get("latency_ms"),
-            "jitter_ms":       data.get("jitter_ms"),
             "packet_loss_pct": data.get("packet_loss_pct"),
-            "sla_violations":  data.get("sla_violations"),
-            "sta_violated_count": (
-                len(data.get("sla_violations") or [])
-                if isinstance(data.get("sla_violations"), list) else None
-            ),
             "tx_power_dbm":    data.get("tx_power_dbm"),
             "cwmin":           data.get("cwmin"),
             "cwmax":           data.get("cwmax"),
             "aifsn":           data.get("aifsn"),
-            "be_cwmin":        data.get("be_cwmin"),
-            "be_cwmax":        data.get("be_cwmax"),
-            "be_aifsn":        data.get("be_aifsn"),
-            "vi_cwmin":        data.get("vi_cwmin"),
-            "vi_cwmax":        data.get("vi_cwmax"),
-            "vi_aifsn":        data.get("vi_aifsn"),
-            # 协议级 Co-SR 观测字段（缺省来源可能没有，None 即可）
-            "obss_pd_dbm":     data.get("obss_pd_dbm"),
-            "bss_color":       data.get("bss_color"),
-            "sr_reset_count":  data.get("sr_reset_count"),
         })
         _write_trace({
             "event": "state_post",
@@ -450,12 +428,6 @@ def post_state():
                 "cwmin": data.get("cwmin"),
                 "cwmax": data.get("cwmax"),
                 "aifsn": data.get("aifsn"),
-                "be_cwmin": data.get("be_cwmin"),
-                "be_cwmax": data.get("be_cwmax"),
-                "be_aifsn": data.get("be_aifsn"),
-                "vi_cwmin": data.get("vi_cwmin"),
-                "vi_cwmax": data.get("vi_cwmax"),
-                "vi_aifsn": data.get("vi_aifsn"),
             },
             "data": data,
         })
@@ -570,19 +542,13 @@ def health():
     return jsonify({
         "ok": True,
         "reported": ap_status,
-        "allow_mock_source": ALLOW_MOCK_SOURCE,
+        "accepted_sources": sorted(ACCEPTED_SOURCES),
     }), 200
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="全局 AP 状态服务器")
-    parser.add_argument(
-        "--allow-mock",
-        action="store_true",
-        help="仅本地联调使用：允许接收 source=mock/generated 的生成数据",
-    )
     args = parser.parse_args()
-    ALLOW_MOCK_SOURCE = args.allow_mock
-    mode = "允许 mock 上报" if ALLOW_MOCK_SOURCE else "真实上报模式（拒收生成数据）"
+    mode = "ns-3/真实上报模式（仅接收 source=ns3/ap）"
     print(f"状态服务器启动于 http://0.0.0.0:5001，{mode}")
     app.run(host="0.0.0.0", port=5001, debug=False)

@@ -30,7 +30,6 @@ BASE_PAYLOAD = {
 
 class StateServerSourcePolicyTest(unittest.TestCase):
     def setUp(self):
-        server.ALLOW_MOCK_SOURCE = False
         server._store.clear()
         for rows in server._history.values():
             rows.clear()
@@ -48,7 +47,7 @@ class StateServerSourcePolicyTest(unittest.TestCase):
         resp = self.client.post("/state", json=payload)
 
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("generated data source", resp.get_json()["error"])
+        self.assertIn("not accepted", resp.get_json()["error"])
         self.assertNotIn("ap1", server._store)
 
     def test_default_server_accepts_ap_source(self):

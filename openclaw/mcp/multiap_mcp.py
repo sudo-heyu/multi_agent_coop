@@ -4,7 +4,7 @@ Multi-AP 协商工具 —— OpenClaw MCP 工具服务（stdio）。
 把现有 Python 计算/验算/状态/下发逻辑原样暴露为 OpenClaw agent 可调用的工具。
 设计为「无进程内会话状态」：每次调用都从状态服务器实时拉取 AP 状态并 apply_profile，
 因此同一工具被 coordinator / ap1 / ap2 / ap3 各自独立的 `openclaw agent` 进程调用时，
-看到的都是同一份外部真值（状态服务器 + mock 喂数器），结果可复现。
+看到的都是同一份外部真值（状态服务器中的 ns-3 或真实 AP 遥测），结果可复现。
 
 环境变量：
   MULTIAP_STATE_SERVER   状态服务器地址（默认 http://localhost:5001）

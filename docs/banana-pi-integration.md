@@ -14,9 +14,6 @@
 {
   "ap_id": "ap1",
   "timestamp": "2026-05-21T07:00:00.000000+00:00",
-  "service_name": "background_download",
-  "business_type": "后台下载",
-  "traffic_priority": "low",
   "tx_power_dbm": 16.0,
   "cwmin": 3,
   "cwmax": 7,
@@ -33,7 +30,7 @@
 }
 ```
 
-服务器硬性必填字段以 `state_server/server.py` 的 `REQUIRED_FIELDS` 为准；业务字段缺省时由 profile 使用默认值，但真实部署应明确上报 `service_name`、`business_type` 和 `traffic_priority`。`ap_id` 固定为本机编号。真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`。
+除 `source` 外所有字段必填，缺少任一返回 400。`ap_id` 固定为本机编号，不能乱填。真实部署默认拒收 `source=mock/generated/synthetic/simulated/simulation/random`，严禁把生成数据作为真实 QoS 观测上报。
 
 **响应**：
 
@@ -165,8 +162,6 @@ hostapd_cli -i wlan0 set_edca_params 0 3 15 63 0
 hostapd_cli -i wlan0 get_edca_params 0
 ```
 
-当前不支持 `joint`。需要同时处理干扰与 EDCA 竞争时，应拆成两轮协商，先处理主导问题。
-
 ### 3.4 权限与常见错误
 
 `iw set txpower` 和 `hostapd_cli` 需要 root 权限。推荐配置 sudoers 免密：
@@ -184,40 +179,17 @@ hostapd_cli -i wlan0 get_edca_params 0
 
 ---
 
-## 四、DGX 侧启动与真实协商
-
-默认入口要求常驻 state server、OpenClaw gateway 和 Dashboard 在线：
+## 四、ns-3 联调（无真实硬件）
 
 ```bash
-MULTIAP_STATE_MODE=real bash openclaw/serve.sh restart
-bash openclaw/serve.sh status
+# 终端 1：启动状态服务器
+python state_server/server.py
 
-.venv/bin/python run_openclaw.py \
-  --mode real \
-  --scene sr \
-  --server http://localhost:5001 \
-  --ap-endpoints ap1=192.168.1.1:5002,ap2=192.168.1.2:5002,ap3=192.168.1.3:5002
-```
+# 终端 2：转发 ns-3 生成的 JSONL 遥测
+python state_server/ns3_bridge.py --input ns3-output.jsonl --follow
 
-执行端点不会自动从 `config/ap_endpoints.json` 读取，必须显式传入 `--ap-endpoints` 或 `--ap-config`。`--mode real` 保证不创建 mock feeder，检查 state server 已拒收生成源，等待三台 AP 的 `source=ap` 新鲜数据，并要求端点恰好覆盖 ap1/ap2/ap3。
-
-## 五、本地联调（无真实硬件）
-
-```bash
-# 终端 1：常驻服务（state server 已带 --allow-mock）
-bash openclaw/serve.sh start
-
-# 终端 2
-python state_server/reporter.py --mock --all --server http://localhost:5001
-
-# 终端 3（三台 AP 用不同端口模拟）
-python state_server/executor.py --ap-id ap1 --mock --port 5002 &
-python state_server/executor.py --ap-id ap2 --mock --port 5003 &
-python state_server/executor.py --ap-id ap3 --mock --port 5004 &
-
-# 终端 4
-.venv/bin/python run_openclaw.py --mode real --scene sr \
-  --ap-endpoints ap1=localhost:5002,ap2=localhost:5003,ap3=localhost:5004
+# 终端 3：触发协商。ns-3 执行器接入前不要配置真实 AP executor 端点。
+python run_openclaw.py --data-source ns3
 ```
 
 执行后查询结果：

@@ -292,7 +292,7 @@ details = compute_validation(ap_states, {"ap1": 6.0, "ap2": 6.0, "ap3": 6.0})
 |---|---|
 | 邻居 RSSI 偏强 / `analyze_sr_interference` 触发 | Co-SR |
 | 优先级、QoS 或 EDCA 参数显示需差异化竞争 | Co-EDCA |
-| 两类问题同时成立 | 联合，或先处理主导问题 |
+| 两类问题同时成立 | 选择主导问题对应的单一策略 |
 
 ---
 
@@ -303,4 +303,4 @@ details = compute_validation(ap_states, {"ap1": 6.0, "ap2": 6.0, "ap3": 6.0})
 | 输入耦合 | 每 AP 独立 | AP 间耦合（一 AP 功率影响所有邻居 CCA） |
 | 计算方式 | 直接映射（等级→参数） | 扫描功率空间（优化搜索） |
 | 物理模型 | 无，纯阈值映射 | RSSI 线性传播模型 |
-| 约束类型 | 单 AP 内部约束 | 跨 AP 联合约束（三重） |
+| 约束类型 | 单 AP 内部约束 | 跨 AP 约束（三重） |

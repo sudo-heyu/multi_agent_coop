@@ -2,12 +2,13 @@
 协商状态规范化：字段白名单 + EDCA 取值解码。
 
 本模块不再给 AP 预设固定业务身份，也不覆盖上报的业务优先级。AP 的
-service_name / traffic_priority 来自状态服务器、mock 场景或真实上报；缺失时使用
+service_name / traffic_priority 来自状态服务器上的 ns-3 或真实 AP 上报；缺失时使用
 中性默认值，避免提示词和流程为了固定演示场景过拟合。
 
 保留的职责：
   1. 只保留协商需要的字段，忽略白名单之外的上报数据。
-  2. 把 AP 上报的 cwmin/cwmax 指数 n 统一解码为实际 CW 值（CW = 2^n - 1）。
+  2. 把真实 AP 上报的 cwmin/cwmax 指数 n 解码为实际 CW 值（CW = 2^n - 1）；
+     ns-3 遥测本身输出实际 CW 值，不再改写。
   3. 对缺失或非法的业务字段做保守规范化：未知业务、medium 优先级。
 
 Co-SR / Co-EDCA 只是当前工具支持的两类调参能力。是否使用它们，应由实时状态
@@ -15,7 +16,6 @@ Co-SR / Co-EDCA 只是当前工具支持的两类调参能力。是否使用它�
 """
 
 from .tools.edca import decode_state_edca
-from .sta_feedback import summarize_ap_feedback
 
 VALID_TRAFFIC_PRIORITIES: tuple[str, ...] = ("high", "medium", "low")
 DEFAULT_SERVICE_NAME = "未声明业务"
@@ -24,37 +24,26 @@ DEFAULT_TRAFFIC_PRIORITY = "medium"
 
 # ── 协商对 agent 可见的字段 ────────────────────────────────────────────────
 AGENT_VISIBLE_FIELDS: tuple[str, ...] = (
-    "service_name",          # 上报/场景声明的业务类型；缺省为未声明业务
+    "service_name",          # 上报声明的业务类型；缺省为未声明业务
     "business_type",         # 面向业务语义的类型标签；缺省为未声明业务类型
-    "traffic_priority",      # 上报/场景声明的业务优先级；缺省为 medium
+    "traffic_priority",      # 上报声明的业务优先级；缺省为 medium
     "tx_power_dbm",          # 发射功率（Co-SR 可调）
     "cwmin",                 # EDCA 竞争窗口下限（实际 CW 值，由上报指数解码而来）
     "cwmax",                 # EDCA 竞争窗口上限（实际 CW 值，由上报指数解码而来）
     "aifsn",                 # EDCA 仲裁帧间间隔数（Co-EDCA 可调）
-    "be_cwmin",              # AC_BE EDCA 竞争窗口下限（实际 CW 值）
-    "be_cwmax",              # AC_BE EDCA 竞争窗口上限（实际 CW 值）
-    "be_aifsn",              # AC_BE AIFSN
-    "vi_cwmin",              # AC_VI EDCA 竞争窗口下限（实际 CW 值）
-    "vi_cwmax",              # AC_VI EDCA 竞争窗口上限（实际 CW 值）
-    "vi_aifsn",              # AC_VI AIFSN
     "sta_rssi_dbm",          # 己方 STA 信号强度（降功率安全下界）
+    "throughput_mbps_iperf", # ns-3 / iperf 侧吞吐
     "throughput_mbps_user",  # 用户实际业务吞吐
-    "latency_ms",            # 用户业务端到端时延（ns-3 FlowMonitor）
-    "jitter_ms",             # 用户业务 jitter（ns-3 FlowMonitor）
-    "packet_loss_pct",       # 用户业务丢包率
+    "latency_ms",            # 用户侧时延
+    "packet_loss_pct",       # 用户侧丢包率
     "neighbor_rssi_dbm",     # 邻居 AP 信号强度（Co-SR 干扰感知）
-    "stas",                  # 关联 STA 的结构化 QoE/SLA 反馈列表
-    "sta_feedback_summary",  # 本 AP 侧 STA 反馈摘要
-    "sla_violations",        # 本 AP 关联 STA 的 SLA 违规摘要
 )
 
 # ── 仅供工具内部计算、不展示给 agent 的字段 ──────────────────────────────────
 # Co-SR 的 SINR 约束需要本底噪声，但它不进入 agent 的推理视野。
 INTERNAL_FIELDS: tuple[str, ...] = (
     "noise_floor_dbm",
-    "obss_pd_dbm",
-    "bss_color",
-    "sr_reset_count",
+    "source",
 )
 
 # 协商流程保留的全部字段（白名单之外的上报字段一律忽略）
@@ -76,7 +65,7 @@ def apply_profile(ap_states: dict) -> dict:
             result[ap_id] = state
             continue
         filtered = {k: state[k] for k in RETAINED_FIELDS if k in state}
-        filtered = decode_state_edca(filtered)  # cwmin/cwmax: 上报指数 → 实际 CW
+        filtered = decode_state_edca(filtered)
         service_name = filtered.get("service_name") or DEFAULT_SERVICE_NAME
         filtered["service_name"] = str(service_name)
         business_type = filtered.get("business_type") or DEFAULT_BUSINESS_TYPE
@@ -85,13 +74,6 @@ def apply_profile(ap_states: dict) -> dict:
         if priority not in VALID_TRAFFIC_PRIORITIES:
             priority = DEFAULT_TRAFFIC_PRIORITY
         filtered["traffic_priority"] = priority
-        if isinstance(filtered.get("stas"), list):
-            summary = summarize_ap_feedback(ap_id, filtered)
-            filtered["sta_feedback_summary"] = {
-                k: v for k, v in summary.items() if k != "stas"
-            }
-            filtered["stas"] = summary["stas"]
-            filtered["sla_violations"] = summary["violations"]
         result[ap_id] = filtered
     return result
 

@@ -1,81 +1,124 @@
-# 系统介绍与现行设计
+# 项目计划
 
-## 目标
+> **说明**：本文为项目**初始需求/计划记录**，topology、参数列表、四个场景与协商流程仍为现行口径。
+> 运行架构已统一为**纯 OpenClaw**：模型经 OpenClaw provider 调用（默认 PPIO，回退本地 ollama），
+> 下方第 1 条「主要依赖 ollama」为初期计划口径。当前实验仅保留 Co-SR 与 Co-EDCA 两类策略；
+> 当两类证据同时出现时，协商必须按主导问题选择其中一种单一策略。
 
-本项目让三台 Wi-Fi AP 基于实时状态进行多轮协商，并在确定性约束通过后调整：
+项目计划如下：
 
-- Co-SR：`tx_power_dbm`
-- Co-EDCA：`CWmin`、`CWmax`、`AIFSN`
+1. 本地大模型部署实现，主要依赖ollama,验收指标：能调用API;
+   工作量：1h
+2. 基于openclaw实现3个ap-agent,先设置基本的提示词，行为准则，不提供工具，后续4、5、6逐步完善。
+   工作量：一天
+3. 基于openclaw架构的validator-agent,负责投票完成后核算指标，判断会话是否能结束，还有部分的安全检测。
+   工作量：半天
+4. 实现全局状态接口，最后带时间戳保证数据时效性，香蕉派POST上传，agentGET获取，做成一个skill。
+   工作量：2h
+5. Co-SR计算工具模块实现，要实现如下功能：感知距离、量化计算目标、结果安全性验证。
+   工作量：一天
+6. Co-EDCA计算工具模块实现，要简单很多，设置拥塞等级做映射即可。
+   工作量：2h
+7. 日志功能，将agent调用工具、获取状态、发言、实施决策的全过程记录下来，采用logging+json的形式。
+   工作量：半天
+8. 实现决策的执行下发（JSON），完成香蕉派模块的执行脚本，数据回采，结合validator-agent判断会话是否需要继续。
+   工作量：一天半
+9. dashboard展示平台，使用flask。
+   工作量：半天
 
-系统同时记录吞吐、延迟、丢包、信道利用率和重传率，用于展示调整前后的变化。
+## 拓扑示意
 
-## 部署拓扑
+一个中心DGXspark,通过以太网线连接三个香蕉派AP，三个AP通过无线方式连接三个STA
 
-```text
-                          DGX Spark
-       ┌────────────────────────────────────────────┐
-       │ run_openclaw.py + structured_relay         │
-       │ OpenClaw gateway + AP agents + MCP tools   │
-       │ state server + Dashboard + Validator       │
-       └───────────────┬────────────────────────────┘
-                       │ Ethernet / management LAN
-             ┌─────────┼─────────┐
-             │         │         │
-        Banana Pi 1 Banana Pi 2 Banana Pi 3
-        reporter +  reporter +  reporter +
-        executor     executor     executor
-             │         │         │
-            STA1      STA2      STA3
-```
+## 参数列表
 
-三台香蕉派周期上报本机状态到 DGX。协商成功后，DGX 向显式配置的 executor `/apply` 端点推送决策。
+| 参数 | 机制 | 作用 |
+| --- | --- | --- |
+| 可调参数（Co-SR） |  |  |
+| TX Power | Co-SR | 发射功率，控制覆盖半径与对邻居BSS的干扰强度；功率越高，OBSS干扰越强，空间复用机会越少 |
+| 可调参数（Co-EDCA） |  |  |
+| CWmin | Co-EDCA | 竞争窗口下限；值越小初始退避越短，竞争越激烈；AP间协商防止集体取小值加剧碰撞 |
+| CWmax | Co-EDCA | 竞争窗口上限；决定重传时退避时间的增长上界；与CWmin共同决定退避分布形态 |
+| AIFSN | Co-EDCA | 仲裁帧间间隔数；决定等待信道空闲的最小时隙数；值越小优先级越高；协商统一策略防止某AP长期独占信道 |
+| 采集指标（只读，驱动协商触发与效果验证） |  |  |
+| Channel busy ratio | 采集 | 信道繁忙时间占活跃时间比例；协商触发的核心判据；需有背景流量才会呈现明显差异 |
+| TX retries ratio | 采集 | 重传包比例；协商触发的依据之一，CoEDCA调整效果的直接验证指标；CWmin/CWmax/AIFSN调整后此值应下降 |
+| RSSI（邻居AP） | 采集 | CO-SR的感知指标，来判断干扰情况 |
+| RSSI（己方STA） | 采集 | 自己关联的STA的信号强度，非常容易读，是降功率的安全下界(需要避免降功率后关联的STA的rssi过低） |
+| Noise floor | 采集 | 信道的本底噪声，用于估算SINR，iw survey dump里直接有noise字段，顺手就拿到了 |
+| 业务质量指标（只读，协商前后效果对比的直接依据，dashboard中的数据展示） |  |  |
+| 吞吐量 | QoS | STA实际接收速率；协商效果最直接的体现； |
+| 延迟 | QoS | 端到端往返时延；协商触发判据之一； |
+| 丢包率 | QoS | 数据包丢失比例；反映信道质量恶化程度； |
 
-## 软件架构
+## 核心功能要求
 
-- OpenClaw 托管 `ap1 / ap2 / ap3` 三个 agent，并为它们提供 MCP 工具。
-- `run_openclaw.py` 是默认入口，直接调用 Python `structured_relay`；阶段顺序不由 LLM 决定。
-- `coordinator` agent 仅保留为 `--use-coordinator` 兼容路径。
-- Validator 是 `src/validator.py` 中的确定性代码，不是单独的 LLM agent。
-- Dashboard 使用 Flask + SSE，不使用 React。
-- state server、gateway、Dashboard 和 plot 由 `openclaw/serve.sh` 常驻管理。
+agent架构基于openclaw的多agent架构，官方文档如下
 
-详细实现见 [Agent 实现说明](agent-implementation.md)。
+- https://docs.openclaw.ai/gateway/config-agents
+- https://docs.openclaw.ai/concepts/agent
+- https://docs.openclaw.ai/concepts/multi-agent?utm_source=chatgpt.com
+- https://docs.openclaw.ai/concepts/architecture
+- https://docs.openclaw.ai/concepts/delegate-architecture
 
-## 协商流程
+3个ap-agent,负责根据数据协商，下发决策；1个validator-agent,用于核算结果，判断是否已经可以执行完成对话。
 
-1. 广播：三台 AP 并发生成自身状态广播，按 ap1、ap2、ap3 顺序展示。
-2. 触发判断：确定性逻辑根据最新状态给出 `co_sr`、`co_edca` 或 `noop` 提示。
-3. 提案：首轮由 ap1 发起，AP 自主调用状态和计算工具后输出参数 JSON。
-4. 投票：其他 AP 验算后同意、弃权或反对；反对者提交反提案并接管。
-5. 决策：全票通过后直接采用已通过提案，Validator 做最终验收。
-6. 执行：仅在显式配置 `--ap-endpoints` 或 `--ap-config` 时推送到真实 AP。
+对话开始的依据：共享存储区的数值反映某个AP信道很繁忙且重传率高，达到阈值。
 
-## 场景
+三台香蕉派定期向共享存储接口发送新的数据，带时间戳
 
-| 场景 | CLI | 状态特征 | 允许的结果 |
-|---|---|---|---|
-| Co-SR | `--scene sr` | 邻居 RSSI 显示强/中干扰 | `co_sr` |
-| Co-EDCA | `--scene edca` | 业务优先级和拥塞存在差异 | `co_edca` |
+使用React框架，每次对话输出的结果只有一段话，但可能涉及多轮API调用（需要与工具交互）
 
-当前只保留 `sr` 与 `edca` 两个运行时场景；若两类问题同时出现，编排层选择主导问题先处理，不再允许同一提案同时包含功率与 EDCA 调整。
+第一步为广播信号，三个AP依次发布广播言论，广播自己在共享存储区的自身的指标，严禁在此阶段广播其他AP指标，后续的定时更新也是如此，避免数据不一致和混乱。
 
-## 状态与参数
+第二步是根据数据质量来自动判断发言AP（默认质量最差的），该AP根据自身数据情况来发起提案，调用计算工具，包括自身怎么做，另外几个AP怎么做，需要涉及具体的数值，目前的方案有Co-SR和Co-EDCA。
 
-| 类别 | 字段 |
-|---|---|
-| 业务语义 | `service_name`、`business_type`、`traffic_priority` |
-| 可调参数 | `tx_power_dbm`、`cwmin`、`cwmax`、`aifsn` |
-| 无线观测 | `Data_rate_to_bandwidth_ratio`、`tx_retries_ratio`、`neighbor_rssi_dbm`、`sta_rssi_dbm`、`noise_floor_dbm` |
-| QoS | `throughput_mbps_iperf`、`throughput_mbps_user`、`latency_ms`、`packet_loss_pct`、`ac_iperf`、`ac_user` |
+第三步是其他AP验算决策可能造成的结果，然后决定是否要同意，如果两个都同意提案，则提案通过，决策下发执行，改变香蕉派参数，如果有AP不同意，或效果没达到预期的话，需要继续进行对话。预期指标可提前设定，如果调整后的指标没达到预期需要继续进行对话，直到达到预期指标。
 
-完整定义见 [状态字段参考](state-metrics.md) 和 [状态接口](state-server-api.md)。
+整个过程需要看到：三个AP的对话流程，业务质量指标的变化
 
-## 运行
+## 场景一：静态Co-SR仿真
 
-```bash
-MULTIAP_PY="$PWD/.venv/bin/python" bash openclaw/setup.sh  # 首次
-bash openclaw/serve.sh start
-.venv/bin/python run_openclaw.py --mode ns3 --scene sr
-```
+初始设定三个AP处于静态不对称状态
 
-真实 AP 使用 `--mode real`，并显式提供三个 executor 端点。该模式完全禁用 feeder、要求 state server 拒收生成数据，并等待三台 reporter 状态就绪。具体见 [香蕉派接入手册](banana-pi-integration.md)。
+AP1发射功率处于高位，对邻居BSS干扰较强
+
+AP2处于中等水平
+
+AP3功率最低。
+
+三个STA分别连接对应AP但无明显流量。
+
+AP1的agent检测到自身发射功率过高导致对邻居AP干扰偏强，将当前功率状态上报SPARK，SPARK汇总三个AP的TX Power参数后触发LLM协商，三个AP的agent以自然语言协商各自的空间复用边界，SPARK综合CCA与SINR约束后下发新的TX Power组合，三个AP执行调整，协商结束后AP1功率有所下调，AP3获得更多空间复用机会，协商前后的参数变化可直接对比。
+
+## 场景二：静态Co-EDCA仿真
+
+初始设定三个AP的EDCA参数处于不对称状态
+
+AP1的竞争窗口最小、帧间间隔最短，信道竞争最为激烈
+
+AP2处于均衡水平
+
+AP3竞争窗口较大、帧间间隔较长，整体偏向礼让。
+
+三个STA通过打流工具分别向各自AP注入高、中、低三档背景流量，使三个AP的信道负载产生真实差异。
+
+AP1的agent因信道竞争激烈、重传率偏高触发上报，SPARK汇总三个AP的信道占用率与EDCA参数后启动LLM协商，三个AP的agent协商各自退避窗口与帧间间隔的调整方向，SPARK下发新的CWmin、CWmax、AIFSN组合，香蕉派执行后AP1的重传率与信道占用率应有所下降，协商前后的指标变化可量化对比。
+
+## 场景三：主导问题选择实验
+
+初始设定同时包含空间复用边界不合理和信道竞争不均衡的迹象。
+
+三个 AP agent 分别上报 TX Power、邻居 RSSI、STA RSSI、CWmin、CWmax、AIFSN、业务优先级和 QoS 指标。
+
+SPARK 在同一次协商中先判断主导问题：若干扰与空间复用风险更强，则选择 Co-SR；若业务优先级与 EDCA 差异化需求更强，则选择 Co-EDCA。协商输出只能包含所选单一策略对应的字段，不能同时下发 TX Power 与 EDCA 参数。
+
+验证指标包括策略选择是否符合证据、是否在有限轮次内收敛、Validator 是否通过，以及下发后对应 QoS 指标是否改善。
+
+## 场景四：动态AP1业务骤升
+
+初始设定三个AP处于前序协商后的收敛稳态，各参数均衡，信道整体运行平稳。
+
+STA1通过打流工具将发送速率从低档突然提升至高档，模拟AP1侧业务骤增。
+
+AP1的agent在下一个采集周期检测到信道占用率与重传率的突变幅度超过触发阈值，立即标记为异常事件并上报SPARK，SPARK判断当前稳态参数已不适配新负载，重新触发三个AP的agent进行动态协商，协商目标是在有限轮次内快速选择 Co-SR 或 Co-EDCA 之一完成调整。SPARK 下发调整指令后，对应拥塞或干扰指标应可见回落，整个过程展示系统从稳态被打破到重新收敛的完整动态响应链路，响应速度与收敛轮次作为核心验证指标。

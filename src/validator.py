@@ -4,48 +4,43 @@
 验收分三层：
   1. 参数范围检查：proposed 值在合法区间内（始终执行）
   2. 参数生效检查：观测值与 proposed 吻合（仅真实观测时执行）
-  3. 自伤幅度门：合法但会把提案方自己压垮的参数组合（始终执行，纯闭式估算，
-     不依赖观测）——Co-EDCA 按预测信道抢占份额跌幅，Co-SR 按预测 STA RSSI
-     安全下界。两者都只是方向性预警，不是精确仿真；Co-EDCA 一侧允许"邻居确有
-     SLA 违规"作为自我牺牲的正当理由，Co-SR 一侧是硬性连接安全底线，不设例外。
+  3. QoS 检查：真实观测时，SR 要求聚合 QoS 不下降；EDCA 允许低优先级
+     业务在受控范围内让路，但要求高优先级业务获得可验证收益
 
-聚合 KPI（吞吐/时延等）仍不作为 Validator 的通过条件——那类判断留给
-迭代/反思模块的事后评估窗口；本模块只挡"提案本身在结构上就会自伤"这一类、
-凭当前状态和提案参数就能确定性算出来的风险，不等真实观测。
+只有最终参数合法、真实观测时确认已正常下发，且 QoS 策略核验通过，才判定通过。
 """
 from __future__ import annotations
-
-import os
-
-from .sta_feedback import evaluate_sta_qoe
-from .tools import edca as _edca
-from .tools import sr as _sr
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 硬性参数约束
 # ─────────────────────────────────────────────────────────────────────────────
-TX_POWER_MIN_DBM = 1.0
+TX_POWER_MIN_DBM = 8.0
 TX_POWER_MAX_DBM = 23.0
 TX_POWER_APPLIED_TOLERANCE_DB = 0.5
 # Co-SR 功率调整量（相对协商前功率）必须为整数 dB
 TX_POWER_DELTA_INTEGER_TOLERANCE_DB = 0.05
-# 协议级 Co-SR：OBSS_PD 门限的合法 SR 窗口与耦合约束
-OBSS_PD_MIN_DBM = -82.0
-OBSS_PD_MAX_DBM = -62.0
-OBSS_PD_APPLIED_TOLERANCE_DB = 0.5
-# 标准耦合 tx ≤ TX_POWER_MAX-(OBSS_PD-OBSS_PD_MIN) 的判定容差
-OBSS_PD_COUPLING_TOLERANCE_DB = 0.5
 
 EDCA_LIMITS = {
     "CWmin": (3, 1023),
     "CWmax": (7, 1023),
     "AIFSN": (1, 15),
 }
-# Co-EDCA 自伤幅度门：提案方自己在某 AC 上的预测信道抢占份额，跌到协商前的
-# 这个比例以下就判定不通过（除非有邻居 SLA 违规可以正当化这次牺牲）。
-EDCA_SELF_HARM_SHARE_RATIO_FLOOR = float(
-    os.environ.get("MULTIAP_EDCA_SELF_HARM_FLOOR", "0.5") or 0.5
-)
+
+# QoS 硬性验收阈值。保留很小容忍度，避免浮点/采样抖动导致等价状态误判。
+QOS_THROUGHPUT_DROP_TOLERANCE_RATIO = 0.01   # 聚合吞吐下降超过 1% 即失败
+QOS_LATENCY_INCREASE_TOLERANCE_RATIO = 0.05  # 平均时延升高超过 5% 即失败
+QOS_PACKET_LOSS_INCREASE_TOLERANCE_PCT = 0.1 # 平均丢包率升高超过 0.1 个百分点即失败
+
+# EDCA 是优先级调度：允许低优先级业务轻微让路，但必须守住整体退化上限，
+# 且 high-priority 业务不能受损并至少有一个核心 QoS 指标改善。
+EDCA_OVERALL_DEGRADATION_TOLERANCE_RATIO = 0.05
+EDCA_OVERALL_PACKET_LOSS_TOLERANCE_PCT = 5.0
+EDCA_HIGH_THROUGHPUT_DROP_TOLERANCE_RATIO = 0.01
+EDCA_HIGH_LATENCY_INCREASE_TOLERANCE_RATIO = 0.05
+EDCA_HIGH_PACKET_LOSS_TOLERANCE_PCT = 1.0
+EDCA_HIGH_THROUGHPUT_GAIN_RATIO = 0.005
+EDCA_HIGH_LATENCY_GAIN_RATIO = 0.01
+EDCA_HIGH_PACKET_LOSS_GAIN_PCT = 0.1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 公开接口
@@ -68,15 +63,15 @@ def validate_decision(
         observed_state:  观测周期结束后重新采集的 AP 状态；None 时回退为 ap_state
         observed_is_real: True 表示 observed_state 来自真实二次采集，
                           才执行参数生效检查；
-                          False（mock/无采集器）时仅检查参数范围合法性
+                          False（无二次采集）时仅检查参数范围合法性
 
     Returns:
         标准 ValidationReport dict
     """
     if decision is None:
         return _fail_report(strategy, "LLM 未输出合法 JSON，无法执行验证")
-    if strategy not in {"co_sr", "co_edca"}:
-        return _fail_report(strategy, f"不支持的策略: {strategy}")
+    if strategy not in ("co_sr", "co_edca"):
+        return _fail_report(strategy, f"不支持的策略 {strategy!r}；仅允许 co_sr 或 co_edca")
 
     ap_ids = list(ap_state.keys())
     obs = observed_state if observed_state is not None else ap_state
@@ -127,34 +122,6 @@ def validate_decision(
                             f"tx_power_dbm 未生效：期望 {pwr} dBm，观测 {observed_pwr} dBm"
                         )
 
-            # 协议级 Co-SR：OBSS_PD 门限（可选字段，携带则校验范围 / 耦合 / 生效）
-            obss_pd = entry.get("obss_pd_dbm")
-            if obss_pd is not None:
-                obss_pd = float(obss_pd)
-                report["proposed_params"]["obss_pd_dbm"] = obss_pd
-                if not (OBSS_PD_MIN_DBM <= obss_pd <= OBSS_PD_MAX_DBM):
-                    ap_errors.append(
-                        f"obss_pd_dbm={obss_pd} 超出 SR 合法窗口 "
-                        f"[{OBSS_PD_MIN_DBM}, {OBSS_PD_MAX_DBM}] dBm"
-                    )
-                # 标准耦合：开 SR（门限>-82）时 tx ≤ TX_POWER_MAX-(obss_pd-OBSS_PD_MIN)
-                if pwr is not None and obss_pd > OBSS_PD_MIN_DBM:
-                    tx_limit = TX_POWER_MAX_DBM - (obss_pd - OBSS_PD_MIN_DBM)
-                    if float(pwr) > tx_limit + OBSS_PD_COUPLING_TOLERANCE_DB:
-                        ap_errors.append(
-                            f"违反 SR 功率耦合：obss_pd={obss_pd} dBm 时 tx 上限 "
-                            f"{round(tx_limit, 1)} dBm，提案 tx={pwr} dBm"
-                        )
-                if observed_is_real:
-                    observed_obss = obs.get(ap_id, {}).get("obss_pd_dbm")
-                    report["observed_params"]["obss_pd_dbm"] = observed_obss
-                    if observed_obss is None:
-                        ap_errors.append("观测结果缺少 obss_pd_dbm")
-                    elif abs(float(observed_obss) - obss_pd) > OBSS_PD_APPLIED_TOLERANCE_DB:
-                        ap_errors.append(
-                            f"obss_pd_dbm 未生效：期望 {obss_pd} dBm，观测 {observed_obss} dBm"
-                        )
-
             report["errors"].extend([f"{ap_id.upper()}: {e}" for e in ap_errors])
             report["checks"].append({
                 "check": "Co-SR params",
@@ -162,74 +129,40 @@ def validate_decision(
                 "errors": [f"{ap_id.upper()}: {e}" for e in ap_errors],
             })
 
-        # ── 层 3：Co-SR 自伤门（预测降功率后 STA RSSI 是否跌破安全下界）──────
-        proposed_powers = {
-            ap_id: normalized[ap_id].get("tx_power_dbm")
-            for ap_id in ap_ids
-            if normalized[ap_id].get("tx_power_dbm") is not None
-        }
-        for warn in _sr.detect_self_harm(ap_state, proposed_powers):
-            ap_id = warn["ap_id"]
-            if ap_id not in ap_ids:
-                continue
-            report = per_ap.setdefault(ap_id, _empty_ap_entry())
-            msg = (
-                f"{ap_id.upper()}: Co-SR 自伤——预测降功率后 STA RSSI="
-                f"{warn['sta_rssi_after']} dBm < 安全下界 {warn['floor']} dBm，"
-                f"STA 可能断连（硬性安全底线，无例外）"
-            )
-            report["errors"].append(msg)
-            report["checks"].append({
-                "check": "Co-SR self-harm guard", "ok": False, "errors": [msg],
-            })
-
     # ── 层 1 + 2：Co-EDCA 参数范围 & 生效检查 ────────────────────────────────
     if strategy == "co_edca":
         for ap_id in ap_ids:
             report = per_ap.setdefault(ap_id, _empty_ap_entry())
             params_raw = normalized[ap_id]
-            edca_groups = _extract_edca_param_groups(params_raw)
+            edca_params = {k: params_raw.get(k) for k in ("CWmin", "CWmax", "AIFSN")}
+            missing_keys = [k for k, v in edca_params.items() if v is None]
 
-            if not edca_groups:
-                err = f"{ap_id.upper()}: 缺少 EDCA 参数 ['CWmin', 'CWmax', 'AIFSN']"
+            if missing_keys:
+                err = f"{ap_id.upper()}: 缺少 EDCA 参数 {missing_keys}"
                 global_errors.append(err)
                 report["errors"].append(err)
                 report["checks"].append({"check": "Co-EDCA params", "ok": False, "errors": [err]})
                 continue
 
-            edca_errors: list[str] = []
+            edca_params_int = {k: int(v) for k, v in edca_params.items()}
+            report["proposed_params"].update(edca_params_int)
+            edca_errors = _validate_edca_range(edca_params_int)
 
-            for ac, edca_params in edca_groups.items():
-                missing_keys = [k for k, v in edca_params.items() if v is None]
-                if missing_keys:
-                    edca_errors.append(f"{ac}: 缺少 EDCA 参数 {missing_keys}")
-                    continue
-
-                edca_params_int = {k: int(v) for k, v in edca_params.items()}
-                report["proposed_params"].update(_format_edca_group(ac, edca_params_int))
-                edca_errors.extend(
-                    f"{ac}: {e}" for e in _validate_edca_range(edca_params_int)
-                )
-
-                if observed_is_real:
-                    observed_edca = _observed_edca_params(obs.get(ap_id, {}), ac)
-                    has_edca_obs = any(v is not None for v in observed_edca.values())
-                    if has_edca_obs:
-                        # AP 上报了 EDCA 参数（从 hostapd/ns-3 回读）→ 检查是否生效
-                        report["observed_params"].update(
-                            _format_edca_group(
-                                ac, {k: v for k, v in observed_edca.items() if v is not None}
-                            )
-                        )
-                        for key, expected in edca_params_int.items():
-                            actual = observed_edca.get(key)
-                            if actual is None:
-                                edca_errors.append(f"{ac}: 观测结果缺少 {key}")
-                            elif int(actual) != expected:
-                                edca_errors.append(
-                                    f"{ac}: {key} 未生效：期望 {expected}，观测 {actual}"
-                                )
-                    # else: AP 未上报该 AC 的 EDCA 观测值，跳过生效检查
+            if observed_is_real:
+                observed_edca = _observed_edca_params(obs.get(ap_id, {}))
+                has_edca_obs = any(v is not None for v in observed_edca.values())
+                if has_edca_obs:
+                    # AP 上报了 EDCA 参数（从 hostapd 回读）→ 检查是否生效
+                    report["observed_params"].update(
+                        {k: v for k, v in observed_edca.items() if v is not None}
+                    )
+                    for key, expected in edca_params_int.items():
+                        actual = observed_edca.get(key)
+                        if actual is None:
+                            edca_errors.append(f"观测结果缺少 {key}")
+                        elif actual != expected:
+                            edca_errors.append(f"{key} 未生效：期望 {expected}，观测 {actual}")
+                # else: AP 未上报 EDCA 观测值（典型情况），跳过生效检查
 
             report["errors"].extend([f"{ap_id.upper()}: {e}" for e in edca_errors])
             report["checks"].append({
@@ -238,47 +171,22 @@ def validate_decision(
                 "errors": [f"{ap_id.upper()}: {e}" for e in edca_errors],
             })
 
-        # ── 层 3：Co-EDCA 自伤门（预测信道抢占份额跌幅；优先级排序合规也拦）──
-        proposed_edca_all = {ap_id: normalized[ap_id] for ap_id in ap_ids}
-        for ac in ("BE", "VI"):
-            for warn in _edca.detect_self_harm(
-                ap_state, proposed_edca_all, ac=ac,
-                share_ratio_floor=EDCA_SELF_HARM_SHARE_RATIO_FLOOR,
-            ):
-                ap_id = warn["ap_id"]
-                if ap_id not in ap_ids or _has_justifying_sla_violation(ap_state, exclude=ap_id):
-                    continue
-                report = per_ap.setdefault(ap_id, _empty_ap_entry())
-                msg = (
-                    f"{ap_id.upper()}: Co-EDCA 自伤（{ac}）——预测信道抢占份额从 "
-                    f"{warn['before_share']:.3f} 降到 {warn['after_share']:.3f}"
-                    f"（相对最强邻居劣势比 {warn.get('disadvantage_ratio')}），"
-                    f"且无邻居处于 SLA 违规可解释此牺牲"
-                )
-                report["errors"].append(msg)
-                report["checks"].append({
-                    "check": f"Co-EDCA self-harm guard ({ac})", "ok": False, "errors": [msg],
-                })
-
-    # ── STA QoE / SLA 反馈 ───────────────────────────────────────────────────
-    sta_qoe = evaluate_sta_qoe(
-        ap_state,
-        obs,
-        observed_is_real=observed_is_real,
-    )
-    if sta_qoe.get("checked") and not sta_qoe.get("approved"):
-        ids = [item.get("sta_id") for item in sta_qoe.get("new_violations") or []]
-        global_errors.append(f"决策后引入新的 STA SLA 违规: {ids}")
-
     # ── 汇总 ─────────────────────────────────────────────────────────────────
+    if observed_is_real:
+        qos_errors, qos_report = _validate_qos_policy(ap_state, obs, strategy)
+        if qos_report:
+            per_ap.setdefault("_qos", _empty_ap_entry())
+            per_ap["_qos"]["checks"].append(qos_report)
+            per_ap["_qos"]["valid"] = len(qos_errors) == 0
+            per_ap["_qos"]["errors"].extend(qos_errors)
+        global_errors.extend(qos_errors)
+
     for ap_id in ap_ids:
         entry = per_ap.setdefault(ap_id, _empty_ap_entry())
         entry["valid"] = len(entry["errors"]) == 0
         global_errors.extend(entry["errors"])
 
-    report = _build_report(strategy, True, per_ap, global_errors)
-    report["sta_qoe"] = sta_qoe
-    return report
+    return _build_report(strategy, True, per_ap, global_errors)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,13 +222,6 @@ def _validate_edca_range(params: dict) -> list[str]:
             errors.append(f"{key} 缺失")
         elif not (lo <= val <= hi):
             errors.append(f"{key}={val} 超出范围 [{lo}, {hi}]")
-        elif key in {"CWmin", "CWmax"} and not _edca.is_valid_cw_value(val):
-            nearest = _edca.ecw_to_cw(_edca.cw_to_ecw(int(val)))
-            errors.append(
-                f"{key}={int(val)} 不是可下发竞争窗口值；"
-                f"必须取 2^n-1（如 {_edca.CANONICAL_CW_VALUES}），"
-                f"最接近会被编码为 {nearest}"
-            )
     cwmin = params.get("CWmin", 0)
     cwmax = params.get("CWmax", 0)
     if cwmax <= cwmin:
@@ -328,84 +229,242 @@ def _validate_edca_range(params: dict) -> list[str]:
     return errors
 
 
-def _has_justifying_sla_violation(ap_state: dict, *, exclude: str) -> bool:
-    """自伤门的例外通道：有邻居正处于 SLA 违规，才允许牺牲自己去救它。"""
-    for ap_id, state in (ap_state or {}).items():
-        if ap_id == exclude or not isinstance(state, dict):
-            continue
-        if state.get("sla_violations"):
-            return True
-        summary = state.get("sta_feedback_summary") or {}
-        if summary.get("status") == "violated":
-            return True
-    return False
+def _observed_edca_params(observed: dict) -> dict:
+    return {
+        "CWmin": observed.get("cwmin"),
+        "CWmax": observed.get("cwmax"),
+        "AIFSN": observed.get("aifsn"),
+    }
 
 
-def _first_present(params: dict, keys: tuple[str, ...]):
-    for key in keys:
-        if key in params and params.get(key) is not None:
-            return params.get(key)
+def _num(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
     return None
 
 
-def _extract_edca_param_groups(params: dict) -> dict[str, dict]:
-    """提取 legacy/Per-AC EDCA 参数。
-
-    旧字段 CWmin/CWmax/AIFSN 等价于 BE；显式 BE_* 优先于旧字段。
-    VI_* 可单独出现，用于只调整 AC_VI。
-    """
-    specs = {
-        "BE": {
-            "CWmin": ("BE_CWmin", "be_cwmin", "CWmin", "cwmin"),
-            "CWmax": ("BE_CWmax", "be_cwmax", "CWmax", "cwmax"),
-            "AIFSN": ("BE_AIFSN", "be_aifsn", "AIFSN", "aifsn"),
-        },
-        "VI": {
-            "CWmin": ("VI_CWmin", "vi_cwmin"),
-            "CWmax": ("VI_CWmax", "vi_cwmax"),
-            "AIFSN": ("VI_AIFSN", "vi_aifsn"),
-        },
-    }
-    out: dict[str, dict] = {}
-    for ac, fields in specs.items():
-        group = {canonical: _first_present(params, aliases)
-                 for canonical, aliases in fields.items()}
-        if any(v is not None for v in group.values()):
-            out[ac] = group
-    return out
+def _ap_throughput_total(state: dict) -> float | None:
+    vals = [
+        _num(state.get("throughput_mbps_iperf")),
+        _num(state.get("throughput_mbps_user")),
+    ]
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return sum(vals)
 
 
-def _format_edca_group(ac: str, params: dict) -> dict:
-    if ac == "BE":
-        # 保持旧报告字段兼容；额外 BE_* 字段便于审计 Per-AC 下发。
-        return {
-            "CWmin": params.get("CWmin"),
-            "CWmax": params.get("CWmax"),
-            "AIFSN": params.get("AIFSN"),
-            "BE_CWmin": params.get("CWmin"),
-            "BE_CWmax": params.get("CWmax"),
-            "BE_AIFSN": params.get("AIFSN"),
-        }
-    prefix = f"{ac}_"
+def _avg_metric(ap_states: dict, field: str) -> float | None:
+    vals = [
+        _num(state.get(field))
+        for state in ap_states.values()
+        if isinstance(state, dict)
+    ]
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+def _sum_throughput(ap_states: dict) -> float | None:
+    vals = [
+        _ap_throughput_total(state)
+        for state in ap_states.values()
+        if isinstance(state, dict)
+    ]
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    return sum(vals)
+
+
+def _priority_states(ap_states: dict, priority: str) -> dict:
     return {
-        f"{prefix}CWmin": params.get("CWmin"),
-        f"{prefix}CWmax": params.get("CWmax"),
-        f"{prefix}AIFSN": params.get("AIFSN"),
+        ap_id: state
+        for ap_id, state in ap_states.items()
+        if isinstance(state, dict) and state.get("traffic_priority") == priority
     }
 
 
-def _observed_edca_params(observed: dict, ac: str = "BE") -> dict:
-    if ac == "VI":
-        return {
-            "CWmin": observed.get("vi_cwmin"),
-            "CWmax": observed.get("vi_cwmax"),
-            "AIFSN": observed.get("vi_aifsn"),
+def _qos_non_regression_errors(before: dict, after: dict) -> tuple[list[str], dict]:
+    """真实 APPLY 后的 QoS 不得劣于协商前状态。"""
+    errors: list[str] = []
+    details: dict = {}
+
+    before_tput = _sum_throughput(before)
+    after_tput = _sum_throughput(after)
+    details["throughput_mbps_total_before"] = before_tput
+    details["throughput_mbps_total_after"] = after_tput
+    if before_tput is not None and after_tput is not None and before_tput > 0:
+        drop_ratio = (before_tput - after_tput) / before_tput
+        details["throughput_drop_ratio"] = round(drop_ratio, 6)
+        if drop_ratio > QOS_THROUGHPUT_DROP_TOLERANCE_RATIO:
+            errors.append(
+                "QoS 下降：聚合吞吐从 "
+                f"{before_tput:.3f} Mbps 降到 {after_tput:.3f} Mbps "
+                f"（下降 {drop_ratio * 100:.2f}%）"
+            )
+
+    before_latency = _avg_metric(before, "latency_ms")
+    after_latency = _avg_metric(after, "latency_ms")
+    details["latency_ms_avg_before"] = before_latency
+    details["latency_ms_avg_after"] = after_latency
+    if before_latency is not None and after_latency is not None and before_latency > 0:
+        increase_ratio = (after_latency - before_latency) / before_latency
+        details["latency_increase_ratio"] = round(increase_ratio, 6)
+        if increase_ratio > QOS_LATENCY_INCREASE_TOLERANCE_RATIO:
+            errors.append(
+                "QoS 下降：平均时延从 "
+                f"{before_latency:.3f} ms 升到 {after_latency:.3f} ms "
+                f"（升高 {increase_ratio * 100:.2f}%）"
+            )
+
+    before_loss = _avg_metric(before, "packet_loss_pct")
+    after_loss = _avg_metric(after, "packet_loss_pct")
+    details["packet_loss_pct_avg_before"] = before_loss
+    details["packet_loss_pct_avg_after"] = after_loss
+    if before_loss is not None and after_loss is not None:
+        increase_pct = after_loss - before_loss
+        details["packet_loss_increase_pct_points"] = round(increase_pct, 6)
+        if increase_pct > QOS_PACKET_LOSS_INCREASE_TOLERANCE_PCT:
+            errors.append(
+                "QoS 下降：平均丢包率从 "
+                f"{before_loss:.3f}% 升到 {after_loss:.3f}% "
+                f"（增加 {increase_pct:.3f} 个百分点）"
+            )
+
+    return errors, details
+
+
+def _validate_qos_policy(before: dict, after: dict, strategy: str) -> tuple[list[str], dict]:
+    strict_errors, strict_details = _qos_non_regression_errors(before, after)
+    if strategy != "co_edca" or not strict_errors:
+        return strict_errors, {
+            "check": "QoS non-regression",
+            "ok": len(strict_errors) == 0,
+            "errors": strict_errors,
+            "details": strict_details,
         }
-    return {
-        "CWmin": observed.get("be_cwmin", observed.get("cwmin")),
-        "CWmax": observed.get("be_cwmax", observed.get("cwmax")),
-        "AIFSN": observed.get("be_aifsn", observed.get("aifsn")),
+
+    edca_errors, edca_details = _validate_edca_priority_qos(before, after)
+    if not edca_errors:
+        return [], {
+            "check": "EDCA priority-aware QoS",
+            "ok": True,
+            "errors": [],
+            "details": {
+                "strict_non_regression_errors": strict_errors,
+                **edca_details,
+            },
+        }
+    return strict_errors + edca_errors, {
+        "check": "EDCA priority-aware QoS",
+        "ok": False,
+        "errors": strict_errors + edca_errors,
+        "details": {
+            "strict_non_regression_errors": strict_errors,
+            "priority_errors": edca_errors,
+            **edca_details,
+        },
     }
+
+
+def _validate_edca_priority_qos(before: dict, after: dict) -> tuple[list[str], dict]:
+    errors: list[str] = []
+    details: dict = {}
+
+    before_tput = _sum_throughput(before)
+    after_tput = _sum_throughput(after)
+    if before_tput is not None and after_tput is not None and before_tput > 0:
+        drop_ratio = (before_tput - after_tput) / before_tput
+        details["overall_throughput_drop_ratio"] = round(drop_ratio, 6)
+        if drop_ratio > EDCA_OVERALL_DEGRADATION_TOLERANCE_RATIO:
+            errors.append(
+                "EDCA 整体退化超限：聚合吞吐下降 "
+                f"{drop_ratio * 100:.2f}% > {EDCA_OVERALL_DEGRADATION_TOLERANCE_RATIO * 100:.2f}%"
+            )
+    else:
+        errors.append("EDCA 缺少聚合吞吐指标")
+
+    before_latency = _avg_metric(before, "latency_ms")
+    after_latency = _avg_metric(after, "latency_ms")
+    if before_latency is not None and after_latency is not None and before_latency > 0:
+        increase_ratio = (after_latency - before_latency) / before_latency
+        details["overall_latency_increase_ratio"] = round(increase_ratio, 6)
+        if increase_ratio > EDCA_OVERALL_DEGRADATION_TOLERANCE_RATIO:
+            errors.append(
+                "EDCA 整体退化超限：平均时延升高 "
+                f"{increase_ratio * 100:.2f}% > {EDCA_OVERALL_DEGRADATION_TOLERANCE_RATIO * 100:.2f}%"
+            )
+    else:
+        errors.append("EDCA 缺少平均时延指标")
+
+    before_loss = _avg_metric(before, "packet_loss_pct")
+    after_loss = _avg_metric(after, "packet_loss_pct")
+    if before_loss is not None and after_loss is not None:
+        increase_pct = after_loss - before_loss
+        details["overall_packet_loss_increase_pct_points"] = round(increase_pct, 6)
+        if increase_pct > EDCA_OVERALL_PACKET_LOSS_TOLERANCE_PCT:
+            errors.append(
+                "EDCA 整体退化超限：平均丢包率增加 "
+                f"{increase_pct:.3f} 个百分点 > {EDCA_OVERALL_PACKET_LOSS_TOLERANCE_PCT:.3f}"
+            )
+    else:
+        errors.append("EDCA 缺少平均丢包指标")
+
+    high_before = _priority_states(before, "high")
+    high_after = _priority_states(after, "high")
+    if not high_before or not high_after:
+        errors.append("EDCA 缺少 high-priority 业务样本")
+        details["high_priority_sample_count_before"] = len(high_before)
+        details["high_priority_sample_count_after"] = len(high_after)
+        return errors, details
+
+    high_tput_gain_ratio = None
+    high_before_tput = _sum_throughput(high_before)
+    high_after_tput = _sum_throughput(high_after)
+    if high_before_tput is not None and high_after_tput is not None and high_before_tput > 0:
+        high_tput_gain_ratio = (high_after_tput - high_before_tput) / high_before_tput
+        details["high_priority_throughput_gain_ratio"] = round(high_tput_gain_ratio, 6)
+        if high_tput_gain_ratio < -EDCA_HIGH_THROUGHPUT_DROP_TOLERANCE_RATIO:
+            errors.append(f"EDCA high-priority 吞吐受损：{high_tput_gain_ratio * 100:.2f}%")
+    else:
+        errors.append("EDCA 缺少 high-priority 吞吐指标")
+
+    high_latency_gain_ratio = None
+    high_before_latency = _avg_metric(high_before, "latency_ms")
+    high_after_latency = _avg_metric(high_after, "latency_ms")
+    if high_before_latency is not None and high_after_latency is not None and high_before_latency > 0:
+        high_latency_gain_ratio = (high_before_latency - high_after_latency) / high_before_latency
+        details["high_priority_latency_gain_ratio"] = round(high_latency_gain_ratio, 6)
+        if high_latency_gain_ratio < -EDCA_HIGH_LATENCY_INCREASE_TOLERANCE_RATIO:
+            errors.append(f"EDCA high-priority 时延受损：{-high_latency_gain_ratio * 100:.2f}%")
+    else:
+        errors.append("EDCA 缺少 high-priority 时延指标")
+
+    high_loss_delta = None
+    high_before_loss = _avg_metric(high_before, "packet_loss_pct")
+    high_after_loss = _avg_metric(high_after, "packet_loss_pct")
+    if high_before_loss is not None and high_after_loss is not None:
+        high_loss_delta = high_after_loss - high_before_loss
+        details["high_priority_packet_loss_delta_pct_points"] = round(high_loss_delta, 6)
+        if high_loss_delta > EDCA_HIGH_PACKET_LOSS_TOLERANCE_PCT:
+            errors.append(f"EDCA high-priority 丢包受损：增加 {high_loss_delta:.3f} 个百分点")
+    else:
+        errors.append("EDCA 缺少 high-priority 丢包指标")
+
+    has_high_gain = (
+        (high_tput_gain_ratio is not None and high_tput_gain_ratio >= EDCA_HIGH_THROUGHPUT_GAIN_RATIO)
+        or (high_latency_gain_ratio is not None and high_latency_gain_ratio >= EDCA_HIGH_LATENCY_GAIN_RATIO)
+        or (high_loss_delta is not None and high_loss_delta <= -EDCA_HIGH_PACKET_LOSS_GAIN_PCT)
+    )
+    details["high_priority_has_gain"] = has_high_gain
+    if not has_high_gain:
+        errors.append("EDCA high-priority 未出现足够明确的吞吐、时延或丢包收益")
+
+    return errors, details
 
 
 def _fail_report(strategy: str, reason: str) -> dict:
